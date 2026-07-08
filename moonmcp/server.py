@@ -43,9 +43,11 @@ from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .scope import ScopeError, normalize_target
 from .web import cors as corsmod
+from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
+from .web import redirect as redirectmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
 
@@ -602,6 +604,44 @@ async def takeover_check(target: str) -> dict:
     host = _require_scope(target)
     ctx = get_context()
     result = await takeovermod.check_takeover(ctx.http, host, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def open_redirect(target: str) -> dict:
+    """Test an in-scope URL for open-redirect flaws by injecting an external
+    canary into the common redirect parameters (url, next, redirect, returnTo, …)
+    and checking whether the server bounces to it via a Location header,
+    meta-refresh or JS redirect. Redirects are not followed (the canary is never
+    contacted). In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await redirectmod.check_open_redirect(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def vcs_exposure(target: str) -> dict:
+    """Check an in-scope host for exposed VCS/config artefacts (.git, .svn, .hg,
+    .env, .DS_Store). Confirms real exposure by validating each file's content
+    signature (not just a 200), extracts the git remote URL and recent commit
+    log when a .git is exposed. Source disclosure via an exposed .git is
+    high-impact. In scope only.
+    """
+
+    host, port = _split_host_port(target, 443)
+    _require_scope(host)
+    raw = target.strip()
+    scheme = "http" if raw.startswith("http://") else "https"
+    base = raw if "://" in raw else f"{scheme}://{host}"
+    ctx = get_context()
+    result = await exposuremod.check_exposure(ctx.http, base, scope_check=_scope_check())
     return to_dict(result)
 
 

@@ -98,6 +98,21 @@ class _WebHandler(http.server.BaseHTTPRequestHandler):
         self._send(404)
 
     def do_GET(self):
+        # Exposed .git artefacts
+        if self.path == "/.git/HEAD":
+            self._send(200, b"ref: refs/heads/main\n", {"Content-Type": "text/plain"})
+            return
+        if self.path == "/.git/config":
+            self._send(200, b"[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = https://github.com/acme/secret.git\n",
+                       {"Content-Type": "text/plain"})
+            return
+        # Open redirect: bounce to whatever ?next=/?url= says
+        from urllib.parse import parse_qs, urlsplit
+        qs = parse_qs(urlsplit(self.path).query)
+        target = (qs.get("next") or qs.get("url") or [None])[0]
+        if target:
+            self._send(302, b"", {"Location": target})
+            return
         origin = self.headers.get("Origin")
         headers = {"Server": "cloudflare", "Content-Type": "text/html"}
         if origin:  # reflect the origin (misconfiguration)
@@ -168,8 +183,23 @@ async def test_waf_detect_cloudflare(web_server, web_ctx):
 
 
 @pytest.mark.asyncio
+async def test_open_redirect_detected(web_server, web_ctx):
+    res = await srv.open_redirect(target=web_server)
+    assert res.get("vulnerable") is True
+    assert any(f["parameter"] in ("next", "url") for f in res.get("findings", []))
+
+
+@pytest.mark.asyncio
+async def test_vcs_exposure_confirms_git(web_server, web_ctx):
+    res = await srv.vcs_exposure(target=web_server)
+    assert res.get("git_exposed") is True
+    assert res.get("git_remote", "").endswith("secret.git")
+
+
+@pytest.mark.asyncio
 async def test_new_tools_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     for name in ("crawl", "extract_secrets", "cors_audit", "graphql_check",
-                 "waf_detect", "takeover_check", "email_security", "jwt_analyze", "http_methods"):
+                 "waf_detect", "takeover_check", "email_security", "jwt_analyze",
+                 "http_methods", "open_redirect", "vcs_exposure"):
         assert name in tools

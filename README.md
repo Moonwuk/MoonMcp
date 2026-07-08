@@ -28,7 +28,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~31-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~33-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -42,7 +42,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **31 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **33 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -79,6 +79,8 @@ MoonMCP exposes **31 tools**, **2 resources** and **1 guided prompt**, grouped b
 | `graphql_check` | Discover GraphQL endpoints and test whether **introspection** is enabled. |
 | `waf_detect` | Fingerprint WAF/CDN (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, …). |
 | `takeover_check` | Subdomain-takeover detection over a 40+ provider fingerprint DB (S3, GH Pages, Heroku, Azure, …). |
+| `open_redirect` | Inject a canary into common redirect params (url, next, returnTo, …) — Location / meta / JS. |
+| `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
 
 ### 🟠 Active — intrusive (gated by `MOONMCP_ALLOW_INTRUSIVE`)
 | Tool | Purpose |
@@ -215,7 +217,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 31 tools, 2 resources, 1 prompt
+├── server.py        # FastMCP server: 33 tools, 2 resources, 1 prompt
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient
@@ -242,7 +244,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 48 tests: scope logic, parsers, web-app checks, and local-server integration
+pytest -q          # 50 tests: scope logic, parsers, web-app checks, and local-server integration
 ruff check .
 ```
 
