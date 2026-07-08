@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -93,3 +94,88 @@ async def inspect_certificate(
     server_name: str | None = None,
 ) -> TlsResult:
     return await asyncio.to_thread(_blocking_inspect, host, port, timeout, server_name)
+
+
+# --- TLS profiling / fingerprinting -------------------------------------
+_TLS_VERSIONS = [
+    ("TLSv1.0", getattr(ssl.TLSVersion, "TLSv1", None)),
+    ("TLSv1.1", getattr(ssl.TLSVersion, "TLSv1_1", None)),
+    ("TLSv1.2", getattr(ssl.TLSVersion, "TLSv1_2", None)),
+    ("TLSv1.3", getattr(ssl.TLSVersion, "TLSv1_3", None)),
+]
+
+
+@dataclass
+class TlsProfile:
+    host: str
+    port: int
+    supported_versions: list[str] = field(default_factory=list)
+    cipher_by_version: dict[str, str] = field(default_factory=dict)
+    alpn: list[str] = field(default_factory=list)
+    http2: bool = False
+    weak_versions: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+def _try_version(host: str, port: int, version, timeout: float) -> tuple[bool, str | None]:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with warnings.catch_warnings():
+            # Pinning TLS 1.0/1.1 warns; we deliberately probe for them.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            ctx.minimum_version = version
+            ctx.maximum_version = version
+    except (ValueError, OSError):
+        return False, None
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as tls:
+                c = tls.cipher()
+                return True, (c[0] if c else None)
+    except (ssl.SSLError, OSError, ValueError):
+        return False, None
+
+
+def _probe_alpn(host: str, port: int, timeout: float) -> list[str]:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        ctx.set_alpn_protocols(["h2", "http/1.1"])
+    except NotImplementedError:
+        return []
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as tls:
+                selected = tls.selected_alpn_protocol()
+                return [selected] if selected else []
+    except (ssl.SSLError, OSError):
+        return []
+
+
+def _blocking_profile(host: str, port: int, timeout: float) -> TlsProfile:
+    profile = TlsProfile(host=host, port=port)
+    any_ok = False
+    for name, version in _TLS_VERSIONS:
+        if version is None:
+            continue
+        ok, cipher = _try_version(host, port, version, timeout)
+        if ok:
+            any_ok = True
+            profile.supported_versions.append(name)
+            if cipher:
+                profile.cipher_by_version[name] = cipher
+            if name in ("TLSv1.0", "TLSv1.1"):
+                profile.weak_versions.append(name)
+    if not any_ok:
+        profile.error = "no TLS handshake succeeded"
+        return profile
+    profile.alpn = _probe_alpn(host, port, timeout)
+    profile.http2 = "h2" in profile.alpn
+    return profile
+
+
+async def probe_tls_profile(host: str, port: int = 443, timeout: float = 10.0) -> TlsProfile:
+    return await asyncio.to_thread(_blocking_profile, host, port, timeout)

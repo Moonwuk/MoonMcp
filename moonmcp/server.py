@@ -29,6 +29,7 @@ from mcp.server.fastmcp import FastMCP
 from . import __version__
 from .context import AppContext, build_context, to_dict
 from .external import cli
+from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
 from .net import dns as dnsmod
@@ -37,13 +38,16 @@ from .net import tls as tlsmod
 from .recon import binary as binarymod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
+from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
+from .recon import origin as originmod
 from .recon import secrets as secretsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown
 from .scope import ScopeError, normalize_target
+from .web import behavior as behaviormod
 from .web import cors as corsmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
@@ -53,6 +57,7 @@ from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
+from .web import waf_bypass as wafbypassmod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware bug-bounty & reconnaissance server.
@@ -341,6 +346,33 @@ async def host_intel(ip: str) -> dict:
 
     ctx = get_context()
     result = await shodan.host_intel(ctx.http, ip.strip(), api_key=ctx.settings.shodan_api_key)
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def ip_intel(ip: str) -> dict:
+    """Map an IP to its infrastructure: ASN, organisation, ISP, cloud/CDN provider
+    (AWS/GCP/Azure/Cloudflare/…), hosting flag, reverse DNS and geo. Passive —
+    queries a public dataset, not the target. Useful for spotting whether a host
+    sits behind a CDN and which provider owns the range.
+    """
+
+    ctx = get_context()
+    result = await asnmod.ip_intel(ctx.http, ip)
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def reverse_ip(ip: str) -> dict:
+    """List other domains co-hosted on the same IP (reverse-IP lookup). Passive
+    third-party dataset. Good for widening the attack surface and spotting shared
+    hosting (note: shared IPs on big CDNs return many unrelated domains).
+    """
+
+    ctx = get_context()
+    result = await asnmod.reverse_ip(ctx.http, ip)
     return to_dict(result)
 
 
@@ -756,6 +788,71 @@ async def jwt_analyze(token: str) -> dict:
     return to_dict(result)
 
 
+@mcp.tool()
+@safe_tool
+async def favicon_hash(target: str) -> dict:
+    """Compute an in-scope site's favicon hash (Shodan-style mmh3). Two hosts
+    sharing a favicon hash are usually the same product/instance, so the returned
+    `http.favicon.hash:<hash>` query lets you pivot on Shodan/Censys/FOFA to find
+    sibling assets — including origin servers hiding behind a CDN. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await faviconmod.fetch_favicon_hash(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def tls_fingerprint(target: str, port: int = 443) -> dict:
+    """Profile a host's TLS configuration: which protocol versions it supports
+    (flagging weak TLS 1.0/1.1), the cipher per version, and ALPN / HTTP-2
+    support. A compact server-side TLS fingerprint for infra mapping and posture.
+    In scope only.
+    """
+
+    host, tls_port = _split_host_port(target, port)
+    _require_scope(host)
+    result = await tlsmod.probe_tls_profile(host, tls_port, timeout=get_context().settings.timeout)
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def origin_discovery(domain: str) -> dict:
+    """Try to find the real origin IP behind a CDN/WAF for an in-scope host.
+    Resolves the front IPs and detects the CDN, then hunts candidate origins via
+    certificate SANs, common non-proxied subdomains (origin/direct/mail/cpanel/…)
+    and MX records, flagging IPs that sit on *different* infrastructure than the
+    CDN front. Passive+light. In scope only.
+    """
+
+    host = _require_scope(domain)
+    ctx = get_context()
+    result = await originmod.discover_origin(ctx.http, host, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def behavior_probe(target: str) -> dict:
+    """Profile how an in-scope target *behaves*: 404 handling (soft-404 / custom),
+    stack-trace / error disclosure, Host and X-Forwarded-Host reflection
+    (cache-poisoning / host-header-injection hints), advertised methods and
+    response time. Light, benign requests only. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await behaviormod.profile_behavior(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
 # ---------------------------------------------------------------------------
 # active (intrusive) — scope-gated + allow_intrusive
 # ---------------------------------------------------------------------------
@@ -828,6 +925,26 @@ async def http_methods(target: str) -> dict:
     _require_scope(url, intrusive=True)
     ctx = get_context()
     result = await methodsmod.check_methods(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def waf_efficacy(target: str) -> dict:
+    """Test how effective an in-scope target's WAF is: sends **benign canary**
+    payloads across the common attack categories (XSS, SQLi, LFI, RCE, SSTI,
+    traversal, XXE) to see which the WAF blocks, then applies simple transforms
+    (case-swap, comment-break, encoding, null-byte) to check whether trivial
+    obfuscation bypasses it. Reports protected vs unprotected categories and any
+    bypasses. Payloads do nothing harmful. Intrusive: requires
+    MOONMCP_ALLOW_INTRUSIVE and the host in scope.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url, intrusive=True)
+    ctx = get_context()
+    result = await wafbypassmod.test_waf_efficacy(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
