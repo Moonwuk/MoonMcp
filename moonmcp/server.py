@@ -30,15 +30,24 @@ from . import __version__
 from .context import AppContext, build_context, to_dict
 from .external import cli
 from .intel import cve, shodan
+from .intel import email as emailmod
 from .net import dns as dnsmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
 from .recon import content as contentmod
+from .recon import crawl as crawlmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
+from .recon import secrets as secretsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .scope import ScopeError, normalize_target
+from .web import cors as corsmod
+from .web import graphql as graphqlmod
+from .web import jwt as jwtmod
+from .web import methods as methodsmod
+from .web import takeover as takeovermod
+from .web import waf as wafmod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware bug-bounty & reconnaissance server.
@@ -342,7 +351,7 @@ async def dns_lookup(target: str) -> dict:
     """
 
     host = _require_scope(target)
-    result = await dnsmod.resolve(host)
+    result = await dnsmod.resolve(host, http_client=get_context().http)
     data = to_dict(result)
     ptr = {}
     for ip in (result.a or [])[:3]:
@@ -459,7 +468,7 @@ async def fingerprint(target: str) -> dict:
     )
     if result.status is None:
         return {"error": "unreachable", "detail": result.error, "url": url}
-    dns_res = await dnsmod.resolve(host)
+    dns_res = await dnsmod.resolve(host, http_client=ctx.http)
     ip = (dns_res.a or [None])[0]
     fp = fpmod.fingerprint(result, ip=ip)
     return to_dict(fp)
@@ -481,6 +490,145 @@ async def well_known(target: str) -> dict:
     result = await contentmod.fetch_well_known(
         ctx.http, host, scheme=scheme, port=port, scope_check=_scope_check()
     )
+    return to_dict(result)
+
+
+# ---------------------------------------------------------------------------
+# web-app checks (light active, scope-gated) + email OSINT
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def crawl(target: str, max_pages: int = 10) -> dict:
+    """Lightly crawl an in-scope site (depth 1, bounded) and extract its attack
+    surface: internal links, forms + their input names, JavaScript/asset URLs,
+    query parameters, external hosts it reaches, and any emails. HTML parsing
+    only — no browser. In scope only; redirects that leave scope are not followed.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await crawlmod.crawl(
+        ctx.http, url, scope_check=_scope_check(), max_pages=max(1, min(max_pages, 30))
+    )
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def extract_secrets(target: str, scan_js: bool = True, max_js: int = 15) -> dict:
+    """Fetch an in-scope page (and, by default, its linked JavaScript) and scan
+    for exposed secrets: cloud keys (AWS/GCP), API tokens (GitHub, Slack, Stripe,
+    Twilio, SendGrid, ...), private keys, JWTs and risky credential assignments.
+    Uses high-precision, prefix-anchored patterns; findings are redacted. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    scan = await secretsmod.scan_secrets(
+        ctx.http, url, scope_check=_scope_check(), include_js=scan_js,
+        max_js=max(1, min(max_js, 40)),
+    )
+    data = to_dict(scan)
+    data["count"] = scan.count
+    return data
+
+
+@mcp.tool()
+@safe_tool
+async def cors_audit(target: str) -> dict:
+    """Test an in-scope URL for CORS misconfigurations: arbitrary-origin
+    reflection, 'null' origin acceptance, and prefix/suffix/subdomain bypasses —
+    flagged more severely when Access-Control-Allow-Credentials is also true.
+    Sends benign GETs with crafted Origin headers. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await corsmod.audit_cors(ctx.http, url)
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def graphql_check(target: str) -> dict:
+    """Probe an in-scope host for GraphQL endpoints across common paths and test
+    whether schema introspection is enabled (which leaks the full API surface).
+    In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await graphqlmod.discover_graphql(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def waf_detect(target: str) -> dict:
+    """Fingerprint an in-scope host's WAF/CDN from response headers, cookies and
+    server strings (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, ...). When
+    intrusive mode is on, it also sends benign suspicious requests to see whether
+    a protective layer trips. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await wafmod.detect_waf(
+        ctx.http, url, scope_check=_scope_check(), active=ctx.settings.allow_intrusive
+    )
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def takeover_check(target: str) -> dict:
+    """Check an in-scope subdomain for a potential subdomain takeover: resolves
+    the CNAME chain, matches it against a database of takeover-prone providers
+    (S3, GitHub Pages, Heroku, Shopify, Azure, ...), and looks for the provider's
+    'unclaimed resource' fingerprint (or a dangling DNS record). Results are
+    triage signals — verify manually. In scope only.
+    """
+
+    host = _require_scope(target)
+    ctx = get_context()
+    result = await takeovermod.check_takeover(ctx.http, host, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def email_security(domain: str) -> dict:
+    """Analyze a domain's email-spoofing posture over DNS: SPF, DMARC (policy),
+    DKIM (common selectors) and CAA, with an A-F grade and specific weaknesses
+    (missing/again weak SPF, DMARC p=none, no CAA, ...). Passive DNS. In scope only.
+    """
+
+    host = _require_scope(domain)
+    ctx = get_context()
+    result = await emailmod.analyze_email_security(ctx.http, host)
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def jwt_analyze(token: str) -> dict:
+    """Decode a JWT (no signature verification) and flag weaknesses: alg=none,
+    brute-forceable HS* secrets, missing expiry, jku/x5u/kid key-injection surface,
+    and expired/not-yet-valid tokens. Pure parsing — sends no traffic, no scope
+    needed. Useful for triaging a token you already captured.
+    """
+
+    result = jwtmod.analyze_jwt(token)
     return to_dict(result)
 
 
@@ -542,6 +690,23 @@ async def content_discovery(
     return to_dict(result)
 
 
+@mcp.tool()
+@safe_tool
+async def http_methods(target: str) -> dict:
+    """Enumerate an in-scope URL's allowed HTTP methods (from OPTIONS) and probe
+    sensitive ones (TRACE, PUT, DELETE, PATCH) to flag XST or write-enabled
+    endpoints. Intrusive (it sends potentially state-changing methods): requires
+    MOONMCP_ALLOW_INTRUSIVE and the host in scope.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url, intrusive=True)
+    ctx = get_context()
+    result = await methodsmod.check_methods(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
 # ---------------------------------------------------------------------------
 # orchestration
 # ---------------------------------------------------------------------------
@@ -565,7 +730,7 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
         report["subdomains"] = {"count": subs.count, "sources": subs.sources,
                                 "sample": subs.subdomains[:50]}
 
-    dns_res = await dnsmod.resolve(host)
+    dns_res = await dnsmod.resolve(host, http_client=ctx.http)
     report["dns"] = to_dict(dns_res)
     ip = (dns_res.a or [None])[0]
 
@@ -593,6 +758,10 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
             "days_until_expiry": tls_res.days_until_expiry,
             "subject_alt_names": tls_res.subject_alt_names,
         }
+
+    email = await emailmod.analyze_email_security(ctx.http, host)
+    report["email_security"] = {"grade": email.grade, "spf": bool(email.spf),
+                                "dmarc_policy": email.dmarc_policy, "issues": email.issues}
     return report
 
 

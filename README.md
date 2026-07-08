@@ -28,7 +28,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~22-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~31-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -42,7 +42,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **22 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **31 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -57,28 +57,41 @@ MoonMCP exposes **22 tools**, **2 resources** and **1 guided prompt**, grouped b
 | `wayback_urls` | Historical URLs from the Internet Archive (flags interesting endpoints). |
 | `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID or by keyword (e.g. a product+version). |
 | `host_intel` | IP exposure via Shodan InternetDB (free) or the full Shodan API. |
+| `email_security` | SPF / DMARC / DKIM / CAA posture with an A–F grade (DNS-based). |
+| `jwt_analyze` | Decode a JWT and flag `alg:none`, weak HS*, missing expiry, key-injection (no traffic). |
 
 ### 🟡 Active — light (benign, in-scope requests)
 | Tool | Purpose |
 | --- | --- |
-| `dns_lookup` | Resolve A/AAAA (+ MX/NS/TXT/CNAME/SOA/CAA with dnspython) and reverse PTR. |
+| `dns_lookup` | Resolve A/AAAA + MX/NS/TXT/CNAME/SOA/CAA (via dnspython **or DNS-over-HTTPS**, no dep needed) and reverse PTR. |
 | `http_probe` | Structured HTTP(S) probe: status, headers, timing, redirect chain, title. |
 | `tls_inspect` | Certificate subject/issuer/validity + **Subject Alt Names** (sibling hosts). |
 | `analyze_headers` | Security-header audit with an A–F grade; flags leaks and risky cookies. |
 | `fingerprint` | Technology detection: server, CDN/WAF, language, framework, CMS, JS libs. |
 | `well_known` | Fetch & parse robots.txt, sitemap.xml, security.txt, humans.txt. |
 
+### 🕸️ Web-app checks (light active, in-scope, structured findings)
+| Tool | Purpose |
+| --- | --- |
+| `crawl` | Bounded depth-1 crawl → internal links, forms+inputs, JS/asset URLs, parameters, external hosts, emails. |
+| `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
+| `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |
+| `graphql_check` | Discover GraphQL endpoints and test whether **introspection** is enabled. |
+| `waf_detect` | Fingerprint WAF/CDN (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, …). |
+| `takeover_check` | Subdomain-takeover detection over a 40+ provider fingerprint DB (S3, GH Pages, Heroku, Azure, …). |
+
 ### 🟠 Active — intrusive (gated by `MOONMCP_ALLOW_INTRUSIVE`)
 | Tool | Purpose |
 | --- | --- |
 | `port_scan` | Unprivileged TCP connect-scan (`top` set or a custom range), optional banners. |
 | `content_discovery` | Probe for sensitive paths (admin, `.git`, `.env`, backups, API docs, …). |
+| `http_methods` | Enumerate allowed methods + probe risky ones (TRACE/PUT/DELETE/PATCH → XST / write-enabled). |
 | `vuln_scan` | Run a `nuclei` template scan (requires nuclei installed). |
 
 ### 🔗 Orchestration & external tools
 | Tool | Purpose |
 | --- | --- |
-| `recon_target` | One-shot passive+light sweep (subdomains → DNS → TLS → HTTP → headers → fingerprint). |
+| `recon_target` | One-shot passive+light sweep (subdomains → DNS → TLS → HTTP → headers → fingerprint → email security). |
 | `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
 | `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
 
@@ -202,18 +215,19 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 22 tools, 2 resources, 1 prompt
+├── server.py        # FastMCP server: 31 tools, 2 resources, 1 prompt
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient
 ├── net/             # stdlib networking (async via asyncio.to_thread)
 │   ├── http.py      #   urllib-based HTTP client w/ redirect tracing + rate limit
-│   ├── dns.py       #   getaddrinfo (+ optional dnspython for full records)
+│   ├── dns.py       #   getaddrinfo + DNS-over-HTTPS (+ optional dnspython)
 │   ├── tls.py       #   ssl-based certificate inspection
 │   ├── ports.py     #   asyncio TCP connect-scan
 │   └── ratelimit.py #   token-bucket + concurrency governor
-├── recon/           # subdomains, fingerprint, headers, wayback, content
-├── intel/           # cve (NVD), shodan (InternetDB / API)
+├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets
+├── web/             # cors, graphql, waf, jwt, methods, subdomain takeover
+├── intel/           # cve (NVD), shodan (InternetDB / API), email (SPF/DMARC/DKIM/CAA)
 └── external/        # optional CLI detection + safe invocation
 ```
 
@@ -228,7 +242,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 26 tests: scope logic, parsers, and local-server integration
+pytest -q          # 48 tests: scope logic, parsers, web-app checks, and local-server integration
 ruff check .
 ```
 

@@ -78,11 +78,66 @@ def _blocking_dnspython(host: str, rdtypes: tuple[str, ...]) -> DnsResult:
     return res
 
 
-async def resolve(host: str, rdtypes: tuple[str, ...] | None = None) -> DnsResult:
-    """Resolve *host*.  Uses dnspython when available for full record support."""
+_DOH_TYPES = {"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "MX": 15, "TXT": 16, "AAAA": 28, "CAA": 257}
 
+
+async def resolve_doh(client, host: str, rdtypes: tuple[str, ...]) -> DnsResult:
+    """Resolve full record types over DNS-over-HTTPS (dns.google JSON API).
+
+    Gives MX/NS/TXT/CNAME/CAA/SOA support with no dnspython and no system
+    resolver config — only outbound HTTPS. *client* is any object with an async
+    ``fetch(url, ...)`` returning an object exposing ``.status``/``.text()``.
+    """
+
+    import json
+
+    res = DnsResult(host=host, resolver="doh")
+    for rdtype in rdtypes:
+        tnum = _DOH_TYPES.get(rdtype)
+        if tnum is None:
+            continue
+        url = f"https://dns.google/resolve?name={host}&type={rdtype}"
+        r = await client.fetch(url, timeout=10.0, follow_redirects=True)
+        if getattr(r, "status", None) != 200:
+            continue
+        try:
+            data = json.loads(r.text())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if data.get("Status") == 3:  # NXDOMAIN
+            res.error = "NXDOMAIN"
+            return res
+        answers = [a.get("data", "").strip('"') for a in data.get("Answer", []) if a.get("type") == tnum]
+        answers = [a.rstrip(".") if rdtype in {"CNAME", "NS"} else a for a in answers if a]
+        if not answers:
+            continue
+        res.records[rdtype] = answers
+        if rdtype == "A":
+            res.a = answers
+        elif rdtype == "AAAA":
+            res.aaaa = answers
+        elif rdtype == "CNAME" and res.canonical_name is None:
+            res.canonical_name = answers[0]
+    return res
+
+
+async def resolve(
+    host: str, rdtypes: tuple[str, ...] | None = None, http_client=None
+) -> DnsResult:
+    """Resolve *host*.
+
+    Order of preference: dnspython (if installed) → DNS-over-HTTPS (if an HTTP
+    client is supplied) → stdlib ``getaddrinfo`` (A/AAAA only).
+    """
+
+    types = rdtypes or _RECORD_TYPES
     if _HAVE_DNSPYTHON:
-        return await asyncio.to_thread(_blocking_dnspython, host, rdtypes or _RECORD_TYPES)
+        return await asyncio.to_thread(_blocking_dnspython, host, types)
+    if http_client is not None:
+        result = await resolve_doh(http_client, host, types)
+        # If DoH produced nothing useful, fall back to the stdlib resolver.
+        if result.a or result.aaaa or result.records or result.error:
+            return result
     return await asyncio.to_thread(_blocking_getaddrinfo, host)
 
 
