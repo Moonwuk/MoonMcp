@@ -6,8 +6,12 @@ from moonmcp import server as srv
 from moonmcp.knowledge import techniques as tech
 from moonmcp.knowledge.techniques_data import TECHNIQUES
 
-_VALID_CATEGORIES = {"web", "deserialization", "memory-corruption", "famous-cve",
-                     "language-specific", "kernel-lowlevel"}
+_VALID_CATEGORIES = {
+    "web", "deserialization", "memory-corruption", "heap-exploitation",
+    "code-reuse", "mitigation-bypass", "famous-cve", "language-specific",
+    "kernel-lowlevel", "container-sandbox", "microarchitectural",
+    "supply-chain", "unique-technique", "interpreter-level",
+}
 
 
 def test_catalog_well_formed():
@@ -25,8 +29,10 @@ def test_catalog_well_formed():
 
 
 def test_get_by_id_and_cve():
-    assert tech.get_technique("log4shell") is not None
-    assert tech.get_technique("CVE-2021-44228")["id"] == "log4shell"
+    assert tech.get_technique("log4shell")["id"] == "log4shell"
+    # a CVE may be referenced by several techniques; lookup returns a valid one
+    hit = tech.get_technique("CVE-2021-44228")
+    assert hit is not None and "CVE-2021-44228" in hit["cve"]
     assert tech.get_technique("nonexistent-xyz") is None
 
 

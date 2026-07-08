@@ -113,13 +113,15 @@ MoonMCP exposes **54 tools**, **5 resources** and **1 guided prompt**, grouped b
 | `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
 | `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
 
-### 📚 Knowledge base — injections (patterns · causes · signatures)
+### 📚 Knowledge base — injections & techniques
+Two referenced catalogs built into the server: **29 injection classes** (255 detection payloads · 318 response signatures) and **115 exploitation techniques** across **14 categories** — from assembler-level memory corruption to the highest-level web and supply-chain attacks. Full listings in [`docs/INJECTIONS.md`](docs/INJECTIONS.md) and [`docs/TECHNIQUES.md`](docs/TECHNIQUES.md).
+
 | Tool | Purpose |
 | --- | --- |
-| `injection_info` | Look up an injection class (sqli, xss, ssti, cmdi, xxe, ssrf, crlf, …): detection payloads, root causes, and exact error/regex signatures per DBMS/engine. |
+| `injection_info` | Look up one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, and exact error/regex signatures per DBMS/engine. |
 | `injection_search` | Search the injection KB by keyword / CWE. |
 | `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology it indicates (e.g. `ORA-01756` → Oracle SQLi). |
-| `technique_info` / `technique_search` | Referenced catalog of exploitation techniques & landmark public PoCs across languages (web, deserialization, memory-corruption/asm, famous CVEs, kernel/low-level) — descriptions + links to public research, not exploit code. |
+| `technique_info` / `technique_search` | Referenced catalog of 115 exploitation techniques & landmark public PoCs across all languages (web, deserialization, interpreter-level, memory-corruption/asm, heap, code-reuse/ROP, mitigation-bypass, kernel/low-level, microarchitectural, supply-chain, famous CVEs) — descriptions + links to public research, **not** exploit code. |
 
 **Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`
 **Prompt:** `recon_methodology` — a guided, scope-safe recon playbook.
