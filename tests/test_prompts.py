@@ -44,9 +44,13 @@ def test_operator_prompt_focus_arg():
 async def test_referenced_tools_exist():
     """Guard against drift: every `tool_name` a prompt cites must be a real tool."""
 
+    from moonmcp.knowledge.privesc_data import PRIVESC
+
     live = {t.name for t in await srv.mcp.list_tools()}
+    # privesc enumeration indicators (e.g. cap_setuid) are cited as examples, not tools
+    indicators = {ind.lower() for t in PRIVESC for ind in t.get("detection_indicators", [])}
     # non-tool backtick tokens the prompts legitimately use
-    allowed = live | {
+    allowed = live | indicators | {
         "MOONMCP_ALLOW_INTRUSIVE", "scope_list", "scope_add", "scope_exclude",
         "findings://current", "injections://all", "techniques://all",
         "moonmcp://scope", "moonmcp://capabilities",

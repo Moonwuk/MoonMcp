@@ -34,6 +34,7 @@ from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
 from .knowledge import injections as injmod
+from .knowledge import privesc as privescmod
 from .knowledge import techniques as techmod
 from .net import dns as dnsmod
 from .net import jarm as jarmmod
@@ -1145,6 +1146,79 @@ async def technique_search(query: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# knowledge base — privilege escalation (techniques + tooling)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def privesc_info(technique: str | None = None, platform: str | None = None,
+                       category: str | None = None) -> dict:
+    """Look up MoonMCP's privilege-escalation knowledge base — a referenced catalog
+    of local privesc techniques across Linux, Windows, container, cloud and Active
+    Directory, with benign enumeration commands, detection indicators and links to
+    public research (no exploit code). Pass a technique id or CVE for full detail;
+    or filter by `platform` (linux/windows/container/cloud/active-directory) or
+    `category` (sudo, suid-sgid, capabilities, kernel-exploit, service-misconfig,
+    token-impersonation, container-escape, cloud-iam, kerberos, adcs, …); or omit
+    for the index + stats. No network — pure reference.
+    """
+
+    if technique:
+        entry = privescmod.get_technique(technique)
+        if entry is None:
+            return {"error": "unknown_technique", "detail": f"No privesc technique '{technique}'",
+                    "platforms": privescmod.platforms(), "categories": privescmod.categories()}
+        return entry
+    if platform:
+        return {"platform": platform, "results": privescmod.by_platform(platform)}
+    if category:
+        return {"category": category, "results": privescmod.by_category(category)}
+    return {"stats": privescmod.stats(), "techniques": privescmod.list_techniques()}
+
+
+@mcp.tool()
+@safe_tool
+async def privesc_search(query: str) -> dict:
+    """Search the privilege-escalation KB by keyword (name, platform, category, CVE,
+    tool or detection indicator).
+    """
+
+    return {"query": query, "results": privescmod.search(query)}
+
+
+@mcp.tool()
+@safe_tool
+async def privesc_tools(tool: str | None = None, query: str | None = None) -> dict:
+    """Catalog of privilege-escalation TOOLING (LinPEAS/WinPEAS, GTFOBins, LOLBAS,
+    PowerUp, Seatbelt, pspy, linux-exploit-suggester, the potato family, BloodHound,
+    …). Pass a `tool` id/name for detail, a `query` to search, or omit for the full
+    list. No network — pure reference.
+    """
+
+    if tool:
+        entry = privescmod.get_tool(tool)
+        if entry is None:
+            return {"error": "unknown_tool", "detail": f"No privesc tool '{tool}'",
+                    "known": [t["id"] for t in privescmod.list_tools()]}
+        return entry
+    if query:
+        return {"query": query, "results": privescmod.search_tools(query)}
+    return {"count": len(privescmod.list_tools()), "tools": privescmod.list_tools()}
+
+
+@mcp.tool()
+@safe_tool
+async def match_privesc(text: str, platform: str | None = None) -> dict:
+    """Scan pasted local-enumeration output (e.g. `sudo -l`, `id`, a SUID listing,
+    `getcap -r /`, `whoami /priv`, `systeminfo`) for known privilege-escalation
+    vectors and report which techniques the output indicates — a fast triage of a
+    foothold's escalation paths. Optionally restrict to one `platform`. No network.
+    """
+
+    matches = privescmod.match_enumeration(text, platform=platform)
+    return {"match_count": len(matches), "matches": matches}
+
+
+# ---------------------------------------------------------------------------
 # orchestration
 # ---------------------------------------------------------------------------
 @mcp.tool()
@@ -1431,6 +1505,18 @@ def techniques_resource() -> str:
     return json.dumps({"stats": techmod.stats(), "techniques": TECHNIQUES}, indent=2)
 
 
+@mcp.resource("privesc://all")
+def privesc_resource() -> str:
+    """The privilege-escalation knowledge base: techniques + tooling catalog."""
+
+    import json
+
+    from .knowledge.privesc_data import PRIVESC, PRIVESC_TOOLS
+
+    return json.dumps({"stats": privescmod.stats(), "techniques": PRIVESC,
+                       "tools": PRIVESC_TOOLS}, indent=2)
+
+
 @mcp.prompt()
 def recon_methodology(target: str = "example.com") -> str:
     """A guided, scope-safe reconnaissance methodology for a bug-bounty target."""
@@ -1496,6 +1582,13 @@ def safe_recon(target: str = "example.com") -> str:
     """Conservative, passive-first, scope-strict recon persona with hard stops."""
 
     return promptmod.safe_recon(target)
+
+
+@mcp.prompt()
+def privesc_hunt(target: str = "the compromised host", platform: str = "") -> str:
+    """KB-backed privilege-escalation triage from an authorised foothold (enumerate → match → verify)."""
+
+    return promptmod.privesc_hunt(target, platform)
 
 
 def run() -> None:

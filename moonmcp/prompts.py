@@ -244,6 +244,43 @@ def safe_recon(target: str = "example.com") -> str:
     )
 
 
+def privesc_hunt(target: str = "the compromised host", platform: str = "") -> str:
+    """Drive methodical, KB-backed privilege-escalation triage from an authorised foothold."""
+
+    plat = platform.strip().lower()
+    plat_line = (
+        f"Target platform: {plat}. Focus the enumeration accordingly.\n"
+        if plat else
+        "First identify the platform (linux/windows/container/cloud/AD) and tailor the\n"
+        "enumeration to it.\n"
+    )
+    return (
+        f"You are escalating privileges on `{target}`, a host you are AUTHORISED to test\n"
+        "(you already have a foothold), using MoonMCP's privilege-escalation knowledge\n"
+        "base. Be systematic: enumerate broadly, then confirm one concrete path.\n"
+        + plat_line +
+        f"\n{RULES_OF_ENGAGEMENT}"
+        "\nMETHOD:\n"
+        "1. ENUMERATE with benign discovery commands. Pull the right checklist from\n"
+        "   `privesc_info` (filter by `platform`/`category`) and the tooling from\n"
+        "   `privesc_tools` (LinPEAS/WinPEAS, GTFOBins, LOLBAS, PowerUp, Seatbelt, pspy,\n"
+        "   linux-exploit-suggester, BloodHound, …). Typical first commands: `sudo -l`,\n"
+        "   `id`, `getcap -r /`, SUID listing, `whoami /priv`, `systeminfo`.\n"
+        "2. TRIAGE the output: paste it into `match_privesc` to see which known vectors it\n"
+        "   indicates (e.g. `NOPASSWD` → sudo abuse, `SeImpersonatePrivilege` → a potato\n"
+        "   attack, `cap_setuid` → capabilities, `docker.sock` → container escape).\n"
+        "3. For each candidate, open the full `privesc_info` entry: prerequisites, how it\n"
+        "   works, the exact detection indicators, and the referenced public PoC. For\n"
+        "   kernel vectors, confirm the version with `cve_search`/`technique_info`.\n"
+        "4. VERIFY prerequisites actually hold before claiming a path is exploitable — an\n"
+        "   indicator alone is a lead, not a confirmed escalation.\n"
+        f"\n{OPERATING_LOOP}"
+        "\nSAFETY: use the least-intrusive proof, do not deploy weaponised exploit code from\n"
+        "the catalog (it is reference material — descriptions + links), never destabilise\n"
+        "the host, and record confirmed paths with `add_finding` (evidence + severity)."
+    )
+
+
 #: registry consumed by the server + tests + docs
 PROMPTS = {
     "bug_bounty_operator": bug_bounty_operator,
@@ -252,4 +289,5 @@ PROMPTS = {
     "technique_advisor": technique_advisor,
     "triage_and_report": triage_and_report,
     "safe_recon": safe_recon,
+    "privesc_hunt": privesc_hunt,
 }
