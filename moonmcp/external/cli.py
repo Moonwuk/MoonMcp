@@ -35,6 +35,10 @@ KNOWN_TOOLS: dict[str, tuple[str, str, str]] = {
               "go install github.com/owasp-amass/amass/v4/...@master"),
     "waybackurls": ("wayback_urls", "Fetch Wayback Machine URLs",
                     "go install github.com/tomnomnom/waybackurls@latest"),
+    "ilspycmd": ("analyze_binary", "Headless .NET decompiler (ILSpy CLI)",
+                 "dotnet tool install -g ilspycmd"),
+    "monodis": ("analyze_binary", "Mono CIL disassembler",
+                "apt install mono-utils"),
 }
 
 

@@ -34,6 +34,7 @@ from .intel import email as emailmod
 from .net import dns as dnsmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
+from .recon import binary as binarymod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
 from .recon import fingerprint as fpmod
@@ -670,6 +671,62 @@ async def screenshot(target: str, full_page: bool = True, return_base64: bool = 
         timeout_ms=int(ctx.settings.timeout * 2000),
     )
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def analyze_binary(target: str, decompile: bool = True) -> dict:
+    """Download an in-scope compiled artifact (.dll/.exe/.jar/.so/.apk/…) and
+    triage it: identify the file type (incl. .NET assemblies), extract ASCII +
+    UTF-16 strings, scan them for secrets and for URLs/hosts/connection-strings.
+    If it is a .NET assembly and `ilspycmd` is installed, also decompiles a
+    preview (else reports how to get it). Great for thick-client / exposed-binary
+    recon. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    fetched = await ctx.http.fetch(url, follow_redirects=True, timeout=30.0,
+                                   max_body=12 * 1024 * 1024, scope_check=_scope_check())
+    if fetched.status is None:
+        return {"error": "unreachable", "detail": fetched.error, "url": url}
+    if not fetched.body:
+        return {"error": "empty_body", "detail": f"HTTP {fetched.status}", "url": url}
+
+    analysis = binarymod.analyze_bytes(fetched.body, url=fetched.final_url or url)
+    analysis.truncated = fetched.truncated
+
+    # Optional real decompilation of .NET assemblies via ilspycmd.
+    if analysis.is_dotnet:
+        path = cli.tool_path("ilspycmd") if ctx.settings.allow_external_tools else None
+        if path:
+            analysis.decompiler_available = "ilspycmd"
+            import os
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix=".dll", delete=False)
+            try:
+                tmp.write(fetched.body)
+                tmp.close()
+                if decompile:
+                    res = await cli.run_tool("ilspycmd", [tmp.name],
+                                             timeout=min(120.0, ctx.settings.external_timeout),
+                                             allow=True)
+                    if res.available and res.stdout:
+                        analysis.decompiled_preview = res.stdout[:20000]
+                    elif res.error:
+                        analysis.decompiler_hint = res.error
+            finally:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+        else:
+            analysis.decompiler_hint = (
+                "Install ilspycmd for full decompilation: dotnet tool install -g ilspycmd"
+            )
+    return to_dict(analysis)
 
 
 @mcp.tool()

@@ -227,5 +227,6 @@ async def test_new_tools_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     for name in ("crawl", "extract_secrets", "cors_audit", "graphql_check",
                  "waf_detect", "takeover_check", "email_security", "jwt_analyze",
-                 "http_methods", "open_redirect", "vcs_exposure", "screenshot", "report"):
+                 "http_methods", "open_redirect", "vcs_exposure", "screenshot", "report",
+                 "analyze_binary"):
         assert name in tools

@@ -30,7 +30,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~35-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~36-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **35 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **36 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -84,6 +84,7 @@ MoonMCP exposes **35 tools**, **2 resources** and **1 guided prompt**, grouped b
 | `open_redirect` | Inject a canary into common redirect params (url, next, returnTo, …) — Location / meta / JS. |
 | `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
 | `screenshot` | Render a page to PNG via Playwright+Chromium **when installed** (else a graceful note). |
+| `analyze_binary` | Download a compiled artifact (.dll/.exe/.jar/.so) → filetype (incl. .NET), strings (ASCII+UTF-16), secrets, URLs, conn-strings; optional `ilspycmd` decompile. |
 
 ### 🟠 Active — intrusive (gated by `MOONMCP_ALLOW_INTRUSIVE`)
 | Tool | Purpose |
@@ -207,7 +208,7 @@ MoonMCP has native, stdlib implementations for the whole recon workflow, but it
 gets sharper when best-in-class tools are on `PATH`. It auto-detects and can run:
 
 `subfinder`, `httpx`, `nuclei`, `naabu`, `nmap`, `katana`, `ffuf`, `gau`, `dnsx`,
-`amass`, `waybackurls`.
+`amass`, `waybackurls`, `ilspycmd` (.NET decompiler), `monodis`.
 
 If a tool is missing, MoonMCP returns a clear note and the **native fallback** to
 use instead — nothing errors out. Call `external_tools` to see what's available.
@@ -222,7 +223,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 35 tools, 2 resources, 1 prompt
+├── server.py        # FastMCP server: 36 tools, 2 resources, 1 prompt
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient
@@ -232,7 +233,7 @@ moonmcp/
 │   ├── tls.py       #   ssl-based certificate inspection
 │   ├── ports.py     #   asyncio TCP connect-scan
 │   └── ratelimit.py #   token-bucket + concurrency governor
-├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets
+├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets, binary
 ├── web/             # cors, graphql, waf, jwt, methods, takeover, redirect, exposure, screenshot
 ├── intel/           # cve (NVD), shodan (InternetDB / API), email (SPF/DMARC/DKIM/CAA)
 ├── reporting.py     # pure Markdown report renderer
@@ -250,7 +251,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 55 tests: scope logic, parsers, web-app checks, and local-server integration
+pytest -q          # 59 tests: scope logic, parsers, web-app checks, and local-server integration
 ruff check .
 ```
 
