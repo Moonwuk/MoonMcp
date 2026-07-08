@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **54 tools**, **5 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **54 tools**, **5 resources** and **7 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -124,7 +124,15 @@ Two referenced catalogs built into the server: **29 injection classes** (255 det
 | `technique_info` / `technique_search` | Referenced catalog of 115 exploitation techniques & landmark public PoCs across all languages (web, deserialization, interpreter-level, memory-corruption/asm, heap, code-reuse/ROP, mitigation-bypass, kernel/low-level, microarchitectural, supply-chain, famous CVEs) — descriptions + links to public research, **not** exploit code. |
 
 **Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`
-**Prompt:** `recon_methodology` — a guided, scope-safe recon playbook.
+
+**Operator prompts** ([`docs/SYSTEM_PROMPTS.md`](docs/SYSTEM_PROMPTS.md)) — system prompts that make an agent using MoonMCP plan, pick the right tool, verify before it reports, minimise false positives and stay strictly in scope. Synthesised from real pentest-agent prompts (CAI, PentestGPT, XBOW, HexStrike), agent prompt-engineering (ReAct, Plan-and-Execute, Chain-of-Verification, Reflexion) and bug-bounty methodology (TBHM, OWASP WSTG, PortSwigger, HackerOne/Bugcrowd):
+- `bug_bounty_operator` — master engagement prompt (rules of engagement + OODA-style loop + tool map).
+- `deep_recon` — exhaustive 5-phase attack-surface mapping.
+- `injection_hunt` — KB-backed injection hunt with benign canaries + signature confirmation.
+- `technique_advisor` — referenced technique guidance for an observed tech/CVE.
+- `triage_and_report` — verify, dedupe, severity-rate and write accepted-quality reports.
+- `safe_recon` — conservative, passive-first, scope-strict default.
+- `recon_methodology` — the original quick-start recon playbook.
 
 ---
 
@@ -268,7 +276,8 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 54 tools, 5 resources, 1 prompt
+├── server.py        # FastMCP server: 54 tools, 5 resources, 7 prompts
+├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient

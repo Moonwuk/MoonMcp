@@ -27,6 +27,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
+from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
 from .intel import asn as asnmod
@@ -1450,6 +1451,51 @@ def recon_methodology(target: str = "example.com") -> str:
         "   `port_scan`, `content_discovery`, and — if nuclei is installed — `vuln_scan`.\n\n"
         "Summarise findings by severity, always cite the evidence, and never touch out-of-scope hosts."
     )
+
+
+# Operator system prompts (see moonmcp/prompts.py + docs/SYSTEM_PROMPTS.md).
+# These make an agent using MoonMCP plan, pick the right tool, verify before it
+# reports, minimise false positives, and stay strictly in authorised scope.
+@mcp.prompt()
+def bug_bounty_operator(target: str = "example.com", focus: str = "") -> str:
+    """Master operator prompt: persona, rules of engagement, control loop and tool map."""
+
+    return promptmod.bug_bounty_operator(target, focus)
+
+
+@mcp.prompt()
+def deep_recon(target: str = "example.com") -> str:
+    """Exhaustive, phased attack-surface mapping methodology (TBHM/WSTG-style)."""
+
+    return promptmod.deep_recon(target)
+
+
+@mcp.prompt()
+def injection_hunt(target: str = "example.com", injection_class: str = "") -> str:
+    """KB-backed injection hunt: benign canaries, signature confirmation, false-positive discipline."""
+
+    return promptmod.injection_hunt(target, injection_class)
+
+
+@mcp.prompt()
+def technique_advisor(technology: str = "", cve: str = "") -> str:
+    """Turn an observed technology/CVE into referenced technique guidance from the catalog."""
+
+    return promptmod.technique_advisor(technology, cve)
+
+
+@mcp.prompt()
+def triage_and_report(target: str = "example.com") -> str:
+    """Verify, dedupe, severity-rate and write up findings to accepted-report quality."""
+
+    return promptmod.triage_and_report(target)
+
+
+@mcp.prompt()
+def safe_recon(target: str = "example.com") -> str:
+    """Conservative, passive-first, scope-strict recon persona with hard stops."""
+
+    return promptmod.safe_recon(target)
 
 
 def run() -> None:
