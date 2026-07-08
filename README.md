@@ -30,7 +30,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~52-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~54-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **52 tools**, **4 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **54 tools**, **5 resources** and **1 guided prompt**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -119,8 +119,9 @@ MoonMCP exposes **52 tools**, **4 resources** and **1 guided prompt**, grouped b
 | `injection_info` | Look up an injection class (sqli, xss, ssti, cmdi, xxe, ssrf, crlf, …): detection payloads, root causes, and exact error/regex signatures per DBMS/engine. |
 | `injection_search` | Search the injection KB by keyword / CWE. |
 | `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology it indicates (e.g. `ORA-01756` → Oracle SQLi). |
+| `technique_info` / `technique_search` | Referenced catalog of exploitation techniques & landmark public PoCs across languages (web, deserialization, memory-corruption/asm, famous CVEs, kernel/low-level) — descriptions + links to public research, not exploit code. |
 
-**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`
+**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`
 **Prompt:** `recon_methodology` — a guided, scope-safe recon playbook.
 
 ---
@@ -265,7 +266,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 52 tools, 4 resources, 1 prompt
+├── server.py        # FastMCP server: 54 tools, 5 resources, 1 prompt
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient
@@ -281,7 +282,7 @@ moonmcp/
 ├── intel/           # cve (NVD), shodan, email (SPF/DMARC/DKIM/CAA), asn (ASN/cloud/reverse-IP)
 ├── reporting.py     # pure Markdown report renderer
 ├── findings.py      # session findings store (findings:// resource)
-├── knowledge/       # injection KB (patterns/causes/signatures; injections:// resource)
+├── knowledge/       # injection KB + techniques/PoC catalog (injections:// / techniques:// resources)
 └── external/        # optional CLI detection + safe invocation
 ```
 
@@ -296,7 +297,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 96 tests: scope logic, parsers, web-app checks, and local-server integration
+pytest -q          # 100 tests: scope logic, parsers, web-app checks, and local-server integration
 ruff check .
 ```
 

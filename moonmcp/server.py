@@ -33,6 +33,7 @@ from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
 from .knowledge import injections as injmod
+from .knowledge import techniques as techmod
 from .net import dns as dnsmod
 from .net import jarm as jarmmod
 from .net import ports as portsmod
@@ -1109,6 +1110,39 @@ async def match_injection_signatures(text: str, injection_class: str | None = No
     return {"match_count": len(matches), "matches": matches}
 
 
+@mcp.tool()
+@safe_tool
+async def technique_info(technique: str | None = None, category: str | None = None,
+                         language: str | None = None) -> dict:
+    """Look up MoonMCP's techniques & notable-PoC catalog — a referenced index of
+    exploitation techniques and landmark public vulnerabilities across languages
+    (web, deserialization, memory-corruption/asm, famous CVEs, language-specific,
+    kernel/low-level). Pass a technique id or CVE for full detail; or filter by
+    `category` / `language`; or omit for the index + stats. Each entry links to
+    the public PoC/research — it is a knowledge reference, not exploit code.
+    """
+
+    if technique:
+        entry = techmod.get_technique(technique)
+        if entry is None:
+            return {"error": "unknown_technique", "detail": f"No technique '{technique}'",
+                    "categories": techmod.categories()}
+        return entry
+    if category:
+        return {"category": category, "results": techmod.by_category(category)}
+    if language:
+        return {"language": language, "results": techmod.by_language(language)}
+    return {"stats": techmod.stats(), "techniques": techmod.list_techniques()}
+
+
+@mcp.tool()
+@safe_tool
+async def technique_search(query: str) -> dict:
+    """Search the techniques & PoC catalog by keyword, language, CVE or category."""
+
+    return {"query": query, "results": techmod.search(query)}
+
+
 # ---------------------------------------------------------------------------
 # orchestration
 # ---------------------------------------------------------------------------
@@ -1383,6 +1417,17 @@ def injections_resource() -> str:
     from .knowledge.injections_data import INJECTIONS
 
     return json.dumps({"stats": injmod.stats(), "injections": INJECTIONS}, indent=2)
+
+
+@mcp.resource("techniques://all")
+def techniques_resource() -> str:
+    """The techniques & notable-PoC catalog (referenced index)."""
+
+    import json
+
+    from .knowledge.techniques_data import TECHNIQUES
+
+    return json.dumps({"stats": techmod.stats(), "techniques": TECHNIQUES}, indent=2)
 
 
 @mcp.prompt()
