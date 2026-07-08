@@ -48,7 +48,8 @@ def test_exclusion_overrides_inclusion():
 
 
 def test_ip_and_cidr():
-    s = ScopeManager()
+    # block_private off: this test exercises CIDR matching on a private range.
+    s = ScopeManager(block_private=False)
     s.add("10.0.0.0/8")
     s.add("203.0.113.10")
     assert s.is_in_scope("10.1.2.3")
@@ -76,6 +77,30 @@ def test_check_raises_and_returns_host():
     assert s.check("https://api.example.com/x") == "api.example.com"
     with pytest.raises(ScopeError):
         s.check("evil.com")
+
+
+def test_block_private_addresses_by_default():
+    s = ScopeManager(enforce=True, block_private=True)
+    s.add("10.0.0.0/8")          # even an explicit allow does not override the guard
+    s.add("127.0.0.1")
+    s.add("169.254.169.254")     # cloud metadata
+    for ip in ("10.1.2.3", "127.0.0.1", "169.254.169.254", "192.168.1.1", "0.0.0.0"):
+        ok, reason = s.evaluate(ip)
+        assert not ok, ip
+        assert "private/reserved" in reason
+
+
+def test_block_private_can_be_disabled_for_internal_testing():
+    s = ScopeManager(enforce=True, block_private=False)
+    s.add("10.0.0.0/8")
+    assert s.is_in_scope("10.1.2.3")
+    assert not s.is_in_scope("11.0.0.1")  # still scoped, just not private-blocked
+
+
+def test_public_ip_unaffected_by_private_guard():
+    s = ScopeManager(enforce=True, block_private=True)
+    s.add("8.8.8.0/24")
+    assert s.is_in_scope("8.8.8.8")
 
 
 def test_remove_entry():

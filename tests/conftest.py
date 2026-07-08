@@ -25,6 +25,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok")
             return
+        if self.path == "/redirect-out":
+            # Redirect to an out-of-scope host — MoonMCP must refuse to follow.
+            self.send_response(302)
+            self.send_header("Location", "http://evil.example/pwned")
+            self.end_headers()
+            return
         if self.path.rstrip("/") in ("/admin",):
             self.send_response(403)
             self.end_headers()
@@ -61,6 +67,8 @@ def fresh_context(monkeypatch):
     """Give the server module a fresh, in-scope context for 127.0.0.1."""
 
     ctx = build_context()
+    # Local-server tests target 127.0.0.1, so disable the private-IP SSRF guard.
+    ctx.scope.block_private = False
     ctx.scope.add("127.0.0.1")
     monkeypatch.setattr(srv, "_CTX", ctx)
     return ctx

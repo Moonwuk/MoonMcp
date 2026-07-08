@@ -119,3 +119,65 @@ def test_jsonl_parse():
     text = '{"a":1}\n\ngarbage\n{"b":2}\n'
     rows = parse_jsonl(text)
     assert rows == [{"a": 1}, {"b": 2}]
+
+
+# --- decompression-bomb guard -------------------------------------------
+def test_decode_body_caps_inflated_output():
+    import zlib
+
+    from moonmcp.net.http import _decode_body
+
+    bomb = zlib.compress(b"A" * (5 * 1024 * 1024))  # 5 MiB -> tiny compressed
+    out, truncated = _decode_body(bomb, "deflate", limit=1024)
+    assert len(out) <= 1024
+    assert truncated is True
+
+
+def test_decode_body_plain_passthrough():
+    from moonmcp.net.http import _decode_body
+
+    out, truncated = _decode_body(b"hello", None, limit=1024)
+    assert out == b"hello"
+    assert truncated is False
+
+
+# --- host-like token extraction (run_scanner scope guard) ----------------
+def test_host_like_tokens():
+    from moonmcp.server import _host_like_tokens
+
+    args = ["-u", "https://target.example/api", "-t", "cves/", "extra.example.com",
+            "critical,high", "203.0.113.9", "wordlist.txt"]
+    toks = _host_like_tokens(args)
+    assert "https://target.example/api" in toks
+    assert "extra.example.com" in toks
+    assert "203.0.113.9" in toks
+    assert "cves/" not in toks           # template path, not a host
+    assert "critical,high" not in toks   # severity list
+    assert "-u" not in toks              # flag
+    assert "wordlist.txt" not in toks    # .txt is not a hostish TLD match? -> excluded
+
+
+# --- subdomain source shape robustness -----------------------------------
+def test_subdomain_result_shape_guard(monkeypatch):
+    import asyncio
+
+    from moonmcp.recon import subdomains as sub
+
+    class FakeClient:
+        def __init__(self, payload):
+            self._payload = payload
+
+        async def fetch(self, url, **kw):
+            return make_result([("Content-Type", "application/json")],
+                               body=self._payload.encode(), status=200,
+                               url=url)
+
+    # crt.sh returning an object instead of a list must not crash.
+    async def run():
+        client = FakeClient('{"error": "rate limited"}')
+        name, found, err = await sub._crtsh(client, "example.com")
+        assert name == "crtsh"
+        assert found == set()
+        assert err  # reported, not raised
+
+    asyncio.run(run())

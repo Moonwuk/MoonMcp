@@ -72,6 +72,29 @@ async def test_scope_guard_blocks_out_of_scope(fresh_context):
 
 
 @pytest.mark.asyncio
+async def test_redirect_to_out_of_scope_is_blocked(local_server, fresh_context):
+    base, _ = local_server
+    res = await srv.http_probe(target=f"{base}/redirect-out")
+    # We received the 302 but must NOT have followed it off-scope.
+    assert res["status"] == 302
+    assert res.get("redirect_blocked", "").startswith("http://evil.example")
+    assert "evil.example" not in (res.get("final_url") or "")
+
+
+@pytest.mark.asyncio
+async def test_run_scanner_scope_checks_args(fresh_context):
+    # Host lives in args, not in `target`; must still be scope-checked.
+    res = await srv.run_scanner(tool="httpx", args=["-u", "https://out-of-scope.example"])
+    assert res["error"] == "out_of_scope"
+
+
+@pytest.mark.asyncio
+async def test_run_scanner_requires_target_when_enforced(fresh_context):
+    res = await srv.run_scanner(tool="nuclei", args=["-version"])
+    assert res["error"] == "no_target"
+
+
+@pytest.mark.asyncio
 async def test_intrusive_gate(fresh_context):
     # Disable intrusive tools; port_scan must refuse even for an in-scope host.
     from dataclasses import replace

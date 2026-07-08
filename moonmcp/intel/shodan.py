@@ -73,7 +73,8 @@ async def shodan_host_lookup(client: HttpClient, ip: str, api_key: str) -> Shoda
     if r.error or r.status != 200:
         # Gracefully fall back to the free dataset.
         fallback = await internetdb_lookup(client, ip)
-        fallback.error = (fallback.error or "") + f" (shodan API HTTP {r.status})"
+        why = r.error or f"HTTP {r.status}"
+        fallback.error = (fallback.error or "") + f" (shodan API: {why})"
         return fallback
     try:
         data = json.loads(r.text())

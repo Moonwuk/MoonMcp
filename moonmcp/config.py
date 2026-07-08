@@ -58,6 +58,10 @@ class Settings:
     # Allow intrusive tools (port scan, content discovery, active fuzzing).
     # Even when enabled these still honour the scope.
     allow_intrusive: bool = True
+    # Hard-block private / loopback / link-local / reserved IP targets (SSRF
+    # guard). No active tool can bypass this. Turn OFF for internal-network
+    # engagements where you deliberately test RFC1918 space.
+    block_private: bool = True
 
     # --- Networking -------------------------------------------------------
     # Global default request timeout in seconds.
@@ -94,6 +98,7 @@ def load_settings() -> Settings:
         scope=_env_list("MOONMCP_SCOPE"),
         scope_exclude=_env_list("MOONMCP_SCOPE_EXCLUDE"),
         allow_intrusive=_env_bool("MOONMCP_ALLOW_INTRUSIVE", True),
+        block_private=_env_bool("MOONMCP_BLOCK_PRIVATE", True),
         timeout=_env_float("MOONMCP_TIMEOUT", 10.0),
         rate_limit=_env_float("MOONMCP_RATE_LIMIT", 20.0),
         max_concurrency=_env_int("MOONMCP_MAX_CONCURRENCY", 20),

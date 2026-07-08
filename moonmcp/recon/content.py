@@ -76,13 +76,18 @@ def _base_url(host: str, scheme: str, port: int | None) -> str:
 
 
 async def fetch_well_known(
-    client: HttpClient, host: str, *, scheme: str = "https", port: int | None = None
+    client: HttpClient,
+    host: str,
+    *,
+    scheme: str = "https",
+    port: int | None = None,
+    scope_check=None,
 ) -> WellKnown:
     base = _base_url(host, scheme, port)
     wk = WellKnown(base_url=base)
 
     async def grab(label: str, path: str) -> None:
-        r = await client.fetch(base + path, timeout=15.0, follow_redirects=True)
+        r = await client.fetch(base + path, timeout=15.0, follow_redirects=True, scope_check=scope_check)
         if r.status and r.status == 200 and r.body:
             body = r.text(limit=100_000)
             wk.files[label] = {

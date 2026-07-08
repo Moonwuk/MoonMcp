@@ -64,7 +64,11 @@ async def _crtsh(client: HttpClient, domain: str) -> tuple[str, set[str], str | 
             data = json.loads("[" + r.text().replace("}\n{", "},{") + "]")
         except json.JSONDecodeError:
             return "crtsh", set(), "unparseable response"
+    if not isinstance(data, list):
+        return "crtsh", set(), "unexpected response shape"
     for entry in data:
+        if not isinstance(entry, dict):
+            continue
         for field_name in ("name_value", "common_name"):
             val = entry.get(field_name, "")
             for line in str(val).splitlines():
@@ -98,12 +102,15 @@ async def _anubis(client: HttpClient, domain: str) -> tuple[str, set[str], str |
         return "anubis", set(), r.error or f"HTTP {r.status}"
     found: set[str] = set()
     try:
-        for host in json.loads(r.text()):
-            c = _clean(str(host), domain)
-            if c:
-                found.add(c)
+        data = json.loads(r.text())
     except json.JSONDecodeError:
         return "anubis", set(), "unparseable response"
+    if not isinstance(data, list):
+        return "anubis", set(), "unexpected response shape"
+    for host in data:
+        c = _clean(str(host), domain)
+        if c:
+            found.add(c)
     return "anubis", found, None
 
 
@@ -117,7 +124,11 @@ async def _otx(client: HttpClient, domain: str) -> tuple[str, set[str], str | No
         data = json.loads(r.text())
     except json.JSONDecodeError:
         return "otx", set(), "unparseable response"
-    for rec in data.get("passive_dns", []):
+    if not isinstance(data, dict):
+        return "otx", set(), "unexpected response shape"
+    for rec in data.get("passive_dns", []) or []:
+        if not isinstance(rec, dict):
+            continue
         c = _clean(str(rec.get("hostname", "")), domain)
         if c:
             found.add(c)
@@ -143,8 +154,13 @@ async def enumerate_subdomains(
     tasks = [_SOURCES[s](client, domain) for s in chosen if s in _SOURCES]
     result = SubdomainResult(domain=domain)
     merged: set[str] = set()
-    for coro in asyncio.as_completed(tasks):
-        name, found, err = await coro
+    # gather(return_exceptions=True) so one misbehaving source can never crash
+    # the tool or orphan the other in-flight coroutines.
+    for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(outcome, Exception):
+            result.errors["unknown"] = f"{type(outcome).__name__}: {outcome}"
+            continue
+        name, found, err = outcome
         if err:
             result.errors[name] = err
         result.sources[name] = len(found)

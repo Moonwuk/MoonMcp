@@ -10,12 +10,12 @@ Design goals:
 from __future__ import annotations
 
 import asyncio
-import gzip
 import ssl
 import time
 import urllib.error
 import urllib.request
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.client import HTTPResponse
 
@@ -37,6 +37,7 @@ class HttpResult:
     redirect_chain: list[str] = field(default_factory=list)
     error: str | None = None
     truncated: bool = False
+    redirect_blocked: str | None = None  # set if a redirect target left the scope
 
     @property
     def ok(self) -> bool:
@@ -80,21 +81,33 @@ def _find_header(pairs: list[tuple[str, str]], name: str) -> str | None:
     return None
 
 
-def _decode_body(raw: bytes, encoding: str | None) -> bytes:
-    if not encoding:
-        return raw
-    enc = encoding.lower()
+def _inflate(raw: bytes, wbits: int, limit: int) -> bytes:
+    """Decompress with a hard cap on *output* size (decompression-bomb guard)."""
+
+    dobj = zlib.decompressobj(wbits)
+    return dobj.decompress(raw, limit + 1)
+
+
+def _decode_body(raw: bytes, encoding: str | None, limit: int) -> tuple[bytes, bool]:
+    """Return ``(decoded_body, truncated)`` with the decoded size bounded to
+    *limit* so a compressed payload can never inflate past the body cap."""
+
+    enc = (encoding or "").lower()
+    if not enc:
+        return raw[:limit], len(raw) > limit
     try:
         if enc == "gzip":
-            return gzip.decompress(raw)
-        if enc == "deflate":
+            out = _inflate(raw, 16 + zlib.MAX_WBITS, limit)
+        elif enc == "deflate":
             try:
-                return zlib.decompress(raw)
+                out = _inflate(raw, zlib.MAX_WBITS, limit)
             except zlib.error:
-                return zlib.decompress(raw, -zlib.MAX_WBITS)
+                out = _inflate(raw, -zlib.MAX_WBITS, limit)
+        else:
+            return raw[:limit], len(raw) > limit
     except (OSError, zlib.error):
-        return raw
-    return raw
+        return raw[:limit], len(raw) > limit
+    return out[:limit], len(out) > limit
 
 
 def _blocking_fetch(
@@ -118,9 +131,11 @@ def _blocking_fetch(
         reason = resp.reason or ""
         resp_headers = list(resp.getheaders())
         raw = resp.read(max_body + 1)
-        truncated = len(raw) > max_body
-        raw = raw[:max_body]
-        content = _decode_body(raw, _find_header(resp_headers, "Content-Encoding"))
+        compressed_capped = len(raw) > max_body
+        content, decoded_capped = _decode_body(
+            raw, _find_header(resp_headers, "Content-Encoding"), max_body
+        )
+        truncated = decoded_capped or compressed_capped
         elapsed = (time.monotonic() - started) * 1000
         return HttpResult(
             url=url,
@@ -134,14 +149,17 @@ def _blocking_fetch(
         )
     except urllib.error.HTTPError as exc:
         # HTTPError is a valid response for our purposes (4xx/5xx).
+        resp = exc  # ensure the error response socket is closed by `finally`
         resp_headers = list(exc.headers.items()) if exc.headers else []
         try:
             raw = exc.read(max_body + 1)
         except Exception:
             raw = b""
-        truncated = len(raw) > max_body
-        raw = raw[:max_body]
-        content = _decode_body(raw, _find_header(resp_headers, "Content-Encoding"))
+        compressed_capped = len(raw) > max_body
+        content, decoded_capped = _decode_body(
+            raw, _find_header(resp_headers, "Content-Encoding"), max_body
+        )
+        truncated = decoded_capped or compressed_capped
         elapsed = (time.monotonic() - started) * 1000
         return HttpResult(
             url=url,
@@ -206,6 +224,7 @@ class HttpClient:
         follow_redirects: bool = False,
         max_redirects: int = 5,
         max_body: int | None = None,
+        scope_check: Callable[[str], bool] | None = None,
     ) -> HttpResult:
         merged = {"User-Agent": self._ua, "Accept-Encoding": "gzip, deflate", "Accept": "*/*"}
         if headers:
@@ -234,6 +253,10 @@ class HttpClient:
                 break
             nxt = urllib.request.urljoin(current, location)
             if nxt in seen:
+                break
+            # Never follow a redirect that leaves the authorised scope.
+            if scope_check is not None and not scope_check(nxt):
+                result.redirect_blocked = nxt
                 break
             seen.add(nxt)
             chain.append(nxt)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 import platform
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -96,6 +97,13 @@ def _require_scope(target: str, *, intrusive: bool = False) -> str:
     return ctx.scope.check(target)
 
 
+def _scope_check() -> Callable[[str], bool]:
+    """A predicate the HTTP client uses to refuse out-of-scope redirects."""
+
+    ctx = get_context()
+    return lambda url: ctx.scope.is_in_scope(url)
+
+
 def _split_host_port(target: str, default_port: int) -> tuple[str, int]:
     host = normalize_target(target)
     # normalize_target strips the port; recover it if the user supplied one.
@@ -109,13 +117,57 @@ def _split_host_port(target: str, default_port: int) -> tuple[str, int]:
     elif "://" in raw:
         from urllib.parse import urlsplit
         p = urlsplit(raw)
-        if p.port:
-            port = p.port
+        try:
+            parsed_port = p.port
+        except ValueError:
+            parsed_port = None  # out-of-range port in the URL; fall back to default
+        if parsed_port:
+            port = parsed_port
         elif p.scheme == "http":
             port = 80
     elif raw.count(":") == 1 and raw.rsplit(":", 1)[1].isdigit():
         port = int(raw.rsplit(":", 1)[1])
     return host, port
+
+
+_HOSTISH_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,63}(?::\d+)?$", re.IGNORECASE)
+# Final-label extensions that mean "this is a file/list arg", not a hostname,
+# so we don't false-positive a wordlist/config path as a scan target.
+_NON_TLD = {
+    "txt", "json", "yaml", "yml", "xml", "csv", "html", "htm", "conf", "cfg",
+    "ini", "log", "list", "md", "js", "py", "sh", "pdf", "png", "jpg", "toml",
+}
+
+
+def _host_like_tokens(args: list[str]) -> list[str]:
+    """Extract host/URL/IP-looking tokens from a CLI arg list (for scope checks).
+
+    Skips flags and non-target tokens (template paths, severities, wordlists) so
+    that every actual scan target in ``args`` gets scope-checked.
+    """
+
+    import ipaddress
+
+    found: list[str] = []
+    for tok in args:
+        t = tok.strip()
+        if not t or t.startswith("-"):
+            continue
+        if "://" in t:
+            found.append(t)
+            continue
+        if "/" in t or "," in t or " " in t:
+            continue  # path / list / not a bare host
+        try:
+            ipaddress.ip_address(t.split(":", 1)[0])
+            found.append(t)
+            continue
+        except ValueError:
+            pass
+        host_only = t.split(":", 1)[0]
+        if _HOSTISH_RE.match(t) and host_only.rsplit(".", 1)[-1].lower() not in _NON_TLD:
+            found.append(t)
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +192,7 @@ async def server_status() -> dict:
         "python": platform.python_version(),
         "scope": ctx.scope.entries(),
         "scope_enforced": s.enforce_scope,
+        "block_private_addresses": s.block_private,
         "intrusive_allowed": s.allow_intrusive,
         "external_tools_allowed": s.allow_external_tools,
         "rate_limit_per_sec": s.rate_limit,
@@ -211,7 +264,9 @@ async def enumerate_subdomains(domain: str, sources: list[str] | None = None) ->
     host = _require_scope(domain)
     ctx = get_context()
     result = await submod.enumerate_subdomains(ctx.http, host, sources=sources)
-    return to_dict(result)
+    data = to_dict(result)
+    data["count"] = result.count  # @property is not picked up by to_dict
+    return data
 
 
 @mcp.tool()
@@ -323,6 +378,7 @@ async def http_probe(
         follow_redirects=follow_redirects,
         verify_tls=verify_tls,
         max_redirects=ctx.settings.max_redirects,
+        scope_check=_scope_check(),
     )
     out = {
         "requested_url": url,
@@ -341,6 +397,8 @@ async def http_probe(
         out["set_cookie"] = set_cookies
     if result.error:
         out["error"] = result.error
+    if result.redirect_blocked:
+        out["redirect_blocked"] = result.redirect_blocked
     fp = fpmod.fingerprint(result)
     if fp.title:
         out["title"] = fp.title
@@ -375,7 +433,9 @@ async def analyze_headers(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     _require_scope(url)
     ctx = get_context()
-    result = await ctx.http.fetch(url, follow_redirects=True, max_redirects=ctx.settings.max_redirects)
+    result = await ctx.http.fetch(
+        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
+    )
     if result.status is None:
         return {"error": "unreachable", "detail": result.error, "url": url}
     audit = headersmod.audit_headers(result)
@@ -394,7 +454,9 @@ async def fingerprint(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     host = _require_scope(url)
     ctx = get_context()
-    result = await ctx.http.fetch(url, follow_redirects=True, max_redirects=ctx.settings.max_redirects)
+    result = await ctx.http.fetch(
+        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
+    )
     if result.status is None:
         return {"error": "unreachable", "detail": result.error, "url": url}
     dns_res = await dnsmod.resolve(host)
@@ -416,7 +478,9 @@ async def well_known(target: str) -> dict:
     raw = target.strip()
     scheme = "http" if raw.startswith("http://") else "https"
     ctx = get_context()
-    result = await contentmod.fetch_well_known(ctx.http, host, scheme=scheme, port=port)
+    result = await contentmod.fetch_well_known(
+        ctx.http, host, scheme=scheme, port=port, scope_check=_scope_check()
+    )
     return to_dict(result)
 
 
@@ -448,6 +512,7 @@ async def port_scan(
         timeout=timeout,
         concurrency=min(200, ctx.settings.max_concurrency * 10),
         grab_banner=grab_banner,
+        limiter=ctx.governor.limiter,
     )
     return to_dict(result)
 
@@ -505,7 +570,9 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     ip = (dns_res.a or [None])[0]
 
     url = f"https://{host}"
-    http_res = await ctx.http.fetch(url, follow_redirects=True, max_redirects=ctx.settings.max_redirects)
+    http_res = await ctx.http.fetch(
+        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
+    )
     if http_res.status is not None:
         report["http"] = {
             "final_url": http_res.final_url,
@@ -558,8 +625,16 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
     if tool not in cli.KNOWN_TOOLS:
         return {"error": "unknown_tool", "detail": f"{tool} is not a known scanner",
                 "known": list(cli.KNOWN_TOOLS)}
-    if target:
-        _require_scope(target)
+    # Scope-check the declared target AND every host/URL/IP in args — the real
+    # scan target usually lives inside args (e.g. `-u https://host`).
+    to_check = ([target] if target else []) + _host_like_tokens(args)
+    if ctx.settings.enforce_scope and not to_check:
+        return {"error": "no_target",
+                "detail": "Refusing to run a scanner with no scope-checked target while "
+                          "enforcement is on. Pass a 'target' that is in scope, or include the "
+                          "host/URL in args."}
+    for t in to_check:
+        _require_scope(t)
     result = await cli.run_tool(
         tool, args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
     )
@@ -663,9 +738,12 @@ def recon_methodology(target: str = "example.com") -> str:
 
 
 def run() -> None:
-    """Entry point: initialise context and serve over stdio."""
+    """Entry point: serve over stdio.
 
-    get_context()
+    The application context (and its asyncio primitives) is built lazily on the
+    first tool call, i.e. inside the running event loop.
+    """
+
     mcp.run()
 
 

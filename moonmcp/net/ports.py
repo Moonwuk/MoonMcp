@@ -97,6 +97,7 @@ async def scan_ports(
     timeout: float = 2.0,
     concurrency: int = 100,
     grab_banner: bool = False,
+    limiter=None,
 ) -> ScanResult:
     loop = asyncio.get_event_loop()
     start = loop.time()
@@ -104,6 +105,10 @@ async def scan_ports(
 
     async def bounded(p: int) -> PortState:
         async with sem:
+            # Honour the shared outbound rate limit (the most intrusive tool
+            # must respect MOONMCP_RATE_LIMIT like everything else).
+            if limiter is not None:
+                await limiter.acquire()
             return await _probe_port(host, p, timeout, grab_banner)
 
     states = await asyncio.gather(*(bounded(p) for p in ports))

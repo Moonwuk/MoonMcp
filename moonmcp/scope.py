@@ -71,6 +71,28 @@ def normalize_target(raw: str) -> str:
     return value.rstrip(".").lower()
 
 
+def is_blocked_address(host: str) -> bool:
+    """True if *host* is an IP literal in a private/reserved/loopback/link-local
+    range that should be off-limits by default (SSRF guard).
+
+    Non-IP hostnames return False here — hostname→IP resolution is guarded
+    separately by the tools that resolve.
+    """
+
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
+
+
 def _as_network(entry: str) -> ipaddress._BaseNetwork | None:
     """Return an ip_network for an IP/CIDR entry, else None."""
 
@@ -102,8 +124,9 @@ class _DomainRule:
 class ScopeManager:
     """Holds the in-scope allowlist / out-of-scope denylist and checks targets."""
 
-    def __init__(self, enforce: bool = True) -> None:
+    def __init__(self, enforce: bool = True, block_private: bool = True) -> None:
         self.enforce = enforce
+        self.block_private = block_private
         self._allow_domains: list[_DomainRule] = []
         self._deny_domains: list[_DomainRule] = []
         self._allow_nets: list[ipaddress._BaseNetwork] = []
@@ -168,7 +191,7 @@ class ScopeManager:
         return removed
 
     def clear(self) -> None:
-        self.__init__(enforce=self.enforce)
+        self.__init__(enforce=self.enforce, block_private=self.block_private)
 
     # -- querying ----------------------------------------------------------
     @property
@@ -203,6 +226,15 @@ class ScopeManager:
         for rule in self._deny_domains:
             if rule.matches(host):
                 return False, f"{host} is explicitly out of scope (domain exclusion)"
+
+        # SSRF guard: private/reserved IP literals are blocked regardless of the
+        # allowlist unless block_private is disabled. Hostname→IP resolution is
+        # guarded separately by the tools that resolve.
+        if self.block_private and is_blocked_address(host):
+            return False, (
+                f"{host} is a private/reserved address, blocked by MOONMCP_BLOCK_PRIVATE "
+                "(set it to 0 for authorised internal-network testing)"
+            )
 
         if not self.enforce:
             return True, "scope enforcement disabled"

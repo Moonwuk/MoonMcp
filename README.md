@@ -135,6 +135,7 @@ All configuration is via environment variables (set them in your MCP client's `e
 | `MOONMCP_SCOPE` | *(empty)* | Comma/newline-separated in-scope entries: domains, `*.wildcards`, hosts, IPs, CIDRs. |
 | `MOONMCP_SCOPE_EXCLUDE` | *(empty)* | Out-of-scope entries that always override the allowlist. |
 | `MOONMCP_ENFORCE_SCOPE` | `1` | When on, active tools refuse targets not in scope. |
+| `MOONMCP_BLOCK_PRIVATE` | `1` | SSRF guard: hard-block private/loopback/link-local/reserved IPs (incl. cloud metadata). Set `0` for authorised internal-network testing. |
 | `MOONMCP_ALLOW_INTRUSIVE` | `1` | Gate for `port_scan`, `content_discovery`, `vuln_scan`. |
 | `MOONMCP_RATE_LIMIT` | `20` | Max outbound requests/sec (token bucket; `0` = unlimited). |
 | `MOONMCP_MAX_CONCURRENCY` | `20` | Max concurrent outbound connections. |
@@ -166,6 +167,17 @@ refuse to run until you authorise a target — a deliberate "fail closed" defaul
 
 Passive OSINT tools also scope-check the apex, so MoonMCP only enumerates assets
 you've declared authorised.
+
+**Defence in depth.** Beyond the allowlist, MoonMCP:
+
+* **Blocks private/reserved IPs** (RFC1918, loopback, link-local incl. the
+  `169.254.169.254` cloud-metadata endpoint) by default — an SSRF guard no active
+  tool can bypass, even if a broad CIDR was added. Flip `MOONMCP_BLOCK_PRIVATE=0`
+  for authorised internal engagements.
+* **Re-checks redirects** — the HTTP client refuses to follow a `Location` that
+  leaves the scope, and reports it as `redirect_blocked` instead.
+* **Scope-checks external-CLI targets** — `run_scanner` extracts and validates the
+  host/URL from its args, not just the optional `target` field.
 
 ---
 

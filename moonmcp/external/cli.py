@@ -135,6 +135,7 @@ async def run_tool(
     except asyncio.TimeoutError:
         try:
             proc.kill()
+            await proc.wait()  # reap the killed child so no zombie/pipe leak
         except ProcessLookupError:
             pass
         return CliResult(tool=tool, available=True, command=cmd,

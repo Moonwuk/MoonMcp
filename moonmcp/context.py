@@ -25,7 +25,7 @@ class AppContext:
 
 def build_context(settings: Settings | None = None) -> AppContext:
     settings = settings or load_settings()
-    scope = ScopeManager(enforce=settings.enforce_scope)
+    scope = ScopeManager(enforce=settings.enforce_scope, block_private=settings.block_private)
     for entry in settings.scope:
         scope.add(entry)
     for entry in settings.scope_exclude:
@@ -47,9 +47,9 @@ def to_dict(obj: object, *, drop_none: bool = True) -> object:
         for f in dataclasses.fields(obj):
             value = to_dict(getattr(obj, f.name), drop_none=drop_none)
             if drop_none and value is None:
-                continue
-            if drop_none and isinstance(value, (list, dict)) and len(value) == 0:
-                # keep empty collections only if explicitly meaningful; drop by default
+                # Drop only None (truly-absent optionals). Empty lists/dicts are
+                # kept — "zero open ports" must not be indistinguishable from
+                # "field missing".
                 continue
             out[f.name] = value
         return out
