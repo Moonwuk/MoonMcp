@@ -1,0 +1,380 @@
+"""Configuration-file analyzer.
+
+Recon frequently surfaces config files — an exposed ``.env``, a leaked
+``web.config``, ``application.properties`` inside a decompiled JAR, a
+``docker-compose.yml`` in an open directory.  This module parses them across the
+common formats, enumerates **every setting** grouped by category so you can
+understand the whole configuration at a glance, and flags the security-relevant
+ones: exposed secrets, ``DEBUG=true``, disabled TLS verification, wildcard CORS,
+default/weak credentials, bind-to-all, and credentials embedded in connection
+strings.
+
+Pure standard library (json / configparser / xml.etree / regex) with a minimal
+YAML/dotenv/.properties/PHP reader, so it works with zero dependencies.
+"""
+
+from __future__ import annotations
+
+import configparser
+import json
+import re
+from dataclasses import dataclass, field
+from xml.etree import ElementTree
+
+# ---------------------------------------------------------------------------
+# format detection + parsing
+# ---------------------------------------------------------------------------
+
+_GENERIC_KV_RE = re.compile(
+    r"""^[ \t]*(?:export[ \t]+)?["']?([A-Za-z0-9_.\-\[\]]{1,80})["']?[ \t]*[:=][ \t]*(.*?)[ \t]*$""")
+_PHP_DEFINE_RE = re.compile(r"""define\(\s*['"]([^'"]+)['"]\s*,\s*['"]?([^'")]*)['"]?\s*\)""")
+_PHP_ARR_RE = re.compile(r"""['"]([A-Za-z0-9_.\-]+)['"]\s*=>\s*['"]?([^'",\n)]*)['"]?""")
+
+
+def detect_format(content: str, filename: str | None = None) -> str:
+    name = (filename or "").lower()
+    if name.endswith((".json",)) or content.lstrip()[:1] in "{[":
+        try:
+            json.loads(content)
+            return "json"
+        except (json.JSONDecodeError, ValueError):
+            pass
+    if name.endswith((".xml", ".config")) or content.lstrip().startswith("<?xml") or content.lstrip().startswith("<"):
+        if "<" in content and ">" in content:
+            return "xml"
+    if name.endswith((".php",)) or "define(" in content or "=>" in content and "<?php" in content:
+        return "php"
+    if name.endswith((".yml", ".yaml")):
+        return "yaml"
+    if name.endswith((".properties",)):
+        return "properties"
+    if name.endswith((".ini", ".cfg", ".conf")) or re.search(r"^\[[^\]]+\]\s*$", content, re.MULTILINE):
+        return "ini"
+    if name.endswith(".env") or ".env" in name or re.search(r"^[A-Z0-9_]+=", content, re.MULTILINE):
+        return "dotenv"
+    # YAML-ish (indented key: value with no '=')
+    if re.search(r"^\s*[A-Za-z0-9_.\-]+:\s", content, re.MULTILINE) and "=" not in content[:200]:
+        return "yaml"
+    return "generic"
+
+
+def _flatten(obj, prefix: str = "") -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out += _flatten(v, f"{prefix}.{k}" if prefix else str(k))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            out += _flatten(v, f"{prefix}[{i}]")
+    else:
+        out.append((prefix, "" if obj is None else str(obj)))
+    return out
+
+
+def _parse_json(content: str) -> list[tuple[str, str]]:
+    return _flatten(json.loads(content))
+
+
+def _parse_ini(content: str) -> list[tuple[str, str]]:
+    cp = configparser.ConfigParser(strict=False, interpolation=None, allow_no_value=True)
+    try:
+        cp.read_string(content)
+    except configparser.Error:
+        return _parse_generic(content)
+    out = []
+    for section in cp.sections():
+        for k, v in cp.items(section):
+            out.append((f"{section}.{k}" if section != "DEFAULT" else k, v or ""))
+    return out or _parse_generic(content)
+
+
+def _parse_dotenv(content: str) -> list[tuple[str, str]]:
+    out = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _GENERIC_KV_RE.match(line)
+        if m:
+            val = m.group(2)
+            if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+                val = val[1:-1]
+            out.append((m.group(1), val))
+    return out
+
+
+def _parse_properties(content: str) -> list[tuple[str, str]]:
+    out, buf = [], ""
+    for raw in content.splitlines():
+        line = raw.rstrip()
+        if not line.strip() or line.lstrip().startswith(("#", "!")):
+            continue
+        if line.endswith("\\"):
+            buf += line[:-1]
+            continue
+        line = buf + line
+        buf = ""
+        m = re.match(r"\s*([^=:\s]+)\s*[:=]\s*(.*)", line)
+        if m:
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def _parse_xml(content: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError:
+        return _parse_generic(content)
+
+    def walk(el, path):
+        tag = el.tag.split("}")[-1]
+        cur = f"{path}.{tag}" if path else tag
+        # ASP.NET style <add key="X" value="Y"/> and connectionStrings
+        if tag in ("add",) and "key" in el.attrib and "value" in el.attrib:
+            out.append((el.attrib["key"], el.attrib["value"]))
+        if tag in ("add",) and "name" in el.attrib and "connectionString" in el.attrib:
+            out.append((el.attrib["name"], el.attrib["connectionString"]))
+        for ak, av in el.attrib.items():
+            if ak not in ("key", "value", "name", "connectionString"):
+                out.append((f"{cur}@{ak}", av))
+        if el.text and el.text.strip():
+            out.append((cur, el.text.strip()))
+        for child in el:
+            walk(child, cur)
+
+    walk(root, "")
+    return out
+
+
+def _parse_php(content: str) -> list[tuple[str, str]]:
+    out = [(m.group(1), m.group(2)) for m in _PHP_DEFINE_RE.finditer(content)]
+    out += [(m.group(1), m.group(2)) for m in _PHP_ARR_RE.finditer(content)]
+    return out or _parse_generic(content)
+
+
+def _parse_yaml(content: str) -> list[tuple[str, str]]:
+    # Prefer PyYAML if available; else a minimal indent-based reader.
+    try:
+        import yaml  # type: ignore
+        data = yaml.safe_load(content)
+        if data is not None:
+            return _flatten(data)
+    except Exception:
+        pass
+    out: list[tuple[str, str]] = []
+    stack: list[tuple[int, str]] = []
+    for raw in content.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        line = raw.strip()
+        if line.startswith("- "):
+            line = line[2:]
+        m = re.match(r"([^:]+):\s*(.*)", line)
+        if not m:
+            continue
+        key, val = m.group(1).strip(), m.group(2).strip()
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        path = ".".join(p for _, p in stack)
+        full = f"{path}.{key}" if path else key
+        if val in ("", "|", ">"):
+            stack.append((indent, key))
+        else:
+            if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+                val = val[1:-1]
+            out.append((full, val))
+    return out
+
+
+def _parse_generic(content: str) -> list[tuple[str, str]]:
+    out = []
+    for line in content.splitlines():
+        if not line.strip() or line.lstrip().startswith(("#", "//", ";")):
+            continue
+        m = _GENERIC_KV_RE.match(line)
+        if m and m.group(1):
+            val = m.group(2).rstrip(";,")
+            if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+                val = val[1:-1]
+            out.append((m.group(1), val))
+    return out
+
+
+_PARSERS = {
+    "json": _parse_json, "ini": _parse_ini, "dotenv": _parse_dotenv,
+    "properties": _parse_properties, "xml": _parse_xml, "php": _parse_php,
+    "yaml": _parse_yaml, "generic": _parse_generic,
+}
+
+
+# ---------------------------------------------------------------------------
+# classification + security rules
+# ---------------------------------------------------------------------------
+
+_CATEGORIES: list[tuple[str, str]] = [
+    ("database", r"\b(db|database|mysql|postgres|pg|mongo|redis|sql|dsn|jdbc|datasource|conn)\b"),
+    ("secret", r"\b(secret|password|passwd|pwd|token|api[_-]?key|apikey|private[_-]?key|client[_-]?secret|jwt|oauth|credential|access[_-]?key)\b"),
+    ("cloud", r"\b(aws|s3|azure|gcp|gcloud|bucket|cloud|do_|digitalocean)\b"),
+    ("email", r"\b(smtp|mail|sendgrid|mailgun|ses|imap|pop3)\b"),
+    ("network", r"\b(host|port|url|uri|endpoint|bind|listen|cors|origin|allow|proxy|domain)\b"),
+    ("debug", r"\b(debug|verbose|trace|log[_-]?level|display[_-]?errors|env|environment)\b"),
+    ("feature", r"\b(feature|flag|enable|disable|toggle)\b"),
+    ("auth", r"\b(auth|login|session|cookie|csrf|saml|ldap|sso)\b"),
+]
+
+_TRUTHY = {"true", "1", "yes", "on", "enabled", "enable"}
+_FALSY = {"false", "0", "no", "off", "disabled", "disable"}
+_WEAK_CREDS = {"", "admin", "root", "password", "pass", "123456", "changeme",
+               "secret", "test", "guest", "default", "toor", "12345678"}
+_PLACEHOLDER = {"", "changeme", "your_", "example", "xxxx", "placeholder", "todo",
+                "<", "null", "none", "undefined", "${", "{{"}
+_SECRET_KEY_RE = re.compile(
+    r"(?i)(pass(word|wd)?|pwd|secret|api[_-]?key|apikey|access[_-]?key|private[_-]?key|"
+    r"client[_-]?secret|token|jwt|credential|auth[_-]?key|encryption[_-]?key)")
+_CONN_STR_RE = re.compile(r"(?i)(jdbc:|mongodb(\+srv)?://|postgres(ql)?://|mysql://|redis://|amqp://|sqlserver://)")
+_CONN_CREDS_RE = re.compile(r"://[^/\s:@]+:[^/\s:@]+@")
+
+
+@dataclass
+class Setting:
+    key: str
+    value: str
+    category: str
+    sensitive: bool = False
+
+
+@dataclass
+class ConfigFinding:
+    severity: str
+    key: str
+    issue: str
+    detail: str
+
+
+@dataclass
+class ConfigAudit:
+    format: str
+    setting_count: int
+    settings: list[Setting] = field(default_factory=list)
+    findings: list[ConfigFinding] = field(default_factory=list)
+    summary: dict = field(default_factory=dict)
+    error: str | None = None
+
+
+def _categorize(key: str) -> str:
+    k = key.lower()
+    for cat, pat in _CATEGORIES:
+        if re.search(pat, k):
+            return cat
+    return "other"
+
+
+def _redact(value: str) -> str:
+    v = value.strip()
+    if len(v) <= 6:
+        return "***"
+    return f"{v[:3]}…{v[-2:]} ({len(v)} chars)"
+
+
+def _looks_placeholder(v: str) -> bool:
+    low = v.strip().lower()
+    return low in _PLACEHOLDER or any(low.startswith(p) or p in low for p in _PLACEHOLDER if len(p) > 2)
+
+
+def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
+    k, v = key.lower(), (value or "").strip()
+    vlow = v.lower()
+    findings: list[ConfigFinding] = []
+
+    # Exposed secret with a real value
+    if _SECRET_KEY_RE.search(k) and v and not _looks_placeholder(v) and "verify" not in k and "enable" not in k:
+        if vlow in _WEAK_CREDS:
+            findings.append(ConfigFinding("high", key, "default/weak credential",
+                                          f"credential-like setting uses a weak value ({v!r})"))
+        else:
+            findings.append(ConfigFinding("high", key, "exposed credential",
+                                          "a secret/credential value is present in the config"))
+
+    # Debug / non-prod env
+    if re.search(r"\b(debug|display[_-]?errors|app[_-]?debug|whoops)\b", k) and vlow in _TRUTHY:
+        findings.append(ConfigFinding("medium", key, "debug enabled",
+                                      "debug/verbose errors enabled — leaks stack traces & internals"))
+    if re.search(r"\b(env|environment)\b", k) and vlow in {"dev", "development", "local", "test", "staging", "debug"}:
+        findings.append(ConfigFinding("low", key, "non-production environment",
+                                      f"environment set to {v!r}"))
+
+    # TLS/SSL verification disabled
+    if re.search(r"(verify|reject[_-]?unauthorized|check[_-]?hostname|ssl[_-]?verify|tls[_-]?verify|verify[_-]?peer)", k):
+        if vlow in _FALSY:
+            findings.append(ConfigFinding("high", key, "TLS verification disabled",
+                                          "certificate/host verification turned off — MITM exposure"))
+
+    # Wildcard CORS / allowed hosts
+    if re.search(r"(cors|allow.*origin|access.control.allow.origin|allowed[_-]?hosts?)", k) and ("*" in v):
+        findings.append(ConfigFinding("medium", key, "wildcard CORS / allowed hosts",
+                                      f"permissive wildcard value ({v!r})"))
+
+    # Bind to all interfaces
+    if "0.0.0.0" in v or vlow == "::":
+        findings.append(ConfigFinding("low", key, "bound to all interfaces",
+                                      "service listens on 0.0.0.0 — ensure it's not unintentionally exposed"))
+
+    # Explicitly disabled security
+    if re.search(r"(disable|skip|no)[_-]?(auth|security|csrf|ssl|tls|verify|check)", k) and vlow in _TRUTHY:
+        findings.append(ConfigFinding("high", key, "security control disabled",
+                                      f"{key} disables a protection"))
+    if re.search(r"(insecure|dangerously|unsafe|allow[_-]?insecure)", k) and vlow in _TRUTHY:
+        findings.append(ConfigFinding("medium", key, "insecure option enabled", f"{key} = {v!r}"))
+
+    # Cookie flags off
+    if re.search(r"cookie.*secure|session.*secure|secure.*cookie", k) and vlow in _FALSY:
+        findings.append(ConfigFinding("medium", key, "insecure cookie",
+                                      "Secure flag disabled — cookies sent over HTTP"))
+    if re.search(r"cookie.*httponly|httponly", k) and vlow in _FALSY:
+        findings.append(ConfigFinding("low", key, "cookie without HttpOnly",
+                                      "cookie readable from JavaScript"))
+
+    # Credentials in a connection string
+    if _CONN_STR_RE.search(v) and _CONN_CREDS_RE.search(v):
+        findings.append(ConfigFinding("high", key, "credentials in connection string",
+                                      "connection string embeds username:password"))
+
+    return findings
+
+
+def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
+    fmt = detect_format(content, filename)
+    try:
+        pairs = _PARSERS[fmt](content)
+        if not pairs and fmt != "generic":
+            pairs = _parse_generic(content)
+            if pairs:
+                fmt += "→generic"
+    except Exception as exc:  # never let a parser crash the tool
+        pairs = _parse_generic(content)
+        fmt = f"{fmt}(fallback: {type(exc).__name__})"
+
+    audit = ConfigAudit(format=fmt, setting_count=len(pairs))
+    findings: list[ConfigFinding] = []
+    for key, value in pairs:
+        cat = _categorize(key)
+        rule_hits = _rule_checks(key, value)
+        sensitive = cat == "secret" or any(f.issue in ("exposed credential", "credentials in connection string")
+                                           for f in rule_hits)
+        shown = _redact(value) if sensitive and value else value
+        audit.settings.append(Setting(key=key, value=shown[:200], category=cat, sensitive=sensitive))
+        findings.extend(rule_hits)
+
+    audit.findings = sorted(
+        findings, key=lambda f: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(f.severity, 5))
+    by_sev: dict[str, int] = {}
+    for f in audit.findings:
+        by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+    by_cat: dict[str, int] = {}
+    for s in audit.settings:
+        by_cat[s.category] = by_cat.get(s.category, 0) + 1
+    audit.summary = {"by_severity": by_sev, "by_category": by_cat,
+                     "sensitive_settings": sum(1 for s in audit.settings if s.sensitive)}
+    return audit

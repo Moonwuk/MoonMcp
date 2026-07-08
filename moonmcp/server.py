@@ -38,6 +38,7 @@ from .net import jarm as jarmmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
 from .recon import binary as binarymod
+from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
 from .recon import favicon as faviconmod
@@ -762,6 +763,43 @@ async def analyze_binary(target: str, decompile: bool = True) -> dict:
                 "Install ilspycmd for full decompilation: dotnet tool install -g ilspycmd"
             )
     return to_dict(analysis)
+
+
+@mcp.tool()
+@safe_tool
+async def analyze_config(content: str | None = None, target: str | None = None,
+                         filename: str | None = None) -> dict:
+    """Parse a configuration file and lay out **every setting** so you can
+    understand the whole config, then flag the risky ones. Supports .env, INI,
+    JSON, YAML, .properties, XML (web.config/appsettings), PHP and a generic
+    key=value fallback — auto-detected (a `filename` hint helps). Groups settings
+    by category (database/secret/cloud/network/debug/…) and reports findings:
+    exposed secrets, DEBUG=true, disabled TLS verification, wildcard CORS,
+    default/weak credentials, bind-to-all, and credentials in connection strings.
+
+    Pass `content` directly (e.g. from vcs_exposure / analyze_binary output), OR
+    a `target` URL to an in-scope config file to fetch and analyze.
+    """
+
+    if content is None and not target:
+        return {"error": "invalid_input", "detail": "provide 'content' or 'target'"}
+    if content is None:
+        raw = target.strip()
+        url = raw if "://" in raw else f"https://{raw}"
+        _require_scope(url)
+        ctx = get_context()
+        r = await ctx.http.fetch(url, follow_redirects=True, timeout=15.0,
+                                 max_body=2 * 1024 * 1024, scope_check=_scope_check())
+        if r.status is None:
+            return {"error": "unreachable", "detail": r.error, "url": url}
+        if not r.body:
+            return {"error": "empty_body", "detail": f"HTTP {r.status}", "url": url}
+        content = r.text(limit=2_000_000)
+        if filename is None:
+            from urllib.parse import urlsplit
+            filename = urlsplit(url).path.rsplit("/", 1)[-1] or None
+    audit = configmod.analyze_config(content, filename=filename)
+    return to_dict(audit)
 
 
 @mcp.tool()

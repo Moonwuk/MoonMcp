@@ -30,7 +30,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~48-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~52-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **48 tools**, **3 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **52 tools**, **4 resources** and **1 guided prompt**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -87,6 +87,7 @@ MoonMCP exposes **48 tools**, **3 resources** and **1 guided prompt**, grouped b
 | `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
 | `screenshot` | Render a page to PNG via Playwright+Chromium **when installed** (else a graceful note). |
 | `analyze_binary` | Download a compiled artifact (.dll/.exe/.jar/.so) → filetype (incl. .NET), strings (ASCII+UTF-16), secrets, URLs, conn-strings; optional `ilspycmd` decompile. |
+| `analyze_config` | Parse a config file (.env/INI/JSON/YAML/.properties/XML/PHP) → **every setting** by category + flags (secrets, DEBUG, TLS-off, wildcard CORS, weak creds, conn-strings). |
 | `favicon_hash` | Shodan-style favicon mmh3 hash + `http.favicon.hash:` pivot query (find siblings / origin behind CDN). |
 | `tls_fingerprint` | Supported TLS versions (flags weak 1.0/1.1), cipher per version, ALPN / HTTP-2. |
 | `jarm_fingerprint` | JARM active TLS fingerprint (62-char; verified byte-for-byte vs Salesforce) for infra/C2 pivoting. |
@@ -112,7 +113,14 @@ MoonMCP exposes **48 tools**, **3 resources** and **1 guided prompt**, grouped b
 | `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
 | `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
 
-**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`
+### 📚 Knowledge base — injections (patterns · causes · signatures)
+| Tool | Purpose |
+| --- | --- |
+| `injection_info` | Look up an injection class (sqli, xss, ssti, cmdi, xxe, ssrf, crlf, …): detection payloads, root causes, and exact error/regex signatures per DBMS/engine. |
+| `injection_search` | Search the injection KB by keyword / CWE. |
+| `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology it indicates (e.g. `ORA-01756` → Oracle SQLi). |
+
+**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`
 **Prompt:** `recon_methodology` — a guided, scope-safe recon playbook.
 
 ---
@@ -257,7 +265,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 48 tools, 3 resources, 1 prompt
+├── server.py        # FastMCP server: 52 tools, 4 resources, 1 prompt
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient
@@ -268,11 +276,12 @@ moonmcp/
 │   ├── jarm.py      #   JARM active TLS fingerprint (verified vs salesforce/jarm)
 │   ├── ports.py     #   asyncio TCP connect-scan
 │   └── ratelimit.py #   token-bucket + concurrency governor
-├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets, binary, favicon, origin
+├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets, binary, favicon, origin, config_audit
 ├── web/             # cors, graphql, waf(+efficacy), jwt, methods, takeover, redirect, exposure, screenshot, behavior
 ├── intel/           # cve (NVD), shodan, email (SPF/DMARC/DKIM/CAA), asn (ASN/cloud/reverse-IP)
 ├── reporting.py     # pure Markdown report renderer
 ├── findings.py      # session findings store (findings:// resource)
+├── knowledge/       # injection KB (patterns/causes/signatures; injections:// resource)
 └── external/        # optional CLI detection + safe invocation
 ```
 
@@ -287,7 +296,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 79 tests: scope logic, parsers, web-app checks, and local-server integration
+pytest -q          # 96 tests: scope logic, parsers, web-app checks, and local-server integration
 ruff check .
 ```
 
