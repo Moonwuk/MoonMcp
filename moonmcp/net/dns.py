@@ -104,10 +104,16 @@ async def resolve_doh(client, host: str, rdtypes: tuple[str, ...]) -> DnsResult:
             data = json.loads(r.text())
         except (json.JSONDecodeError, ValueError):
             continue
+        if not isinstance(data, dict):
+            continue
         if data.get("Status") == 3:  # NXDOMAIN
             res.error = "NXDOMAIN"
             return res
-        answers = [a.get("data", "").strip('"') for a in data.get("Answer", []) if a.get("type") == tnum]
+        answers = [
+            a.get("data", "").strip('"')
+            for a in (data.get("Answer") or [])
+            if isinstance(a, dict) and a.get("type") == tnum
+        ]
         answers = [a.rstrip(".") if rdtype in {"CNAME", "NS"} else a for a in answers if a]
         if not answers:
             continue

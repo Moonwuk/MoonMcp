@@ -41,9 +41,17 @@ def analyze_jwt(token: str, now_epoch: int | None = None) -> JwtAnalysis:
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         return JwtAnalysis(valid_structure=False, error=f"undecodable segment: {exc}")
 
+    if not isinstance(header, dict) or not isinstance(payload, dict):
+        return JwtAnalysis(valid_structure=False,
+                           error="header and payload must both be JSON objects")
+
     analysis = JwtAnalysis(valid_structure=True, header=header, payload=payload)
-    alg = str(header.get("alg", "")) or None
+    # Only a string 'alg' is meaningful; null/number/missing => no algorithm.
+    alg_raw = header.get("alg")
+    alg = alg_raw if isinstance(alg_raw, str) and alg_raw else None
     analysis.algorithm = alg
+    if alg is None:
+        analysis.issues.append("no valid string 'alg' header")
 
     if alg and alg.lower() == "none":
         analysis.issues.append("CRITICAL: alg=none — signature is not verified; token forgeable")

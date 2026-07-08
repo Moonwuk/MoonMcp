@@ -46,6 +46,20 @@ def test_jwt_invalid():
     assert analyze_jwt("not-a-jwt").valid_structure is False
 
 
+def test_jwt_non_object_segments_do_not_crash():
+    # header decodes to a JSON array [], payload to {} — must not raise.
+    a = analyze_jwt("W10.e30.x")
+    assert a.valid_structure is False
+    assert "JSON objects" in (a.error or "")
+
+
+def test_jwt_null_alg_not_reported_as_none():
+    tok = _mk_jwt({"alg": None}, {"sub": "1"})
+    a = analyze_jwt(tok)
+    assert a.algorithm is None
+    assert not any("alg=none" in i for i in a.issues)
+
+
 # --- offline: secret scanning -------------------------------------------
 def test_secret_scan_detects_high_signal():
     text = (
