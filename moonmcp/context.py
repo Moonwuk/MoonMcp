@@ -10,6 +10,7 @@ import dataclasses
 from dataclasses import dataclass
 
 from .config import Settings, load_settings
+from .findings import FindingsStore
 from .net.http import HttpClient
 from .net.ratelimit import Governor
 from .scope import ScopeManager
@@ -21,6 +22,7 @@ class AppContext:
     scope: ScopeManager
     governor: Governor
     http: HttpClient
+    findings: FindingsStore
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
@@ -36,7 +38,8 @@ def build_context(settings: Settings | None = None) -> AppContext:
         user_agent=settings.user_agent,
         default_timeout=settings.timeout,
     )
-    return AppContext(settings=settings, scope=scope, governor=governor, http=http)
+    return AppContext(settings=settings, scope=scope, governor=governor, http=http,
+                      findings=FindingsStore())
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

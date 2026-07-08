@@ -226,5 +226,7 @@ def _have_openssl():
 async def test_new_infra_tools_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     for name in ("ip_intel", "reverse_ip", "origin_discovery", "favicon_hash",
-                 "tls_fingerprint", "behavior_probe", "waf_efficacy"):
+                 "tls_fingerprint", "behavior_probe", "waf_efficacy",
+                 "jarm_fingerprint", "desync_probe", "add_finding", "list_findings",
+                 "clear_findings"):
         assert name in tools

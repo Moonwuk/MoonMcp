@@ -33,6 +33,7 @@ from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
 from .net import dns as dnsmod
+from .net import jarm as jarmmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
 from .recon import binary as binarymod
@@ -49,6 +50,7 @@ from .reporting import format_markdown
 from .scope import ScopeError, normalize_target
 from .web import behavior as behaviormod
 from .web import cors as corsmod
+from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
@@ -822,6 +824,23 @@ async def tls_fingerprint(target: str, port: int = 443) -> dict:
 
 @mcp.tool()
 @safe_tool
+async def jarm_fingerprint(target: str, port: int = 443) -> dict:
+    """Compute the **JARM** active TLS fingerprint of an in-scope host (Salesforce's
+    62-char server fingerprint from 10 crafted TLS handshakes). Two servers with
+    the same JARM are configured identically at the TLS layer — a strong pivot for
+    finding sibling infrastructure / origin servers and for matching known stacks
+    (or C2) in public JARM databases. In scope only.
+    """
+
+    host, jport = _split_host_port(target, port)
+    _require_scope(host)
+    ctx = get_context()
+    result = await jarmmod.compute_jarm(host, jport, timeout=max(10.0, ctx.settings.timeout))
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
 async def origin_discovery(domain: str) -> dict:
     """Try to find the real origin IP behind a CDN/WAF for an in-scope host.
     Resolves the front IPs and detects the CDN, then hunts candidate origins via
@@ -946,6 +965,65 @@ async def waf_efficacy(target: str) -> dict:
     ctx = get_context()
     result = await wafbypassmod.test_waf_efficacy(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def desync_probe(target: str) -> dict:
+    """Detection-only HTTP request-smuggling **indicator** probe for an in-scope
+    host. Sends single, complete, well-formed requests (no partial/dangling
+    requests — nothing is left to poison a connection) to observe how the server
+    handles ambiguous framing (both Content-Length + Transfer-Encoding, and
+    obfuscated Transfer-Encoding). Reports indicators only — NOT a confirmed
+    finding; verify manually with a dedicated tool. Intrusive: requires
+    MOONMCP_ALLOW_INTRUSIVE and the host in scope.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url, intrusive=True)
+    result = await desyncmod.probe_desync(url, timeout=max(10.0, get_context().settings.timeout))
+    return to_dict(result)
+
+
+# ---------------------------------------------------------------------------
+# findings store
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def add_finding(target: str, severity: str, title: str, detail: str = "",
+                      evidence: str = "", type: str = "manual") -> dict:
+    """Record a finding in the session findings store (severity: critical/high/
+    medium/low/info). Findings are also readable via the `findings://current`
+    resource and summarised by `report`. In-memory for the session only.
+    """
+
+    from datetime import datetime, timezone
+
+    ctx = get_context()
+    f = ctx.findings.add(target=target.strip().lower(), severity=severity, title=title,
+                         detail=detail, evidence=evidence, type=type, source="manual",
+                         created_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+    return {"recorded": to_dict(f), "summary": ctx.findings.summary()}
+
+
+@mcp.tool()
+@safe_tool
+async def list_findings(target: str | None = None, severity: str | None = None) -> dict:
+    """List recorded findings (optionally filtered by target or severity),
+    severity-ranked, with a summary count. Reads the session findings store.
+    """
+
+    return get_context().findings.as_dict(target=target, severity=severity)
+
+
+@mcp.tool()
+@safe_tool
+async def clear_findings(target: str | None = None) -> dict:
+    """Clear recorded findings — all of them, or just those for one target."""
+
+    removed = get_context().findings.clear(target=target)
+    return {"removed": removed, "summary": get_context().findings.summary()}
 
 
 # ---------------------------------------------------------------------------
@@ -1076,6 +1154,12 @@ async def report(domain: str) -> dict:
 
     structured = {"target": host, "surface": surface, "grades": grades, "findings": findings}
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    # Persist findings into the session store so they surface via findings://.
+    for f in findings:
+        ctx.findings.add(target=host, severity=f.get("severity", "info"),
+                         title=f.get("title", "finding"), detail=f.get("detail", ""),
+                         evidence=f.get("evidence", ""), type="report", source="report",
+                         created_at=generated)
     return {"markdown": format_markdown(structured, generated_at=generated), "report": structured}
 
 
@@ -1196,6 +1280,15 @@ def capabilities_resource() -> str:
         },
         indent=2,
     )
+
+
+@mcp.resource("findings://current")
+def findings_resource() -> str:
+    """The session's recorded findings (severity-ranked) with a summary."""
+
+    import json
+
+    return json.dumps(get_context().findings.as_dict(), indent=2)
 
 
 @mcp.prompt()
