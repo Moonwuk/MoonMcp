@@ -1,0 +1,86 @@
+import pytest
+
+from moonmcp.scope import ScopeError, ScopeManager, normalize_target
+
+
+def test_normalize_target_variants():
+    assert normalize_target("https://www.Example.com/path?a=b") == "www.example.com"
+    assert normalize_target("Example.COM.") == "example.com"
+    assert normalize_target("example.com:8443") == "example.com"
+    assert normalize_target("http://[::1]:80/") == "::1"
+    assert normalize_target("[2001:db8::1]:443") == "2001:db8::1"
+    assert normalize_target("2001:db8::1") == "2001:db8::1"
+
+
+def test_apex_entry_matches_apex_and_subdomains():
+    s = ScopeManager()
+    s.add("example.com")
+    assert s.is_in_scope("example.com")
+    assert s.is_in_scope("api.example.com")
+    assert s.is_in_scope("a.b.example.com")
+    assert not s.is_in_scope("notexample.com")
+    assert not s.is_in_scope("example.com.evil.com")
+
+
+def test_wildcard_entry_is_subdomains_only():
+    s = ScopeManager()
+    s.add("*.example.com")
+    assert s.is_in_scope("api.example.com")
+    assert not s.is_in_scope("example.com")
+
+
+def test_exact_host_entry():
+    s = ScopeManager()
+    s.add("api.example.com")
+    assert s.is_in_scope("api.example.com")
+    # A more-specific host entry does not authorise siblings or the apex.
+    assert not s.is_in_scope("www.example.com")
+    # ...but it authorises deeper labels under that host.
+    assert s.is_in_scope("v2.api.example.com")
+
+
+def test_exclusion_overrides_inclusion():
+    s = ScopeManager()
+    s.add("example.com")
+    s.exclude("admin.example.com")
+    assert not s.is_in_scope("admin.example.com")
+    assert s.is_in_scope("www.example.com")
+
+
+def test_ip_and_cidr():
+    s = ScopeManager()
+    s.add("10.0.0.0/8")
+    s.add("203.0.113.10")
+    assert s.is_in_scope("10.1.2.3")
+    assert s.is_in_scope("203.0.113.10")
+    assert not s.is_in_scope("8.8.8.8")
+
+
+def test_empty_scope_blocks_when_enforced():
+    s = ScopeManager(enforce=True)
+    ok, reason = s.evaluate("example.com")
+    assert not ok
+    assert "no scope configured" in reason
+
+
+def test_disabled_enforcement_allows_all_but_denies():
+    s = ScopeManager(enforce=False)
+    assert s.is_in_scope("anything.com")
+    s.exclude("blocked.com")
+    assert not s.is_in_scope("blocked.com")
+
+
+def test_check_raises_and_returns_host():
+    s = ScopeManager()
+    s.add("example.com")
+    assert s.check("https://api.example.com/x") == "api.example.com"
+    with pytest.raises(ScopeError):
+        s.check("evil.com")
+
+
+def test_remove_entry():
+    s = ScopeManager()
+    s.add("example.com")
+    assert s.is_in_scope("example.com")
+    assert s.remove("example.com")
+    assert not s.is_in_scope("example.com")
