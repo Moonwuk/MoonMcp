@@ -32,6 +32,7 @@ from .external import cli
 from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
+from .knowledge import injections as injmod
 from .net import dns as dnsmod
 from .net import jarm as jarmmod
 from .net import ports as portsmod
@@ -1027,6 +1028,50 @@ async def clear_findings(target: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# knowledge base — injections (patterns, causes, signatures)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def injection_info(injection_class: str | None = None) -> dict:
+    """Look up MoonMCP's injection knowledge base: patterns (detection payloads),
+    causes (root causes) and signatures (exact error strings / regexes to detect
+    the vuln from a response). Pass an injection class id/alias (e.g. sqli, xss,
+    ssti, cmdi, xxe, ssrf, crlf, path-traversal, ldap, xpath, nosqli, ssi,
+    graphql, prompt-injection) for full detail, or omit for the index + stats.
+    No network — pure reference.
+    """
+
+    if not injection_class:
+        return {"stats": injmod.stats(), "classes": injmod.list_classes()}
+    entry = injmod.get_class(injection_class)
+    if entry is None:
+        return {"error": "unknown_class", "detail": f"No injection class '{injection_class}'",
+                "known": [c["id"] for c in injmod.list_classes()]}
+    return entry
+
+
+@mcp.tool()
+@safe_tool
+async def injection_search(query: str) -> dict:
+    """Search the injection knowledge base by keyword (name, alias, CWE, summary)."""
+
+    return {"query": query, "results": injmod.search(query)}
+
+
+@mcp.tool()
+@safe_tool
+async def match_injection_signatures(text: str, injection_class: str | None = None) -> dict:
+    """Scan a blob of text (e.g. an HTTP response body from http_probe) for known
+    injection error/regex signatures and report which injection class + technology
+    each match indicates — a fast way to spot a likely SQLi/SSTI/etc. from a raw
+    error message. Optionally restrict to one class. No network.
+    """
+
+    matches = injmod.match_signatures(text, class_id=injection_class)
+    return {"match_count": len(matches), "matches": matches}
+
+
+# ---------------------------------------------------------------------------
 # orchestration
 # ---------------------------------------------------------------------------
 @mcp.tool()
@@ -1289,6 +1334,17 @@ def findings_resource() -> str:
     import json
 
     return json.dumps(get_context().findings.as_dict(), indent=2)
+
+
+@mcp.resource("injections://all")
+def injections_resource() -> str:
+    """The full injection knowledge base: patterns, causes and signatures."""
+
+    import json
+
+    from .knowledge.injections_data import INJECTIONS
+
+    return json.dumps({"stats": injmod.stats(), "injections": INJECTIONS}, indent=2)
 
 
 @mcp.prompt()
