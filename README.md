@@ -15,11 +15,15 @@ attack surface **safely and within an authorised scope**.
 
 ## Why another recon MCP server?
 
-Before writing a line of code, we surveyed ~20 existing bug-bounty / offensive-security
-MCP servers (ProjectDiscovery's `pd-tools-mcp`, `HexStrike AI`, `ExternalAttacker-MCP`,
-`gokulapap/bugbounty-mcp-server`, `SlanyCukr/bugbounty-mcp-server`, `VulneraMCP`,
-`akinabudu/bug-bounty-mcp`, several `pentest-mcp` variants, `BurpMCP`, and the
-HackerOne-platform integrations, among others). Three patterns stood out:
+Before writing a line of code, we surveyed the ecosystem: a fan-out research pass
+discovered **161 candidate projects** and deep-read **23 confirmed** bug-bounty /
+offensive-security MCP servers (ProjectDiscovery's `pd-tools-mcp`, `HexStrike AI`,
+`ExternalAttacker-MCP`, `gokulapap/bugbounty-mcp-server`,
+`SlanyCukr/bugbounty-mcp-server`, `VulneraMCP`, `akinabudu/bug-bounty-mcp`,
+`cyproxio/mcp-for-security`, several `pentest-mcp` variants, `BurpMCP`, and the
+HackerOne-platform integrations, among others). The full survey and the design
+blueprint it produced are in [`docs/RESEARCH.md`](docs/RESEARCH.md). Three patterns
+stood out:
 
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
