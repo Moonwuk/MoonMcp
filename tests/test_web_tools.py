@@ -211,9 +211,21 @@ async def test_vcs_exposure_confirms_git(web_server, web_ctx):
 
 
 @pytest.mark.asyncio
+async def test_screenshot_degrades_without_playwright(web_server, web_ctx):
+    # Playwright is not a hard dependency; the tool must degrade, not crash.
+    from moonmcp.web.screenshot import playwright_available
+    res = await srv.screenshot(target=web_server)
+    if playwright_available():
+        assert "available" in res
+    else:
+        assert res["available"] is False
+        assert "install_hint" in res
+
+
+@pytest.mark.asyncio
 async def test_new_tools_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     for name in ("crawl", "extract_secrets", "cors_audit", "graphql_check",
                  "waf_detect", "takeover_check", "email_security", "jwt_analyze",
-                 "http_methods", "open_redirect", "vcs_exposure"):
+                 "http_methods", "open_redirect", "vcs_exposure", "screenshot", "report"):
         assert name in tools

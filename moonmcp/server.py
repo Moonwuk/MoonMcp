@@ -41,6 +41,7 @@ from .recon import headers as headersmod
 from .recon import secrets as secretsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
+from .reporting import format_markdown
 from .scope import ScopeError, normalize_target
 from .web import cors as corsmod
 from .web import exposure as exposuremod
@@ -48,6 +49,7 @@ from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
 from .web import redirect as redirectmod
+from .web import screenshot as screenshotmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
 
@@ -647,6 +649,31 @@ async def vcs_exposure(target: str) -> dict:
 
 @mcp.tool()
 @safe_tool
+async def screenshot(target: str, full_page: bool = True, return_base64: bool = False) -> dict:
+    """Capture a rendered screenshot of an in-scope page using Playwright +
+    Chromium, saved to disk (path returned). Optional and self-degrading: if
+    Playwright/Chromium isn't installed, returns a clear note with an install
+    hint instead of erroring. Set return_base64 to also inline the PNG. In scope only.
+    """
+
+    import tempfile
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    out_dir = ctx.settings.screenshot_dir or __import__("os").path.join(
+        tempfile.gettempdir(), "moonmcp-screenshots"
+    )
+    result = await screenshotmod.capture(
+        url, out_dir=out_dir, full_page=full_page, return_base64=return_base64,
+        timeout_ms=int(ctx.settings.timeout * 2000),
+    )
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
 async def email_security(domain: str) -> dict:
     """Analyze a domain's email-spoofing posture over DNS: SPF, DMARC (policy),
     DKIM (common selectors) and CAA, with an A-F grade and specific weaknesses
@@ -803,6 +830,79 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     report["email_security"] = {"grade": email.grade, "spf": bool(email.spf),
                                 "dmarc_policy": email.dmarc_policy, "issues": email.issues}
     return report
+
+
+@mcp.tool()
+@safe_tool
+async def report(domain: str) -> dict:
+    """Run a full safe recon sweep of an in-scope target and return both a
+    structured report and a rendered **Markdown** document, with findings
+    severity-ranked. Chains: subdomains, DNS, HTTP + fingerprint, security
+    headers, TLS, email posture, CORS, WAF, exposed-.git and subdomain-takeover
+    checks. No intrusive scanning. In scope only.
+    """
+
+    from datetime import datetime, timezone
+
+    host = _require_scope(domain)
+    ctx = get_context()
+    check = _scope_check()
+    apex_url = f"https://{host}"
+    findings: list[dict] = []
+    surface: dict[str, Any] = {}
+    grades: dict[str, str] = {}
+
+    subs = await submod.enumerate_subdomains(ctx.http, host)
+    surface["subdomains"] = subs.count
+
+    dns_res = await dnsmod.resolve(host, http_client=ctx.http)
+    if dns_res.a:
+        surface["ips"] = dns_res.a
+    ip = (dns_res.a or [None])[0]
+
+    http_res = await ctx.http.fetch(apex_url, follow_redirects=True,
+                                    max_redirects=ctx.settings.max_redirects, scope_check=check)
+    if http_res.status is not None:
+        fp = fpmod.fingerprint(http_res, ip=ip)
+        if fp.technologies:
+            surface["technologies"] = [t.name for t in fp.technologies]
+        audit = headersmod.audit_headers(http_res)
+        grades["Security headers"] = audit.grade
+        for m in audit.missing:
+            if m.severity in ("high", "medium"):
+                findings.append({"severity": m.severity, "title": f"Missing header: {m.header}",
+                                 "detail": m.detail})
+
+    email = await emailmod.analyze_email_security(ctx.http, host)
+    grades["Email (SPF/DMARC)"] = email.grade
+    for issue in email.issues:
+        sev = "medium" if ("+all" in issue or "No SPF" in issue or "No DMARC" in issue) else "low"
+        findings.append({"severity": sev, "title": "Email posture", "detail": issue})
+
+    cors = await corsmod.audit_cors(ctx.http, apex_url)
+    for f in cors.findings:
+        findings.append({"severity": f.severity, "title": f"CORS: {f.test}",
+                         "detail": f.detail, "evidence": f"ACAO={f.acao} creds={f.acac}"})
+
+    vcs = await exposuremod.check_exposure(ctx.http, apex_url, scope_check=check)
+    if vcs.git_exposed:
+        findings.append({"severity": "high", "title": "Exposed .git directory",
+                         "detail": "Source code may be recoverable.",
+                         "evidence": vcs.git_remote or ""})
+
+    tko = await takeovermod.check_takeover(ctx.http, host, scope_check=check)
+    if tko.vulnerable:
+        findings.append({"severity": tko.confidence or "medium",
+                         "title": f"Possible subdomain takeover ({tko.service})",
+                         "detail": tko.detail, "evidence": tko.matched_fingerprint or ""})
+
+    waf = await wafmod.detect_waf(ctx.http, apex_url, scope_check=check, active=False)
+    if waf.detected:
+        surface["waf"] = waf.detected
+
+    structured = {"target": host, "surface": surface, "grades": grades, "findings": findings}
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return {"markdown": format_markdown(structured, generated_at=generated), "report": structured}
 
 
 # ---------------------------------------------------------------------------

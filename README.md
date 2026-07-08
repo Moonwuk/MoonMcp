@@ -2,6 +2,8 @@
 
 **A scope-aware bug-bounty & reconnaissance MCP server that works out of the box on the Python standard library — and augments itself with your favourite CLI tools when they're present.**
 
+[![CI](https://github.com/Moonwuk/MoonMcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Moonwuk/MoonMcp/actions/workflows/ci.yml)
+
 MoonMCP exposes a curated set of reconnaissance, fingerprinting and OSINT
 capabilities to any [Model Context Protocol](https://modelcontextprotocol.io)
 client (Claude Desktop, Claude Code, Cursor, …), so an AI agent can map a target's
@@ -28,7 +30,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~33-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~35-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -42,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **33 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
+MoonMCP exposes **35 tools**, **2 resources** and **1 guided prompt**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -81,6 +83,7 @@ MoonMCP exposes **33 tools**, **2 resources** and **1 guided prompt**, grouped b
 | `takeover_check` | Subdomain-takeover detection over a 40+ provider fingerprint DB (S3, GH Pages, Heroku, Azure, …). |
 | `open_redirect` | Inject a canary into common redirect params (url, next, returnTo, …) — Location / meta / JS. |
 | `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
+| `screenshot` | Render a page to PNG via Playwright+Chromium **when installed** (else a graceful note). |
 
 ### 🟠 Active — intrusive (gated by `MOONMCP_ALLOW_INTRUSIVE`)
 | Tool | Purpose |
@@ -94,6 +97,7 @@ MoonMCP exposes **33 tools**, **2 resources** and **1 guided prompt**, grouped b
 | Tool | Purpose |
 | --- | --- |
 | `recon_target` | One-shot passive+light sweep (subdomains → DNS → TLS → HTTP → headers → fingerprint → email security). |
+| `report` | Full safe sweep → a severity-ranked **Markdown** report (surface, posture grades, findings). |
 | `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
 | `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
 
@@ -158,6 +162,7 @@ All configuration is via environment variables (set them in your MCP client's `e
 | `MOONMCP_USER_AGENT` | `MoonMCP/0.1 …` | User-Agent for HTTP probing. |
 | `MOONMCP_ALLOW_EXTERNAL_TOOLS` | `1` | Allow shelling out to installed CLIs. |
 | `MOONMCP_EXTERNAL_TIMEOUT` | `300` | Hard ceiling on any external CLI run (seconds). |
+| `MOONMCP_SCREENSHOT_DIR` | *(temp dir)* | Where the `screenshot` tool writes PNGs. |
 | `MOONMCP_SHODAN_API_KEY` | *(none)* | Enables the full Shodan API (else free InternetDB). |
 | `MOONMCP_NVD_API_KEY` | *(none)* | Raises the NVD CVE-lookup rate limit. |
 
@@ -217,7 +222,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 33 tools, 2 resources, 1 prompt
+├── server.py        # FastMCP server: 35 tools, 2 resources, 1 prompt
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
 ├── context.py       # shared Settings + Scope + rate Governor + HttpClient
@@ -228,8 +233,9 @@ moonmcp/
 │   ├── ports.py     #   asyncio TCP connect-scan
 │   └── ratelimit.py #   token-bucket + concurrency governor
 ├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets
-├── web/             # cors, graphql, waf, jwt, methods, subdomain takeover
+├── web/             # cors, graphql, waf, jwt, methods, takeover, redirect, exposure, screenshot
 ├── intel/           # cve (NVD), shodan (InternetDB / API), email (SPF/DMARC/DKIM/CAA)
+├── reporting.py     # pure Markdown report renderer
 └── external/        # optional CLI detection + safe invocation
 ```
 
@@ -244,7 +250,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 50 tests: scope logic, parsers, web-app checks, and local-server integration
+pytest -q          # 55 tests: scope logic, parsers, web-app checks, and local-server integration
 ruff check .
 ```
 

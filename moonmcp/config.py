@@ -89,6 +89,9 @@ class Settings:
     # Hard ceiling (seconds) on any single external CLI invocation.
     external_timeout: float = 300.0
 
+    # Directory for saved page screenshots (Playwright, optional).
+    screenshot_dir: str = ""
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` snapshot from the current environment."""
@@ -112,4 +115,5 @@ def load_settings() -> Settings:
         nvd_api_key=os.environ.get("MOONMCP_NVD_API_KEY") or os.environ.get("NVD_API_KEY"),
         allow_external_tools=_env_bool("MOONMCP_ALLOW_EXTERNAL_TOOLS", True),
         external_timeout=_env_float("MOONMCP_EXTERNAL_TIMEOUT", 300.0),
+        screenshot_dir=os.environ.get("MOONMCP_SCREENSHOT_DIR", ""),
     )
