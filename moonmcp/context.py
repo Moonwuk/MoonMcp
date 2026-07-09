@@ -10,6 +10,7 @@ import dataclasses
 import os
 from dataclasses import dataclass
 
+from .audit import AuditLog, setup_logging
 from .auth import AuthContext
 from .config import Settings, load_settings
 from .findings import FindingsStore
@@ -30,10 +31,12 @@ class AppContext:
     auth: AuthContext
     oast: OastStore
     snapshots: SnapshotStore
+    audit: AuditLog
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
     settings = settings or load_settings()
+    setup_logging()
     scope = ScopeManager(enforce=settings.enforce_scope, block_private=settings.block_private)
     for entry in settings.scope:
         scope.add(entry)
@@ -50,7 +53,8 @@ def build_context(settings: Settings | None = None) -> AppContext:
     )
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
                       findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
-                      snapshots=SnapshotStore(state_dir=os.environ.get("MOONMCP_STATE_DIR")))
+                      snapshots=SnapshotStore(state_dir=os.environ.get("MOONMCP_STATE_DIR")),
+                      audit=AuditLog.from_env())
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

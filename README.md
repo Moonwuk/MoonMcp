@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **85 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **86 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -53,6 +53,7 @@ MoonMCP exposes **85 tools**, **9 resources** and **8 operator prompts**, groupe
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
 | `oast_configure` / `oast_generate` / `oast_poll` / `oast_list` | Out-of-band **callback** canaries (interactsh/Collaborator-compatible) to confirm **blind** vulns (blind SSRF/XXE/RCE/SQLi, blind XSS): mint a canary URL, plant it, poll for the callback. |
+| `audit_log` | Read the session **audit trail** — one record per scope decision (allow / deny / SSRF-block) and external command (also on `audit://recent`, persisted via `MOONMCP_AUDIT_LOG`). |
 
 ### 🔵 Passive OSINT (never touches the target)
 | Tool | Purpose |
@@ -150,7 +151,7 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 | `rootcause_info` | The root-cause taxonomy — the ~13 fundamental causes underneath all these bugs, each with why it recurs, the systemic fix, and the catalog vulns that derive from it. |
 | `waf_info` / `identify_waf` | WAF KB (how they work · fingerprints · bypass concepts); `identify_waf` names the vendor from a raw HTTP response (CF-RAY, `__cfduid`, `x-akamai`, `incap_ses`, BigIP, …). |
 
-**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`, `privesc://all`, `vulns://all`, `rootcauses://all`, `waf://all`
+**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`, `privesc://all`, `vulns://all`, `rootcauses://all`, `waf://all`, `audit://recent`
 
 **Operator prompts** ([`docs/SYSTEM_PROMPTS.md`](docs/SYSTEM_PROMPTS.md)) — system prompts that make an agent using MoonMCP plan, pick the right tool, verify before it reports, minimise false positives and stay strictly in scope. Synthesised from real pentest-agent prompts (CAI, PentestGPT, XBOW, HexStrike), agent prompt-engineering (ReAct, Plan-and-Execute, Chain-of-Verification, Reflexion) and bug-bounty methodology (TBHM, OWASP WSTG, PortSwigger, HackerOne/Bugcrowd):
 - `bug_bounty_operator` — master engagement prompt (rules of engagement + OODA-style loop + tool map).
@@ -304,7 +305,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 85 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 86 tools, 10 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

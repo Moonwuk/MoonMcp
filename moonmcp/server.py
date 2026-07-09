@@ -126,19 +126,39 @@ def safe_tool(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[An
     return wrapper
 
 
+def _caller_tool() -> str:
+    """Best-effort name of the tool that invoked the scope check (for the audit log)."""
+
+    import sys
+    try:
+        return sys._getframe(2).f_code.co_name
+    except Exception:
+        return "?"
+
+
 def _require_scope(target: str, *, intrusive: bool = False) -> str:
     ctx = get_context()
+    tool = _caller_tool()
     if intrusive and not ctx.settings.allow_intrusive:
+        ctx.audit.record("intrusive_blocked", tool=tool, target=str(target), decision="deny")
         raise ToolBlocked(
             "intrusive tools are disabled. Enable with MOONMCP_ALLOW_INTRUSIVE=1."
         )
-    host = ctx.scope.check(target)
+    try:
+        host = ctx.scope.check(target)
+    except ScopeError as exc:
+        ctx.audit.record("scope_check", tool=tool, target=str(target),
+                         decision="deny", reason=str(exc))
+        raise
     # Resolve-then-check SSRF guard — covers raw-socket tools (port_scan,
     # tls_inspect, jarm, desync) as well as an in-scope hostname that points at a
     # private/internal/cloud-metadata IP. No-op when block_private is disabled.
     reason = ctx.scope.blocked_connect_reason(target)
     if reason is not None:
+        ctx.audit.record("ssrf_blocked", tool=tool, target=str(target),
+                         decision="deny", reason=reason)
         raise ScopeError(reason)
+    ctx.audit.record("scope_check", tool=tool, target=host, decision="allow")
     return host
 
 
@@ -1578,6 +1598,22 @@ async def clear_findings(target: str | None = None) -> dict:
 
 @mcp.tool()
 @safe_tool
+async def audit_log(limit: int = 100, event: str | None = None) -> dict:
+    """Read the session **audit trail** — one record per scope decision (allow /
+    deny / SSRF-block / intrusive-block) and external command. Optionally filter by
+    `event`. Also on the `audit://recent` resource, and persisted to JSONL when
+    MOONMCP_AUDIT_LOG is set. Use it to review exactly what the agent touched.
+    """
+
+    ctx = get_context()
+    events = ctx.audit.recent(max(1, min(limit, 1000)))
+    if event:
+        events = [e for e in events if e.get("event") == event]
+    return {"summary": ctx.audit.summary(), "count": len(events), "events": events}
+
+
+@mcp.tool()
+@safe_tool
 async def surface_diff(name: str, items: list[str]) -> dict:
     """Track how the attack surface **changes** over time. Pass a snapshot `name`
     (e.g. `acme-subdomains`) and the current list of `items` (subdomains, live
@@ -2137,6 +2173,8 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
                           "host/URL in args."}
     for t in to_check:
         _require_scope(t)
+    ctx.audit.record("external_tool", tool=tool, target=(target or ",".join(to_check)),
+                     decision="run", args=args[:20])
     result = await cli.run_tool(
         tool, args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
     )
@@ -2224,6 +2262,16 @@ def findings_resource() -> str:
     import json
 
     return json.dumps(get_context().findings.as_dict(), indent=2)
+
+
+@mcp.resource("audit://recent")
+def audit_resource() -> str:
+    """The recent audit trail: scope decisions and external commands."""
+
+    import json
+
+    ctx = get_context()
+    return json.dumps({"summary": ctx.audit.summary(), "events": ctx.audit.recent(200)}, indent=2)
 
 
 @mcp.resource("injections://all")
