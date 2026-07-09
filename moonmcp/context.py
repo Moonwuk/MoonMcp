@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
+from .auth import AuthContext
 from .config import Settings, load_settings
 from .findings import FindingsStore
 from .net.http import HttpClient
@@ -23,6 +24,7 @@ class AppContext:
     governor: Governor
     http: HttpClient
     findings: FindingsStore
+    auth: AuthContext
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
@@ -33,14 +35,16 @@ def build_context(settings: Settings | None = None) -> AppContext:
     for entry in settings.scope_exclude:
         scope.exclude(entry)
     governor = Governor(rate=settings.rate_limit, max_concurrency=settings.max_concurrency)
+    auth = AuthContext()
     http = HttpClient(
         governor,
         user_agent=settings.user_agent,
         default_timeout=settings.timeout,
         connect_guard=scope.blocked_connect_reason,
+        auth_provider=auth.merged_headers,
     )
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
-                      findings=FindingsStore())
+                      findings=FindingsStore(), auth=auth)
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

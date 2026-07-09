@@ -256,6 +256,7 @@ async def server_status() -> dict:
         "python": platform.python_version(),
         "scope": ctx.scope.entries(),
         "scope_enforced": s.enforce_scope,
+        "auth_context": ctx.auth.redacted(),
         "block_private_addresses": s.block_private,
         "intrusive_allowed": s.allow_intrusive,
         "external_tools_allowed": s.allow_external_tools,
@@ -313,6 +314,42 @@ async def scope_remove(target: str) -> dict:
     ctx = get_context()
     removed = ctx.scope.remove(target)
     return {"removed": removed, "scope": ctx.scope.entries()}
+
+
+@mcp.tool()
+@safe_tool
+async def auth_set(bearer: str | None = None, cookie: str | None = None,
+                   basic_user: str | None = None, basic_pass: str | None = None,
+                   headers: dict[str, str] | None = None) -> dict:
+    """Set the engagement authentication context so the web tools test the
+    AUTHENTICATED surface (IDOR/access-control, priv-esc live behind login).
+
+    Provide any of: a `bearer` token, a raw `cookie` string (`k=v; k2=v2`),
+    HTTP Basic (`basic_user` + `basic_pass`), or arbitrary `headers`. Values are
+    merged into every in-scope request (and only in-scope — the scope guard still
+    applies). Credentials are stored in memory for this session only.
+    """
+
+    ctx = get_context()
+    if bearer:
+        ctx.auth.set_bearer(bearer)
+    if basic_user is not None and basic_pass is not None:
+        ctx.auth.set_basic(basic_user, basic_pass)
+    if cookie:
+        ctx.auth.set_cookie_string(cookie)
+    if headers:
+        ctx.auth.update_headers(headers)
+    return {"auth": ctx.auth.redacted()}
+
+
+@mcp.tool()
+@safe_tool
+async def auth_clear() -> dict:
+    """Clear the engagement authentication context (headers + cookies)."""
+
+    ctx = get_context()
+    ctx.auth.clear()
+    return {"auth": ctx.auth.redacted()}
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +675,88 @@ async def cors_audit(target: str) -> dict:
     ctx = get_context()
     result = await corsmod.audit_cors(ctx.http, url)
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def access_control_check(target: str, method: str = "GET", body: str | None = None,
+                               second_headers: dict[str, str] | None = None) -> dict:
+    """Probe an in-scope URL for broken access control / IDOR by replaying the
+    SAME request under multiple identities and diffing the responses:
+
+    - **A** = the current engagement auth (`auth_set` — user A),
+    - **B** = `second_headers` if given (a second, lower-priv user's headers/cookies),
+    - **anon** = no credentials at all.
+
+    If a protected resource returns a similar 2xx body to the anonymous or the
+    other-user request, that is a strong broken-access-control / IDOR signal. The
+    verdict is a lead to verify — it reports each identity's status/length and the
+    body-similarity so you can judge. Set `auth_set` first for a meaningful A.
+    In scope only; sends benign, identical requests (no payloads).
+    """
+
+    import hashlib
+    from difflib import SequenceMatcher
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    bodyb = body.encode() if body else None
+    m = method.upper()
+
+    async def _probe(*, headers=None, suppress_auth=False):
+        r = await ctx.http.fetch(url, method=m, headers=headers, body=bodyb,
+                                 follow_redirects=False, suppress_auth=suppress_auth)
+        snippet = r.body[:4096]
+        return {
+            "status": r.status,
+            "length": len(r.body),
+            "sha1": hashlib.sha1(snippet).hexdigest()[:12] if snippet else None,
+            "_snippet": snippet,
+            "error": r.error,
+            "blocked": r.blocked_reason,
+        }
+
+    identities: dict[str, dict] = {}
+    identities["auth_A"] = await _probe()  # current engagement auth
+    if second_headers:
+        identities["user_B"] = await _probe(headers=second_headers, suppress_auth=True)
+    identities["anonymous"] = await _probe(suppress_auth=True)
+
+    def _similar(a: dict, b: dict) -> float:
+        if not a.get("_snippet") or not b.get("_snippet"):
+            return 0.0
+        return round(SequenceMatcher(None, a["_snippet"], b["_snippet"]).ratio(), 3)
+
+    a = identities["auth_A"]
+    concerns: list[str] = []
+    comparisons: dict[str, dict] = {}
+    for name in ("anonymous", "user_B"):
+        other = identities.get(name)
+        if not other:
+            continue
+        sim = _similar(a, other)
+        comparisons[f"auth_A_vs_{name}"] = {
+            "similarity": sim,
+            "same_status": a["status"] == other["status"],
+        }
+        a_ok = a["status"] is not None and 200 <= a["status"] < 300
+        other_ok = other["status"] is not None and 200 <= other["status"] < 300
+        if a_ok and other_ok and sim >= 0.95:
+            who = "an unauthenticated user" if name == "anonymous" else "a second user"
+            concerns.append(
+                f"{who} receives a response nearly identical to the authenticated one "
+                f"(status {other['status']}, similarity {sim}) — possible broken access "
+                f"control / IDOR; verify the resource is meant to be private to user A."
+            )
+
+    for v in identities.values():
+        v.pop("_snippet", None)
+    hint = None if ctx.auth.is_set() else "No engagement auth set — call auth_set first so 'auth_A' is authenticated."
+    return {"target": url, "method": m, "identities": identities,
+            "comparisons": comparisons, "concerns": concerns,
+            "verdict": "review" if concerns else "no_obvious_idor", "hint": hint}
 
 
 @mcp.tool()

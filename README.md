@@ -44,13 +44,14 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **64 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **67 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
 | `server_status` | Report config, detected enhancers and external CLIs. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
+| `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
 
 ### 🔵 Passive OSINT (never touches the target)
 | Tool | Purpose |
@@ -80,6 +81,7 @@ MoonMCP exposes **64 tools**, **9 resources** and **8 operator prompts**, groupe
 | `crawl` | Bounded depth-1 crawl → internal links, forms+inputs, JS/asset URLs, parameters, external hosts, emails. |
 | `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
 | `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |
+| `access_control_check` | Replay a request as **user A (auth) vs user B vs anonymous** and diff the responses → broken-access-control / IDOR signal (the #1 payout class; set `auth_set` first). |
 | `graphql_check` | Discover GraphQL endpoints and test whether **introspection** is enabled. |
 | `waf_detect` | Fingerprint WAF/CDN (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, …). |
 | `takeover_check` | Subdomain-takeover detection over a 40+ provider fingerprint DB (S3, GH Pages, Heroku, Azure, …). |
@@ -288,7 +290,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 64 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 67 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

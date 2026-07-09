@@ -209,6 +209,7 @@ class HttpClient:
         default_timeout: float = 10.0,
         max_body: int = DEFAULT_MAX_BODY,
         connect_guard: Callable[[str], str | None] | None = None,
+        auth_provider: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
@@ -217,6 +218,9 @@ class HttpClient:
         # connect_guard(host) -> reason-if-blocked | None; applied to every hop
         # (initial + each redirect) so no fetch reaches a private/internal IP.
         self._connect_guard = connect_guard
+        # auth_provider() -> engagement headers merged into every request unless
+        # suppress_auth is set (e.g. the anonymous leg of an access-control diff).
+        self._auth_provider = auth_provider
 
     async def fetch(
         self,
@@ -231,10 +235,13 @@ class HttpClient:
         max_redirects: int = 5,
         max_body: int | None = None,
         scope_check: Callable[[str], bool] | None = None,
+        suppress_auth: bool = False,
     ) -> HttpResult:
         merged = {"User-Agent": self._ua, "Accept-Encoding": "gzip, deflate", "Accept": "*/*"}
+        if self._auth_provider is not None and not suppress_auth:
+            merged.update(self._auth_provider())
         if headers:
-            merged.update(headers)
+            merged.update(headers)  # per-call headers win over engagement auth
         chain: list[str] = []
         current = url
         seen: set[str] = set()

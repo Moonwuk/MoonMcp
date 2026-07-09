@@ -13,6 +13,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/echo":
+            # Echo the request headers back as JSON (used to verify auth context).
+            import json as _json
+            payload = _json.dumps({k.lower(): v for k, v in self.headers.items()}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path == "/robots.txt":
             body = b"User-agent: *\nDisallow: /admin\nDisallow: /secret\n"
             self.send_response(200)
