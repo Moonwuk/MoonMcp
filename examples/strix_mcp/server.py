@@ -203,6 +203,26 @@ async def _kill_quietly(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
+# Detached runs read --instruction-file by path *after* we return, so the temp
+# file can't be removed inline. Keep strong refs to the cleanup tasks so they
+# aren't garbage-collected before the child exits.
+_CLEANUP_TASKS: set[asyncio.Task] = set()
+
+
+def _cleanup_after(proc: asyncio.subprocess.Process, path: str) -> None:
+    """Unlink *path* once the detached *proc* has finished reading it."""
+
+    async def _wait_then_unlink() -> None:
+        try:
+            await proc.wait()
+        finally:
+            _unlink_quietly(path)
+
+    task = asyncio.ensure_future(_wait_then_unlink())
+    _CLEANUP_TASKS.add(task)
+    task.add_done_callback(_CLEANUP_TASKS.discard)
+
+
 @mcp.tool()
 async def strix_run(target: str, instruction: str, wait: bool = True,
                     timeout: int = 1800, extra_args: list[str] | None = None,
@@ -242,47 +262,62 @@ async def strix_run(target: str, instruction: str, wait: bool = True,
     log_path, logf = _open_watch_log() if (watch and _live is not None) else (None, None)
     console: dict | None = None
 
-    if not wait:
-        # Detached: the agent polls strix_result() for the run when it lands.
+    # A single guard so a failed spawn (ENOENT/EMFILE, or the strix binary vanishing
+    # between the which() check and exec) never leaks the temp file or the log fd,
+    # and never crashes the run — it returns a clean error instead.
+    try:
+        if not wait:
+            # Detached: the agent polls strix_result() for the run when it lands.
+            if logf is not None:
+                proc = await asyncio.create_subprocess_exec(
+                    *args, stdout=logf, stderr=asyncio.subprocess.STDOUT)
+                logf.close()  # the child inherited its own copy of the fd
+                logf = None
+                console = _live.open_log_console(log_path, title=_watch_title(target))
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            _cleanup_after(proc, tmp.name)  # unlink the instruction file when it exits
+            result = {"launched": True, "target": target, "command": args,
+                      "note": "running in background; poll with strix_result()"}
+            if console is not None:
+                result["live_console"], result["log"] = console, log_path
+            return result
+
         if logf is not None:
-            await asyncio.create_subprocess_exec(
+            proc = await asyncio.create_subprocess_exec(
                 *args, stdout=logf, stderr=asyncio.subprocess.STDOUT)
             logf.close()  # the child inherited its own copy of the fd
+            logf = None
             console = _live.open_log_console(log_path, title=_watch_title(target))
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await _kill_quietly(proc)
+                return {"error": "timeout", "detail": f"strix exceeded {timeout}s",
+                        "target": target, "live_console": console, "log": log_path}
+            finally:
+                _unlink_quietly(tmp.name)
+            stdout = _read_log_tail(log_path)
         else:
-            await asyncio.create_subprocess_exec(
-                *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        result = {"launched": True, "target": target, "command": args,
-                  "note": "running in background; poll with strix_result()"}
-        if console is not None:
-            result["live_console"], result["log"] = console, log_path
-        return result
-
-    if logf is not None:
-        proc = await asyncio.create_subprocess_exec(
-            *args, stdout=logf, stderr=asyncio.subprocess.STDOUT)
-        logf.close()  # the child inherited its own copy of the fd
-        console = _live.open_log_console(log_path, title=_watch_title(target))
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            await _kill_quietly(proc)
-            return {"error": "timeout", "detail": f"strix exceeded {timeout}s",
-                    "target": target, "live_console": console, "log": log_path}
-        finally:
-            _unlink_quietly(tmp.name)
-        stdout = _read_log_tail(log_path)
-    else:
-        proc = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        try:
-            out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            await _kill_quietly(proc)
-            return {"error": "timeout", "detail": f"strix exceeded {timeout}s", "target": target}
-        finally:
-            _unlink_quietly(tmp.name)
-        stdout = out_b.decode("utf-8", "replace")
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            try:
+                out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await _kill_quietly(proc)
+                return {"error": "timeout", "detail": f"strix exceeded {timeout}s",
+                        "target": target}
+            finally:
+                _unlink_quietly(tmp.name)
+            stdout = out_b.decode("utf-8", "replace")
+    except (OSError, ValueError) as exc:
+        _unlink_quietly(tmp.name)
+        return {"error": "spawn_failed", "detail": f"{type(exc).__name__}: {exc}",
+                "target": target}
+    finally:
+        if logf is not None:  # only still-open if the spawn raised before we closed it
+            logf.close()
 
     run = await _latest_run()
     result = {

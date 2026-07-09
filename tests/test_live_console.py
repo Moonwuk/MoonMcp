@@ -83,6 +83,16 @@ def test_linux_terminal_honours_override(monkeypatch):
     assert argv[-3:] == ["bash", "-c", "CMD"]
 
 
+def test_linux_terminal_tilix_uses_string_mode(monkeypatch):
+    # Regression: tilix -e takes ONE string arg (GNOME family), so argv mode
+    # (['tilix','-e','bash','-c',cmd]) mis-parses and no window opens.
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("MOONMCP_TERMINAL", raising=False)
+    monkeypatch.setattr(live.shutil, "which", _fake_which("tilix"))
+    argv = live._linux_terminal_argv("tail -f /x")
+    assert argv == ["tilix", "-e", "bash -c 'tail -f /x'"]
+
+
 def test_linux_terminal_none_without_display(monkeypatch):
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -146,6 +156,22 @@ def test_open_console_never_raises_on_spawn_error(monkeypatch):
     res = live.open_console("tail -f /x", title="t", log_path="/x")
     assert res["opened"] is False  # degraded, not crashed
     assert "attach_hint" in res
+
+
+def test_open_console_never_raises_on_valueerror(monkeypatch):
+    # A NUL byte in the command makes Popen raise ValueError (not OSError) — the
+    # "never raises" contract must still hold.
+    monkeypatch.setattr(live.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(live.shutil, "which", _fake_which("xterm"))  # no tmux
+
+    def boom(argv):
+        raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(live, "_spawn", boom)
+    res = live.open_console("tail -f /x\x00", title="t", log_path="/x")
+    assert res["opened"] is False
+    assert "ValueError" in res["reason"]
 
 
 def test_open_console_macos_uses_osascript(monkeypatch, capture_spawn):

@@ -43,7 +43,7 @@ _LINUX_LAUNCHERS: list[tuple[str, list[str], str]] = [
     ("konsole", ["-e"], "argv"),
     ("xfce4-terminal", ["--command"], "string"),
     ("mate-terminal", ["--"], "argv"),
-    ("tilix", ["-e"], "argv"),
+    ("tilix", ["-e"], "string"),  # GNOME-family: -e/--command takes ONE string arg
     ("kitty", [], "argv"),
     ("alacritty", ["-e"], "argv"),
     ("wezterm", ["start", "--"], "argv"),
@@ -214,8 +214,9 @@ def open_console(command: str, *, title: str = "live", log_path: str | None = No
         if argv is None:
             return _fallback(log_path, f"no console strategy for {system}")
         proc = _spawn(argv)
-    except (OSError, subprocess.SubprocessError) as exc:
-        # A missing/renamed terminal binary etc. — try tmux, then a hint.
+    except Exception as exc:  # noqa: BLE001 - watching must NEVER raise into the caller
+        # A missing/renamed terminal binary (OSError), a NUL byte in the command
+        # (ValueError), etc. — degrade to tmux, then a copy-pasteable hint.
         if system not in ("Darwin", "Windows"):
             tmux = _try_tmux(command, title)
             if tmux is not None:
