@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **108 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **112 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -132,6 +132,14 @@ MoonMCP exposes **108 tools**, **11 resources** and **8 operator prompts**, grou
 | `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
 | `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
+
+### 🏗️ Behavioural infrastructure (infer the infra from response *variance*)
+| Tool | Purpose |
+| --- | --- |
+| `backend_probe` | **Infer the backend fleet behind a load balancer:** clusters N responses by their discriminators (Server, Via, backend-id headers, cookie names) → distinct backends, **patch drift** (nodes on different Server versions — one may be individually vulnerable) and **clock skew**. |
+| `dns_behavior` | **DNS/zone behaviour:** wildcard-DNS detection (so subdomain enum isn't fooled), DNS load-balancing (rotating A records), IPv6, and the CNAME target (dangling → takeover surface). |
+| `vhost_probe` | **Host-header routing:** does the edge validate the Host or serve the same app for any host (cache/reset poisoning surface)? Is a bogus host **reflected** (host-header injection) directly or via `X-Forwarded-Host`? |
+| `ratelimit_probe` | **Rate-limit behaviour:** finds the throttle threshold/window, `Retry-After`, and whether spoofing `X-Forwarded-For` **resets** the limit (per-IP bypass). Intrusive. |
 
 ### 🔗 Orchestration & reporting
 | Tool | Purpose |
@@ -407,6 +415,7 @@ moonmcp/
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
 ├── web/probes.py    # active detectors: SSTI / SQLi / SSRF / cache poisoning
+├── recon/infra.py   # behavioural infra analysers (backend fleet, DNS, vhost, rate-limit)
 ├── intel/oast_server.py  # built-in OAST callback catcher (self-host)
 ├── memory.py        # shared persistent memory hub (SQLite + FTS5, trust/provenance tags)
 ├── intercept.py     # Burp-style repeater / intruder / passive scan + request-response history

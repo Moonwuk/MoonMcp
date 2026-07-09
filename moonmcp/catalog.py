@@ -72,6 +72,13 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Chain the safe tools: batch liveness, a one-shot recon sweep, a report.",
         ["probe_batch", "recon_target", "report"],
     )),
+    ("infra", (
+        "Behavioural infrastructure",
+        "Infer the infra's shape from response variance: backend fleet / patch "
+        "drift, DNS/zone behaviour (wildcard, LB, dangling CNAME), Host-header "
+        "routing, and rate-limit behaviour.",
+        ["backend_probe", "dns_behavior", "vhost_probe", "ratelimit_probe"],
+    )),
     ("intercept", (
         "Interception & active probes",
         "Drive the Burp workflow from tools (repeater, intruder, passive scan, "

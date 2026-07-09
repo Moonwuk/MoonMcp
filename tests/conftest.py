@@ -9,6 +9,9 @@ from moonmcp.context import build_context
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    _lb = 0   # /lb backend rotation counter
+    _rl = 0   # /rl rate-limit counter
+
     def log_message(self, *args):  # silence
         pass
 
@@ -87,6 +90,50 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html><link href='//" + xfh.encode("utf-8", "replace")
                              + b"/style.css'></html>")
+            return
+        if self.path.startswith("/lb"):
+            # Two backends behind an LB with a Server-version mismatch (patch drift).
+            type(self)._lb += 1
+            if type(self)._lb % 2 == 0:
+                server_hdr, backend = "nginx/1.24.0", "node-a"
+            else:
+                server_hdr, backend = "nginx/1.25.1", "node-b"
+            # send_response_only avoids the handler's default Server header so our
+            # injected version is the authoritative one.
+            self.send_response_only(200)
+            self.send_header("Server", server_hdr)
+            self.send_header("X-Backend-Server", backend)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/vhost"):
+            # Serves the same app for any Host AND reflects it into a link.
+            host = self.headers.get("Host", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><a href='//" + host.encode("utf-8", "replace")
+                             + b"/next'>go</a></html>")
+            return
+        if self.path.startswith("/rl"):
+            # Rate limit that keys on the (spoofable) X-Forwarded-For header.
+            if self.headers.get("X-Forwarded-For"):
+                type(self)._rl = 0  # per-IP bypass
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            type(self)._rl += 1
+            if type(self)._rl > 5:
+                self.send_response(429)
+                self.send_header("Retry-After", "30")
+                self.end_headers()
+                self.wfile.write(b"slow down")
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
             return
         if self.path == "/spa":
             body = (b"<html><head><script src=\"/static/app.js\"></script></head>"

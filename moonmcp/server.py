@@ -62,6 +62,7 @@ from .recon import crawl as crawlmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
+from .recon import infra as inframod
 from .recon import jsendpoints as jsmod
 from .recon import openapi as openapimod
 from .recon import origin as originmod
@@ -2944,6 +2945,167 @@ async def cache_probe(target: str) -> dict:
         verdict = "unconfirmed"
     return {"target": url, "verdict": verdict, "unkeyed_reflection": reflected,
             "cacheable": is_cacheable, "cache_signals": reasons}
+
+
+# ---------------------------------------------------------------------------
+# behavioural infrastructure detectors
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@active_tool()
+async def backend_probe(target: str, samples: int = 12) -> dict:
+    """**Infer the backend fleet behind a load balancer** from response variance.
+    Sends N benign requests and clusters them by their discriminators (Server,
+    X-Powered-By, Via, backend-id headers, Set-Cookie names) to count distinct
+    backends, and flags **patch drift** (nodes reporting different Server versions
+    — a lagging node may be individually vulnerable) and **clock skew** between
+    nodes. The load-balancing/consistency picture a single request can't show.
+    In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    n = max(3, min(samples, 30))
+    out: list[dict] = []
+    for _ in range(n):
+        r = await ctx.http.fetch(url, method="GET", follow_redirects=False, scope_check=_scope_check())
+        out.append({
+            "server": r.header("Server"),
+            "powered_by": r.header("X-Powered-By"),
+            "via": r.header("Via"),
+            "backend": r.header("X-Backend-Server") or r.header("X-Served-By") or r.header("X-Server"),
+            "cookies": [c.split("=", 1)[0].strip() for c in r.get_all("set-cookie")],
+            "date_epoch": inframod.parse_http_date(r.header("Date")),
+            "elapsed_ms": r.elapsed_ms,
+        })
+    return {"target": url, "samples": n, **inframod.cluster_backends(out)}
+
+
+@mcp.tool()
+@active_tool()
+async def dns_behavior(domain: str) -> dict:
+    """**Behavioural DNS / zone profiling.** Detects **wildcard DNS** (so subdomain
+    enumeration isn't fooled by catch-all resolution), whether the zone is
+    **DNS-load-balanced** (multiple/rotating A records), IPv6 presence, and the
+    CNAME target (dangling-CNAME → takeover surface). Passive DNS; in scope only.
+    """
+
+    host = normalize_target(domain)
+    ctx = get_context()
+    import secrets
+    rand = f"moonwild{secrets.token_hex(6)}.{host}"
+    wild = await dnsmod.resolve(rand, http_client=ctx.http)
+    wildcard = bool(wild.a or wild.aaaa)
+
+    a_sets: list[tuple[str, ...]] = []
+    base = None
+    for _ in range(3):
+        rr = await dnsmod.resolve(host, http_client=ctx.http)
+        base = base or rr
+        a_sets.append(tuple(sorted(rr.a)))
+    assert base is not None
+    dns_lb = len({s for s in a_sets if s}) > 1 or len(base.a) > 1
+    records = base.records or {}
+    concerns: list[str] = []
+    if wildcard:
+        concerns.append("wildcard DNS is enabled — verify enumerated subdomains actually resolve "
+                        "distinctly (catch-all inflates false positives)")
+    if base.canonical_name:
+        concerns.append(f"apex/host is a CNAME to {base.canonical_name} — check it is not a "
+                        "dangling pointer to an unclaimed service (takeover)")
+    return {
+        "host": host,
+        "wildcard_dns": wildcard,
+        "a_records": base.a,
+        "aaaa_records": base.aaaa,
+        "ipv6": bool(base.aaaa),
+        "dns_load_balanced": dns_lb,
+        "cname": base.canonical_name,
+        "nameservers": records.get("NS", []),
+        "mx": records.get("MX", []),
+        "concerns": concerns,
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def vhost_probe(target: str) -> dict:
+    """**Host-header routing behaviour.** Compares the normal response with one sent
+    under a **bogus Host** header to reveal how the edge routes: does it **validate
+    the Host** (routes/errors) or serve the same app regardless (host-header
+    attacks — cache poisoning, password-reset poisoning, routing to internal
+    vhosts)? Also checks whether the bogus host is **reflected** (host-header
+    injection) directly or via `X-Forwarded-Host`. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    bogus = "moonvhost-notreal.example"
+    base = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+    bh = await ctx.http.fetch(url, headers={"Host": bogus}, follow_redirects=False, scope_check=_scope_check())
+    xfh = await ctx.http.fetch(url, headers={"X-Forwarded-Host": bogus}, follow_redirects=False,
+                               scope_check=_scope_check())
+
+    base_body = base.text(200_000)
+    host_validated = (bh.status != base.status) or (abs(len(bh.body) - len(base.body)) > 200)
+    reflected_host = bogus in bh.text(200_000) and bogus not in base_body
+    reflected_xfh = bogus in xfh.text(200_000) and bogus not in base_body
+    concerns: list[str] = []
+    if not host_validated:
+        concerns.append("the edge serves the same app for an arbitrary Host — host-header not "
+                        "validated (routing / cache-poisoning / reset-poisoning surface)")
+    if reflected_host or reflected_xfh:
+        via = "Host" if reflected_host else "X-Forwarded-Host"
+        concerns.append(f"bogus host reflected via {via} — host-header injection "
+                        "(open-redirect / cache-poisoning / password-reset poisoning)")
+    return {
+        "target": url,
+        "host_validated": host_validated,
+        "host_header_reflected": reflected_host,
+        "x_forwarded_host_reflected": reflected_xfh,
+        "baseline": {"status": base.status, "length": len(base.body)},
+        "bogus_host": {"status": bh.status, "length": len(bh.body)},
+        "concerns": concerns,
+    }
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ratelimit_probe(target: str, burst: int = 20) -> dict:
+    """**Rate-limit / throttling behaviour profile.** Sends a bounded burst
+    (rate-limiter-respecting) and reports whether the endpoint throttles, at which
+    request it first blocks (429/403/503), any `Retry-After`, and — crucially —
+    whether spoofing `X-Forwarded-For` **resets** the counter (the limiter keys on
+    a client-controlled IP header → per-IP bypass). A missing limit on a sensitive
+    endpoint is a brute-force / enumeration / resource-exhaustion finding.
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    n = max(5, min(burst, 40))
+    statuses: list[int | None] = []
+    first_block: int | None = None
+    retry_after: str | None = None
+    for i in range(n):
+        r = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+        statuses.append(r.status)
+        if r.status in (429, 403, 503):
+            if first_block is None:
+                first_block = i + 1
+                retry_after = r.header("Retry-After")
+    bypass_reset: bool | None = None
+    if first_block is not None:
+        import secrets
+        spoof = f"10.{secrets.randbelow(255)}.{secrets.randbelow(255)}.{secrets.randbelow(255)}"
+        r = await ctx.http.fetch(url, headers={"X-Forwarded-For": spoof}, follow_redirects=False,
+                                 scope_check=_scope_check())
+        bypass_reset = r.status not in (429, 403, 503)
+    return {"target": url,
+            **inframod.ratelimit_summary(statuses, first_block=first_block,
+                                         retry_after=retry_after, bypass_reset=bypass_reset)}
 
 
 # ---------------------------------------------------------------------------
