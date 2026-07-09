@@ -70,7 +70,7 @@ from .recon import secrets as secretsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
-from .scope import ScopeError, normalize_target
+from .scope import ScopeError, canonical_ip, normalize_target
 from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cors as corsmod
@@ -3016,6 +3016,14 @@ async def dns_behavior(domain: str) -> dict:
 
     host = normalize_target(domain)
     ctx = get_context()
+    # An IP literal resolves to itself — no DNS/DoH round-trip, no wildcard/CNAME.
+    ip = canonical_ip(host)
+    if ip is not None:
+        is6 = ip.version == 6
+        return {"host": host, "wildcard_dns": False,
+                "a_records": [] if is6 else [host], "aaaa_records": [host] if is6 else [],
+                "ipv6": is6, "dns_load_balanced": False, "cname": None,
+                "nameservers": [], "mx": [], "concerns": []}
     import secrets
     rand = f"moonwild{secrets.token_hex(6)}.{host}"
     wild = await dnsmod.resolve(rand, http_client=ctx.http)
