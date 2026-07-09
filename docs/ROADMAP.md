@@ -78,15 +78,20 @@ reinventing nmap/nuclei/ffuf, just driving them behind the scope guard.
 > That is a copyright/licence violation and off the table. The plan below uses a
 > native implementation plus **legitimate** integrations only.
 
-- **Native intercepting proxy** (stdlib `http.server` / asyncio): a local proxy
-  that records request/response pairs for in-scope hosts, with a **repeater**
-  (re-send a captured request with edits) and a **passive scanner** that reuses
-  MoonMCP's existing header/secret/CORS/fingerprint analysers on the captured
-  traffic.
-- **Legitimate Burp integration** for users who own a licence: drive Burp via its
-  official **REST API** / **Montoya** extension API — no cracked binaries.
-- **Open-source alternatives**: optional adapters for **OWASP ZAP**, **Caido**,
-  and **mitmproxy**, all of which expose supported automation APIs.
+- ✅ **4a — native Burp-style primitives** (`moonmcp/intercept.py`): the workflow
+  an agent actually drives — `http_repeater` (send one raw/structured request,
+  get the full response + passive scan), `intruder` (payload-marker sweep with
+  status/length/reflection diffing; intrusive-gated), `passive_scan` (all passive
+  analysers over one response), and `http_history` (in-memory request/response
+  log for replay). All scope-gated and rate-limited; pure stdlib, works
+  everywhere.
+- ⏭️ **4b — live intercepting proxy**: a local proxy that records in-scope traffic
+  for the `browser_*` tools to route through. HTTP is stdlib; **TLS MITM** needs
+  on-the-fly cert generation, so it will require an optional crypto dependency and
+  a generated local CA (off by default).
+- ⏭️ **4c — legitimate integrations** (adapters, opt-in): OWASP **ZAP** (REST API),
+  **mitmproxy**, **Caido**, and licensed **Burp** (official REST / Montoya API).
+  No cracked binaries — supported automation APIs only.
 
 ## Phase 5 — Reporting, triage & self-hosting (proposals)
 

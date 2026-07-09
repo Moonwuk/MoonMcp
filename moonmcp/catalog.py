@@ -72,6 +72,13 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Chain the safe tools: batch liveness, a one-shot recon sweep, a report.",
         ["probe_batch", "recon_target", "report"],
     )),
+    ("intercept", (
+        "Interception (Burp-style)",
+        "Drive the Burp workflow from tools: repeater (resend one request), "
+        "intruder (payload sweep + diff), passive scan, and request/response "
+        "history.",
+        ["http_repeater", "intruder", "passive_scan", "http_history"],
+    )),
     ("knowledge", (
         "Knowledge bases",
         "Offline reference: injections, techniques/PoCs, privilege escalation, "

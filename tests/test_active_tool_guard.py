@@ -22,6 +22,8 @@ PASSIVE = {
     # keyless OSINT (queries a third party, never the target)
     "web_search", "search_dorks", "cve_lookup", "cve_search",
     "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze",
+    # interception history (reads the in-memory log; no traffic)
+    "http_history",
     # findings / reporting / monitoring
     "add_finding", "list_findings", "clear_findings", "audit_log",
     "export_obsidian", "surface_diff", "surface_snapshots", "export_findings",

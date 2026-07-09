@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **92 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **96 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -119,6 +119,14 @@ MoonMCP exposes **92 tools**, **10 resources** and **8 operator prompts**, group
 | `waf_efficacy` | Test which attack categories the WAF blocks (benign canaries) + whether simple transforms bypass it. |
 | `desync_probe` | Detection-only request-smuggling indicators (CL+TE / obfuscated TE); complete-message probes, never poisons a connection. |
 | `vuln_scan` | Run a `nuclei` template scan (requires nuclei installed). |
+
+### 🧰 Interception (Burp-style, native — no external proxy)
+| Tool | Purpose |
+| --- | --- |
+| `http_repeater` | **Repeater** — send one fully-controlled request (structured **or** a `raw` Burp-style HTTP request) to an in-scope target; full response + quick passive scan; logged for replay. |
+| `intruder` | **Intruder** — a request `template` with a `§` marker + payload list, fired and **diffed** (status / length / reflection) vs a baseline → injection/IDOR entry points. Intrusive. |
+| `passive_scan` | One benign GET → all passive analysers at once (header grade + issues, tech fingerprint, redacted secret hits). |
+| `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 
 ### 🔗 Orchestration & external tools
 | Tool | Purpose |
@@ -353,8 +361,9 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 92 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 96 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
+├── intercept.py     # Burp-style repeater / intruder / passive scan + request-response history
 ├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail

@@ -85,6 +85,20 @@ Two ways, pick based on the user's situation:
 6. **Record & report:** `add_finding` as you go, then `report`,
    `export_findings` (SARIF/JSON), or `export_obsidian` (linked vault + graph).
 
+## Burp-style interception (native, no external proxy)
+
+When you need to hand-craft or iterate on a request:
+
+- `http_repeater` — send ONE fully-controlled request (structured, or a `raw`
+  Burp-style HTTP request) and get the full response + a quick passive scan back;
+  every send is logged. Use it to iterate on a payload.
+- `intruder` — a request `template` with a `§` marker + a payload list, fired and
+  diffed (status/length/reflection) against a baseline — finds injection/IDOR
+  entry points. **Intrusive** (consent + `MOONMCP_ALLOW_INTRUSIVE`).
+- `passive_scan` — one benign GET, then all passive analysers (header grade, tech,
+  secrets) at once.
+- `http_history` — review/replay what repeater/intruder/passive_scan sent.
+
 ## Reference knowledge (offline, no traffic)
 
 When you need to reason about a class of bug, use the knowledge bases:

@@ -6,6 +6,12 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Burp-style interception (native).** `http_repeater` (send one raw/structured
+  request → full response + passive scan), `intruder` (payload-marker sweep with
+  status/length/reflection diffing, intrusive-gated), `passive_scan` (all passive
+  analysers over one response), and `http_history` (in-memory request/response log
+  for replay). Pure stdlib, scope-gated (`moonmcp/intercept.py`). Live proxy +
+  ZAP/mitmproxy/Burp adapters are the next Phase-4 increment (legal only).
 - **Deep Kali integration.** External-tool registry expanded to **36 tools**
   across 11 categories (typed `ToolSpec` with native fallback + install hint,
   auto-detected on PATH). Intrusive external scanners (fuzzers, port scanners,
