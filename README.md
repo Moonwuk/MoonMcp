@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **71 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **74 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -56,6 +56,8 @@ MoonMCP exposes **71 tools**, **9 resources** and **8 operator prompts**, groupe
 ### 🔵 Passive OSINT (never touches the target)
 | Tool | Purpose |
 | --- | --- |
+| `web_search` | Search the internet (keyless, via DuckDuckGo) → structured title / URL / snippet results. Passive — queries a search engine, not the target. |
+| `search_dorks` | Generate ready-to-run **Google/Bing dorks** for a target (exposed files, login panels, config/secrets, dir listings, code leaks, SSRF params). |
 | `enumerate_subdomains` | Passive subdomain enum via crt.sh, HackerTarget, AnubisDB, AlienVault OTX. |
 | `wayback_urls` | Historical URLs from the Internet Archive (flags interesting endpoints). |
 | `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID or by keyword (e.g. a product+version). |
@@ -294,7 +296,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 71 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 74 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

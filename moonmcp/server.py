@@ -34,6 +34,7 @@ from .external import cli
 from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
+from .intel import search as searchmod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
 from .knowledge import techniques as techmod
@@ -357,6 +358,33 @@ async def auth_clear() -> dict:
 # ---------------------------------------------------------------------------
 # passive OSINT
 # ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def web_search(query: str, max_results: int = 10) -> dict:
+    """Search the internet (keyless, via DuckDuckGo) and return structured results
+    — title, URL and snippet. Passive OSINT: it queries a search engine, never the
+    target, so no scope is required. Use it to find a target's exposed assets,
+    docs, leaked references, employees, tech mentions, etc. Combine with
+    `search_dorks` for operator-grade queries.
+    """
+
+    return await searchmod.web_search(get_context().http, query, max_results=max_results)
+
+
+@mcp.tool()
+@safe_tool
+async def search_dorks(domain: str, category: str | None = None) -> dict:
+    """Generate ready-to-run **Google/Bing dork** queries for a target domain,
+    grouped by intent: subdomains, exposed files (sql/bak/env/logs), config &
+    secrets, login/admin panels, directory listings, error/debug leaks, code
+    leaks (GitHub/Pastebin/S3), exposed services, and open-redirect/SSRF params.
+    Pass a `category` to narrow, or omit for all. Offline — pure query generation;
+    paste the dorks into a search engine (or feed to `web_search`).
+    """
+
+    return searchmod.generate_dorks(domain, category=category)
+
+
 @mcp.tool()
 @safe_tool
 async def enumerate_subdomains(domain: str, sources: list[str] | None = None) -> dict:
