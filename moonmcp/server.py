@@ -28,6 +28,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
+from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
@@ -1610,6 +1611,42 @@ async def audit_log(limit: int = 100, event: str | None = None) -> dict:
     if event:
         events = [e for e in events if e.get("event") == event]
     return {"summary": ctx.audit.summary(), "count": len(events), "events": events}
+
+
+@mcp.tool()
+@safe_tool
+async def export_obsidian(out_dir: str | None = None, include_kb: bool = True,
+                          canvas: bool = True, engagement: str = "engagement") -> dict:
+    """Export the session into an **Obsidian vault** as a navigable knowledge
+    graph: a Home MOC, one note per asset and finding (cross-linked, tagged by
+    severity), and — with `include_kb` — the knowledge bases as a linked web
+    (each vulnerability `[[wikilinks]]` to its **root cause**), plus an Obsidian
+    **Canvas** (`.canvas`) graph. Open the folder as a vault and use the graph
+    view. Writes to `out_dir` (or MOONMCP_VAULT_DIR, else ./moonmcp-vault); pure
+    file generation, no network.
+    """
+
+    import os
+
+    ctx = get_context()
+    root = out_dir or os.environ.get("MOONMCP_VAULT_DIR") or os.path.join(os.getcwd(), "moonmcp-vault")
+    findings = [
+        {"id": f.id, "target": f.target, "severity": f.severity, "title": f.title,
+         "type": f.type, "detail": f.detail, "evidence": f.evidence, "created_at": f.created_at}
+        for f in ctx.findings.list()
+    ]
+    inj = vulns = rc = tech = None
+    if include_kb:
+        from .knowledge.injections_data import INJECTIONS as inj
+        from .knowledge.techniques_data import TECHNIQUES as tech
+        from .knowledge.vulns_data import ROOT_CAUSES as rc
+        from .knowledge.vulns_data import SERVER_SIDE_VULNS as vulns
+    manifest = obsidianmod.build_vault(
+        root, engagement=engagement, findings=findings, injections=inj, vulns=vulns,
+        root_causes=rc, techniques=tech, want_canvas=canvas,
+    )
+    ctx.audit.record("export_obsidian", tool="export_obsidian", target=root, decision="write")
+    return manifest
 
 
 @mcp.tool()
