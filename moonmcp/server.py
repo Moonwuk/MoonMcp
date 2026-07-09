@@ -46,12 +46,15 @@ from .net import jarm as jarmmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
 from .recon import binary as binarymod
+from .recon import buckets as bucketsmod
 from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
+from .recon import jsendpoints as jsmod
+from .recon import openapi as openapimod
 from .recon import origin as originmod
 from .recon import secrets as secretsmod
 from .recon import subdomains as submod
@@ -565,6 +568,23 @@ async def reverse_ip(ip: str) -> dict:
     return to_dict(result)
 
 
+@mcp.tool()
+@safe_tool
+async def cloud_buckets(keyword: str, max_candidates: int = 80) -> dict:
+    """Enumerate cloud storage **buckets** (AWS S3, GCS, Azure Blob) for a target:
+    permutate likely bucket names from `keyword` (a company / product / domain,
+    e.g. `acme` or `acme.com`) and probe the public cloud endpoints to find which
+    exist and which are anonymously **listable** (`public-listable`) vs private
+    (`exists-private`). Passive w.r.t. the engagement — it talks to the cloud
+    providers, not the target — so no scope is required. Rate-limited.
+    """
+
+    names = bucketsmod.generate_bucket_names(keyword, limit=max(1, min(max_candidates, 200)))
+    found = await bucketsmod.check_buckets(get_context().http, names)
+    return {"keyword": keyword, "candidates_tested": len(names),
+            "providers": sorted(bucketsmod.PROVIDERS), "found_count": len(found), "found": found}
+
+
 # ---------------------------------------------------------------------------
 # active (light) — scope-gated
 # ---------------------------------------------------------------------------
@@ -739,6 +759,46 @@ async def crawl(target: str, max_pages: int = 10) -> dict:
         ctx.http, url, scope_check=_scope_check(), max_pages=max(1, min(max_pages, 30))
     )
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def analyze_js(target: str, max_scripts: int = 15) -> dict:
+    """Deep-extract the hidden API surface from a page **and its JavaScript** —
+    absolute and relative endpoints/routes that a UI crawl never sees, plus any
+    **source maps** (`.map`) that reconstruct the original source. Fetches the
+    page, then its same-origin scripts (bounded), and returns a deduped endpoint
+    list ready to feed the batch prober / parameter fuzzer. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    return await jsmod.analyze(ctx.http, url, max_scripts=max(1, min(max_scripts, 40)),
+                               scope_check=_scope_check())
+
+
+@mcp.tool()
+@safe_tool
+async def parse_openapi(target: str | None = None, content: str | None = None) -> dict:
+    """Parse an OpenAPI/Swagger spec into an endpoint / parameter / method
+    inventory — an exposed `openapi.json` / `swagger.json` is a map of the whole
+    API attack surface. Pass a `target` URL to fetch the spec (in scope), or paste
+    the spec as `content`. Returns every operation (method, path, params, whether
+    auth is required, request-body types), the servers, security schemes, and
+    flags (operations with NO security, deprecated ops). Feed the paths to
+    `probe_batch` and the params to `discover_parameters`.
+    """
+
+    if content:
+        return openapimod.parse_spec(content)
+    if target:
+        raw = target.strip()
+        url = raw if "://" in raw else f"https://{raw}"
+        _require_scope(url)
+        return await openapimod.fetch_and_parse(get_context().http, url, scope_check=_scope_check())
+    return {"error": "invalid_input", "detail": "pass a 'target' URL or inline 'content'"}
 
 
 @mcp.tool()

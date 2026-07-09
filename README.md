@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **80 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **83 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -65,6 +65,7 @@ MoonMCP exposes **80 tools**, **9 resources** and **8 operator prompts**, groupe
 | `host_intel` | IP exposure via Shodan InternetDB (free) or the full Shodan API. |
 | `ip_intel` | Map an IP → ASN, org, ISP, cloud/CDN provider, hosting flag, reverse DNS, geo. |
 | `reverse_ip` | Other domains co-hosted on the same IP (reverse-IP lookup). |
+| `cloud_buckets` | Enumerate cloud storage buckets (S3 / GCS / Azure Blob): permutate names from a keyword and probe which exist and which are anonymously **listable**. |
 | `email_security` | SPF / DMARC / DKIM / CAA posture with an A–F grade (DNS-based). |
 | `jwt_analyze` | Decode a JWT and flag `alg:none`, weak HS*, missing expiry, key-injection (no traffic). |
 
@@ -82,6 +83,8 @@ MoonMCP exposes **80 tools**, **9 resources** and **8 operator prompts**, groupe
 | Tool | Purpose |
 | --- | --- |
 | `crawl` | Bounded depth-1 crawl → internal links, forms+inputs, JS/asset URLs, parameters, external hosts, emails. |
+| `analyze_js` | Deep-extract the hidden API surface from a page **and its JavaScript** (LinkFinder-style) — absolute/relative endpoints a UI crawl misses, plus source maps (`.map`). |
+| `parse_openapi` | Parse an OpenAPI/Swagger spec (URL or pasted) → full endpoint/param/method inventory, servers, security schemes, and flags (operations with **no** security). |
 | `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
 | `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |
 | `access_control_check` | Replay a request as **user A (auth) vs user B vs anonymous** and diff the responses → broken-access-control / IDOR signal (the #1 payout class; set `auth_set` first). |
@@ -300,7 +303,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 80 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 83 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

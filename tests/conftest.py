@@ -38,6 +38,48 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/spa":
+            body = (b"<html><head><script src=\"/static/app.js\"></script></head>"
+                    b"<body><script>fetch('/api/v2/users');var u='/api/v2/orders';"
+                    b"</script></body></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/static/app.js":
+            body = (b"const base='/api/internal/config';"
+                    b"fetch('/api/v1/admin/users?id=1');\n"
+                    b"//# sourceMappingURL=app.js.map\n")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/openapi.json":
+            import json as _json
+            spec = {
+                "openapi": "3.0.0",
+                "info": {"title": "Demo API", "version": "1.2.3"},
+                "servers": [{"url": "https://api.demo.test/v1"}],
+                "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}},
+                "security": [{"bearer": []}],
+                "paths": {
+                    "/users/{id}": {
+                        "get": {"operationId": "getUser",
+                                "parameters": [{"name": "id", "in": "path", "required": True,
+                                                "schema": {"type": "integer"}}]},
+                        "delete": {"operationId": "delUser", "security": []},
+                    },
+                    "/public/health": {"get": {"operationId": "health", "security": []}},
+                },
+            }
+            payload = _json.dumps(spec).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path == "/app":
             # A tiny interactive page: fill #q, click #go → writes #out + localStorage.
             body = (
@@ -74,6 +116,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             # A same-host redirect chain: /r1 -> /r2 -> / (all in scope).
             self.send_response(302)
             self.send_header("Location", "/r2" if self.path == "/r1" else "/")
+            self.end_headers()
+            return
+        if self.path.startswith("/bucket"):
+            # Mock cloud-bucket endpoint: 200 for 'acme-backup', 403 for
+            # 'acme-private', 404 otherwise — to test status classification.
+            from urllib.parse import parse_qs, urlparse
+            name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+            code = 200 if name == "acme-backup" else 403 if name == "acme-private" else 404
+            self.send_response(code)
             self.end_headers()
             return
         if self.path.startswith("/oast-poll"):
