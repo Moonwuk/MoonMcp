@@ -9,6 +9,8 @@ signals into :func:`moonmcp.confirm.evaluate`.
 
 from __future__ import annotations
 
+import re
+
 # --- SSTI: arithmetic that only renders if the input hits a template engine ---
 # 7331*7 = 51317 — a value unlikely to appear on a page by chance. If the result
 # shows up (and the literal payload does not), the expression was evaluated.
@@ -37,26 +39,43 @@ _CACHE_HIT_HEADERS = ("x-cache", "cf-cache-status", "x-drupal-cache",
                       "x-varnish", "age", "x-cache-hits")
 
 
+# Match the result on digit boundaries so a longer digit run (an epoch, an ID)
+# containing "51317" doesn't count as an evaluation.
+_SSTI_RE = re.compile(r"(?<!\d)" + re.escape(SSTI_EXPECTED) + r"(?!\d)")
+
+
 def ssti_findings(baseline_body: str, tested: list[tuple[str, str, str]]) -> list[dict]:
     """Given ``(engine, payload, response_body)`` triples, return the engines whose
-    arithmetic was evaluated (result present in the response, absent in baseline)."""
+    arithmetic was **evaluated** — the result appears (on digit boundaries), the
+    literal payload does NOT (so it's rendering, not reflection), and the same
+    result isn't already present in the baseline."""
 
+    if _SSTI_RE.search(baseline_body):
+        return []  # the marker occurs naturally on the page — can't distinguish
     out: list[dict] = []
-    base_has = SSTI_EXPECTED in baseline_body
     for engine, payload, body in tested:
-        if SSTI_EXPECTED in body and not base_has:
+        if _SSTI_RE.search(body) and payload not in body:
             out.append({"engine": engine, "payload": payload, "evaluated_to": SSTI_EXPECTED})
     return out
 
 
 def cacheable(headers_map: dict[str, str]) -> tuple[bool, list[str]]:
-    """Heuristic: does the response look cacheable/served-from-cache?"""
+    """Heuristic: does the response look cacheable/served-from-cache?
+
+    Cache-Control is parsed numerically: ``max-age=0`` / ``s-maxage=0`` /
+    ``no-cache`` / ``no-store`` / ``private`` are NOT cacheable. A cache-hit header
+    (Age, X-Cache, …) still counts — it proves the response was served from a cache.
+    """
 
     reasons: list[str] = []
     lower = {k.lower(): v for k, v in headers_map.items()}
     cc = lower.get("cache-control", "").lower()
-    if "public" in cc or "max-age" in cc or "s-maxage" in cc:
-        if "no-store" not in cc and "private" not in cc:
+    if "no-store" not in cc and "no-cache" not in cc and "private" not in cc:
+        ma = re.search(r"\bmax-age=(\d+)", cc)
+        sma = re.search(r"\bs-maxage=(\d+)", cc)
+        positive_age = (ma is not None and int(ma.group(1)) > 0) or \
+                       (sma is not None and int(sma.group(1)) > 0)
+        if "public" in cc or positive_age:
             reasons.append(f"Cache-Control: {cc}")
     for h in _CACHE_HIT_HEADERS:
         if h in lower:

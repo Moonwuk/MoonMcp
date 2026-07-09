@@ -100,7 +100,8 @@ def test_summarize_http_behavior_flags_bare_lf():
                                       http10_status=200, invalid_method_status=501,
                                       oversized_status=None, bare_lf_status=200)
     assert r["bare_lf_accepted"] is True
-    assert r["keep_alive"] is False
+    assert r["connection_header"] == "close"
+    assert "keep_alive" not in r  # can't be measured from a forced-close probe
     assert any("bare-LF" in c for c in r["concerns"])
 
 

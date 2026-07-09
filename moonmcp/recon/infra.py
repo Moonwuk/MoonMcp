@@ -63,11 +63,25 @@ def cluster_backends(samples: list[dict]) -> dict:
             "avg_ms": round(sum(elapsed) / len(elapsed), 1) if elapsed else 0.0,
         })
     backends.sort(key=lambda b: -b["hits"])
+    load_balanced = len(groups) > 1
 
-    server_versions = sorted({b["server"] for b in backends if b["server"]})
-    patch_drift = len(server_versions) > 1
-    dates = [s["date_epoch"] for s in samples if s.get("date_epoch")]
-    skew = round(max(dates) - min(dates), 1) if len(dates) >= 2 else 0.0
+    # Patch drift and clock skew are only meaningful across a genuine multi-backend
+    # fleet — a single slow backend must never be reported as several out-of-sync
+    # nodes. Also drop bare Server names that are a prefix of a more specific one
+    # ("nginx" vs "nginx/1.25.1" is the same product, not two versions).
+    raw_versions = sorted({b["server"] for b in backends if b["server"]})
+    server_versions = [s for s in raw_versions
+                       if not any(o != s and o.startswith(s) for o in raw_versions)]
+    patch_drift = load_balanced and len(server_versions) > 1
+
+    skew = 0.0
+    if load_balanced:
+        reps = []
+        for members in groups.values():
+            ds = [m["date_epoch"] for m in members if m.get("date_epoch")]
+            if ds:
+                reps.append(min(ds))  # each backend's earliest observed Date
+        skew = round(max(reps) - min(reps), 1) if len(reps) >= 2 else 0.0
 
     concerns: list[str] = []
     if patch_drift:
@@ -77,7 +91,7 @@ def cluster_backends(samples: list[dict]) -> dict:
         concerns.append(f"~{skew:.0f}s clock skew between backends — nodes are not time-synced")
     return {
         "distinct_backends": len(groups),
-        "load_balanced": len(groups) > 1,
+        "load_balanced": load_balanced,
         "backends": backends,
         "patch_drift": patch_drift,
         "server_versions": server_versions if patch_drift else [],
@@ -86,21 +100,31 @@ def cluster_backends(samples: list[dict]) -> dict:
     }
 
 
-# CDN / WAF / cache / proxy vendors, by header signatures ("key:value" lowercased).
-_EDGE_SIGNS: list[tuple[str, list[str]]] = [
-    ("Cloudflare", ["cf-ray:", "cf-cache-status:", "server:cloudflare"]),
-    ("CloudFront", ["x-amz-cf-id:", "x-amz-cf-pop:", "via:", "server:cloudfront"]),
-    ("Fastly", ["x-served-by:cache", "x-fastly", "fastly"]),
-    ("Akamai", ["x-akamai", "akamai", "server:akamaighost"]),
-    ("Varnish", ["x-varnish:", "via:varnish", "via: varnish"]),
-    ("Sucuri", ["x-sucuri-id:", "x-sucuri-cache:", "server:sucuri"]),
-    ("Imperva/Incapsula", ["x-iinfo:", "incap_ses", "visid_incap"]),
-    ("AWS ELB/ALB", ["server:awselb", "awsalb="]),
-    ("Vercel", ["server:vercel", "x-vercel-"]),
-    ("Netlify", ["server:netlify", "x-nf-request-id:"]),
-    ("Google Frontend", ["server:gws", "server:google frontend", "via:1.1 google"]),
-]
-_CACHE_HDRS = ("age", "x-cache", "cf-cache-status", "x-cache-hits", "x-served-by")
+# Vendor detection is anchored to where the signal actually proves fronting — an
+# exact header KEY, a substring of the Server value, or a substring of the Via
+# value — never a bare substring of the whole header blob (which false-positived
+# e.g. any "Via:" as CloudFront and CDN names appearing in CSP/Link values).
+_EDGE_KEY: dict[str, str] = {
+    "cf-ray": "Cloudflare", "cf-cache-status": "Cloudflare",
+    "x-amz-cf-id": "CloudFront", "x-amz-cf-pop": "CloudFront",
+    "x-fastly-request-id": "Fastly",
+    "x-akamai-transformed": "Akamai", "akamai-grn": "Akamai", "x-akamai-request-id": "Akamai",
+    "x-varnish": "Varnish",
+    "x-sucuri-id": "Sucuri", "x-sucuri-cache": "Sucuri",
+    "x-iinfo": "Imperva/Incapsula",
+    "x-nf-request-id": "Netlify",
+    "x-vercel-id": "Vercel", "x-vercel-cache": "Vercel",
+}
+_SERVER_SIGNS: dict[str, str] = {
+    "cloudflare": "Cloudflare", "cloudfront": "CloudFront", "akamaighost": "Akamai",
+    "sucuri": "Sucuri", "awselb": "AWS ELB/ALB", "vercel": "Vercel", "netlify": "Netlify",
+    "gws": "Google Frontend", "google frontend": "Google Frontend", "varnish": "Varnish",
+}
+_VIA_SIGNS: dict[str, str] = {
+    "cloudfront": "CloudFront", "varnish": "Varnish", "google": "Google Frontend",
+    "vegur": "Heroku", "squid": "Squid", "haproxy": "HAProxy",
+}
+_CACHE_HDRS = ("age", "x-cache", "cf-cache-status", "x-cache-hits")
 _CDN_VENDORS = {"Cloudflare", "CloudFront", "Fastly", "Akamai", "Sucuri",
                 "Imperva/Incapsula", "Google Frontend"}
 
@@ -109,10 +133,22 @@ def edge_layers(headers: dict[str, str]) -> dict:
     """Detect CDN/WAF/cache/proxy layers in front of the origin from headers."""
 
     low = {k.lower(): (v or "") for k, v in headers.items()}
-    text = " ".join(f"{k}:{v}" for k, v in low.items()).lower()
-    vendors = sorted({name for name, signs in _EDGE_SIGNS if any(s in text for s in signs)})
-    via = low.get("via", "")
-    proxy_hops = [h.strip() for h in via.split(",") if h.strip()]
+    vendors: set[str] = set()
+    for key, vendor in _EDGE_KEY.items():
+        if key in low:
+            vendors.add(vendor)
+    server = low.get("server", "").lower()
+    for sub, vendor in _SERVER_SIGNS.items():
+        if sub in server:
+            vendors.add(vendor)
+    via = low.get("via", "").lower()
+    for sub, vendor in _VIA_SIGNS.items():
+        if sub in via:
+            vendors.add(vendor)
+    if "cache" in low.get("x-served-by", "").lower():
+        vendors.add("Fastly")  # Fastly/Varnish CDN cache node
+
+    proxy_hops = [h.strip() for h in low.get("via", "").split(",") if h.strip()]
     cache_headers = [h for h in _CACHE_HDRS if h in low]
     behind_cdn = any(v in _CDN_VENDORS for v in vendors)
     concerns: list[str] = []
@@ -121,7 +157,7 @@ def edge_layers(headers: dict[str, str]) -> dict:
                         "to test it directly and bypass the edge protection")
     elif not vendors:
         concerns.append("no CDN/WAF fronting detected — requests likely reach the origin directly")
-    return {"vendors": vendors, "behind_cdn": behind_cdn,
+    return {"vendors": sorted(vendors), "behind_cdn": behind_cdn,
             "proxy_hops": proxy_hops, "cache_layer": bool(cache_headers),
             "cache_headers": cache_headers, "concerns": concerns}
 
@@ -141,7 +177,8 @@ def summarize_http_behavior(*, baseline_status: int | None, connection: str | No
                         "intermediary enforced a header-size limit before the origin")
     return {
         "baseline_status": baseline_status,
-        "keep_alive": (connection or "").lower() != "close",
+        # keep-alive can't be asserted from a Connection: close probe; report the
+        # server's Connection header verbatim rather than a misleading boolean.
         "connection_header": connection,
         "http_1_0_status": http10_status,
         "invalid_method_status": invalid_method_status,
@@ -157,11 +194,21 @@ def ratelimit_summary(statuses: list[int | None], *, first_block: int | None,
     """Summarise a burst's status codes into a rate-limit behaviour profile."""
 
     blocked = [s for s in statuses if s in (429, 403, 503)]
-    verdict = "no_rate_limit"
-    if first_block is not None:
+    first_ok = bool(statuses) and statuses[0] not in (429, 403, 503)
+    # Rate limiting means early requests SUCCEED and a later one is blocked. A block
+    # on request #1 (or a status that's constant across the burst) is a baseline
+    # error / blanket block, not throttling.
+    if first_block is not None and first_block > 1 and first_ok:
         verdict = "rate_limited"
+    elif first_block is not None:
+        verdict = "endpoint_blocked"  # blocked from the start — not throttling
+    else:
+        verdict = "no_rate_limit"
     concerns: list[str] = []
-    if bypass_reset:
+    if verdict == "endpoint_blocked":
+        concerns.append("the endpoint returns a block status from the first request — a blanket "
+                        "block / auth requirement, not rate limiting")
+    if bypass_reset and verdict == "rate_limited":
         concerns.append("changing X-Forwarded-For reset the limit — the limiter keys on a "
                         "spoofable client-IP header (per-IP bypass)")
     if first_block is None and len(statuses) >= 10:

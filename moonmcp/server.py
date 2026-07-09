@@ -2759,13 +2759,18 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 
     interactions: list[dict] = []
     if oast_token:
-        poll = ctx.oast.poll_target(oast_token)
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
-                interactions = oastmod.parse_interactions(r.text())
-            except Exception:
-                interactions = []
+        # The built-in self-host catcher (oast_selfhost) records callbacks locally
+        # and sets no poll_url — read it directly, like ssrf_probe / oast_poll do.
+        if ctx.oast_server is not None and ctx.oast_server.running:
+            interactions = ctx.oast_server.interactions(oast_token)
+        else:
+            poll = ctx.oast.poll_target(oast_token)
+            if poll:
+                try:
+                    r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
+                    interactions = oastmod.parse_interactions(r.text())
+                except Exception:
+                    interactions = []
 
     verdict = confirmmod.evaluate(
         reflected=reflected, status_changed=status_changed, length_delta=length_delta,
@@ -2833,9 +2838,19 @@ async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
         r = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
         tested.append((engine, payload, r.text(200_000)))
     findings = probesmod.ssti_findings(b.text(200_000), tested)
-    verdict = confirmmod.evaluate(reflected=bool(findings),
-                                  injection_hits=[f"ssti/{f['engine']}" for f in findings])
-    return {"target": url, "param": param, **verdict, "engines": findings}
+    # A single engine evaluating is a real signal; more than one "engine" rendering
+    # 51317 at once is contradictory (a page emitting the digits by coincidence) —
+    # downgrade rather than assert a confirmed multi-engine SSTI.
+    contradictory = len(findings) > 1
+    verdict = confirmmod.evaluate(
+        reflected=bool(findings) and not contradictory,
+        injection_hits=[f"ssti/{f['engine']}" for f in findings] if not contradictory else [])
+    out = {"target": url, "param": param, **verdict, "engines": findings}
+    if contradictory:
+        out["verdict"] = "inconclusive"
+        out["note"] = ("multiple template engines appear to evaluate the same arithmetic — likely "
+                       "a coincidental digit match on the page, not SSTI; verify manually")
+    return out
 
 
 @mcp.tool()
@@ -2852,21 +2867,28 @@ async def sqli_probe(target: str, param: str, method: str = "GET") -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
-    eu, eb = _with_param(url, param, probesmod.SQLI_ERROR, m)
-    er = await ctx.http.fetch(eu, method=m, body=eb, follow_redirects=False, scope_check=_scope_check())
+    async def _get(value: str):
+        u, b = _with_param(url, param, value, m)
+        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=_scope_check())
+
+    er = await _get(probesmod.SQLI_ERROR)
     hits = injmod.match_signatures(er.text(200_000), class_id="sqli")
-    tu, tb = _with_param(url, param, probesmod.SQLI_TRUE, m)
-    tr = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
-    fu, fb = _with_param(url, param, probesmod.SQLI_FALSE, m)
-    fr = await ctx.http.fetch(fu, method=m, body=fb, follow_redirects=False, scope_check=_scope_check())
-    bool_diff = (len(tr.body) != len(fr.body)) or (tr.status != fr.status)
-    verdict = confirmmod.evaluate(injection_hits=[f"{h['class']}/{h['technology']}" for h in hits],
-                                  status_changed=(tr.status != fr.status),
-                                  length_delta=len(tr.body) - len(fr.body))
+    # Send each of TRUE/FALSE twice: a real boolean-based SQLi is REPRODUCIBLE
+    # (true==true, false==false, true!=false), which rejects inter-request noise.
+    t1, t2 = await _get(probesmod.SQLI_TRUE), await _get(probesmod.SQLI_TRUE)
+    f1, f2 = await _get(probesmod.SQLI_FALSE), await _get(probesmod.SQLI_FALSE)
+    true_stable = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
+    false_stable = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
+    differs = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
+    bool_diff = bool(true_stable and false_stable and differs)
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"{h['class']}/{h['technology']}" for h in hits],
+        status_changed=bool_diff and (t1.status != f1.status),
+        length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0)
     return {"target": url, "param": param, **verdict, "error_signatures": hits[:10],
-            "boolean_differential": bool_diff,
-            "true_status": tr.status, "true_len": len(tr.body),
-            "false_status": fr.status, "false_len": len(fr.body)}
+            "boolean_differential": bool_diff, "reproducible": bool(true_stable and false_stable),
+            "true_status": t1.status, "true_len": len(t1.body),
+            "false_status": f1.status, "false_len": len(f1.body)}
 
 
 @mcp.tool()
@@ -2973,7 +2995,9 @@ async def backend_probe(target: str, samples: int = 12) -> dict:
             "server": r.header("Server"),
             "powered_by": r.header("X-Powered-By"),
             "via": r.header("Via"),
-            "backend": r.header("X-Backend-Server") or r.header("X-Served-By") or r.header("X-Server"),
+            # X-Served-By is a CDN cache-node id (unique per edge PoP) → excluded so
+            # it doesn't inflate the backend count; prefer origin-identifying headers.
+            "backend": r.header("X-Backend-Server") or r.header("X-Server"),
             "cookies": [c.split("=", 1)[0].strip() for c in r.get_all("set-cookie")],
             "date_epoch": inframod.parse_http_date(r.header("Date")),
             "elapsed_ms": r.elapsed_ms,
@@ -3042,15 +3066,29 @@ async def vhost_probe(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     bogus = "moonvhost-notreal.example"
+    # Two identical baseline requests first → measure the page's natural jitter so
+    # a dynamic page (timestamps, CSRF tokens) isn't mistaken for host validation.
     base = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+    base2 = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
     bh = await ctx.http.fetch(url, headers={"Host": bogus}, follow_redirects=False, scope_check=_scope_check())
     xfh = await ctx.http.fetch(url, headers={"X-Forwarded-Host": bogus}, follow_redirects=False,
                                scope_check=_scope_check())
 
     base_body = base.text(200_000)
-    host_validated = (bh.status != base.status) or (abs(len(bh.body) - len(base.body)) > 200)
-    reflected_host = bogus in bh.text(200_000) and bogus not in base_body
-    reflected_xfh = bogus in xfh.text(200_000) and bogus not in base_body
+    jitter = abs(len(base.body) - len(base2.body))
+    host_validated = (bh.status != base.status) or (abs(len(bh.body) - len(base.body)) > jitter + 256)
+
+    def _reflects(r) -> bool:
+        # Reflected in the body OR echoed into a routing/redirect header.
+        if bogus in r.text(200_000) and bogus not in base_body:
+            return True
+        for h in ("Location", "Refresh", "Content-Location", "Link"):
+            if bogus in (r.header(h) or ""):
+                return True
+        return False
+
+    reflected_host = _reflects(bh)
+    reflected_xfh = _reflects(xfh)
     concerns: list[str] = []
     if not host_validated:
         concerns.append("the edge serves the same app for an arbitrary Host — host-header not "
