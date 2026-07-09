@@ -6,6 +6,12 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Tool-exposure profiles + a CLI bridge.** `MOONMCP_PROFILE` (`full`/`strix`/
+  `passive`/`knowledge`/`recon`) + `MOONMCP_EXPOSE_TOOLS` / `MOONMCP_HIDE_TOOLS`
+  expose a *curated slice* of MoonMCP; `moonmcp tools` and `moonmcp call <tool>`
+  let a **shell-based agent** (e.g. Strix's command tool, or CI) invoke MoonMCP
+  tools non-interactively and get JSON — so MoonMCP can be a shared brain/memory/
+  guard for a tool without an MCP client. `server_status` shows the active profile.
 - **Shared memory hub** (`memory_add` / `memory_search` / `memory_get` /
   `memory_stats` + `memory://recent`): a persistent, cross-agent SQLite store
   (stdlib, FTS5-ranked search) so a chain of agents shares state instead of

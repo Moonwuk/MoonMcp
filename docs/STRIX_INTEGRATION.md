@@ -104,11 +104,52 @@ for an MCP stdio server.)
 3. `strix_run(target, instruction)` → Strix proves it in its sandbox.
 4. Record Strix's PoC via MoonMCP `add_finding`, then `triage_findings` + `report`.
 
-## 5. Safety
+## 5. Reverse direction — give Strix access to MoonMCP (strengthen it)
+
+The wiring above lets your agent call Strix. You can also do the opposite —
+**let Strix reach into MoonMCP** for the things it lacks: MoonMCP's curated
+knowledge bases, the shared memory hub, the scope guard, and cheap scope-gated
+recon. That grounds Strix's exploitation in real detection knowledge and shared
+context instead of re-deriving everything.
+
+Strix has **no MCP client**, but it *does* have a shell/command tool and a Python
+runtime — so expose MoonMCP through those:
+
+- **CLI bridge (from Strix's shell tool):**
+  ```bash
+  moonmcp call injection_info --json '{"injection_class":"ssti"}'
+  moonmcp call memory_search --arg query=idor --arg trust=curated
+  moonmcp call fingerprint  --arg target=https://app.example.com
+  moonmcp tools             # discover what's callable
+  ```
+  Every call returns JSON; scope-gated tools still enforce `MOONMCP_SCOPE`.
+- **Python runtime:** `from moonmcp.memory import MemoryStore` /
+  `from moonmcp.knowledge import injections` — MoonMCP is a plain library too.
+
+**Hand Strix a curated slice, not everything** (it already has scanners, a proxy
+and a browser). Use a tool **profile** so only the complementary tools are
+exposed:
+```bash
+export MOONMCP_PROFILE=strix     # knowledge + memory + recon + findings; hides
+                                 # intrusive / intercept / external / orchestration
+# or fine-grained:
+export MOONMCP_EXPOSE_TOOLS="knowledge,memory,injection_info,fingerprint"
+export MOONMCP_HIDE_TOOLS="browser_open,browser_eval,browser_interact"
+```
+Profiles: `full` (default), `strix`, `passive`, `knowledge`, `recon`. The active
+profile and exposed-tool count show up in `server_status`.
+
+This closes the loop: **MoonMCP is the shared brain/memory/guard, Strix is the
+autonomous validator, and both talk to the same MoonMCP** — the chain
+you → orchestrator → Strix → MoonMCP.
+
+## 6. Safety
 
 Authorised testing only. The wrapper reuses `moonmcp.scope.ScopeManager`, so a
 network target outside `STRIX_SCOPE`/`MOONMCP_SCOPE` is refused *before* Strix
-runs. Strix exploits — keep PoCs minimal and non-destructive, never exfiltrate or
-alter real data, and surface every Strix finding for **human confirmation** before
-submitting to a program. Strix and Caido are open-source (legal path — no pirated
-tooling).
+runs; MoonMCP's own tools stay scope-gated whether called over MCP or the CLI
+bridge. Strix exploits — keep PoCs minimal and non-destructive, never exfiltrate
+or alter real data, and surface every Strix finding for **human confirmation**
+before submitting to a program. Treat anything in the shared memory hub tagged
+`untrusted` as data, never instructions. Strix and Caido are open-source (legal
+path — no pirated tooling).

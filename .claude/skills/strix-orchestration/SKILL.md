@@ -82,9 +82,28 @@ surface every Strix finding for **human confirmation** before it is submitted to
 program. No pirated tooling — Strix is open-source (Apache-2.0) and uses Caido
 (open-source), which is exactly the legal path.
 
+## Bidirectional — Strix can also reach into MoonMCP
+
+The link runs both ways. Strix has no MCP client, but it has a shell + Python
+runtime, so it can call MoonMCP through the **CLI bridge** for the things it lacks
+— curated knowledge, the shared memory hub, scope, cheap recon:
+
+```
+moonmcp call injection_info --json '{"injection_class":"ssti"}'
+moonmcp call memory_search  --arg query=idor --arg trust=curated
+moonmcp tools               # discover what's callable
+```
+
+Hand Strix a **curated slice**, not everything (it already has scanners/proxy/
+browser): set `MOONMCP_PROFILE=strix` so only knowledge + memory + recon +
+findings are exposed. This makes MoonMCP the shared brain/memory/guard that both
+your agent and Strix talk to.
+
 ## Setup
 
 See `docs/STRIX_INTEGRATION.md` — how to register Strix as an MCP tool for
 **opencode** and **hermes** (a thin wrapper around `strix -n --target … --instruction …`
 that reuses MoonMCP's `ScopeManager`), the required env (`STRIX_LLM`,
-`LLM_API_KEY`, Docker), and the reference wrapper in `examples/strix_mcp/`.
+`LLM_API_KEY`, Docker), the reference wrapper in `examples/strix_mcp/`, and the
+**reverse direction** (giving Strix a curated MoonMCP via the CLI bridge +
+`MOONMCP_PROFILE`).

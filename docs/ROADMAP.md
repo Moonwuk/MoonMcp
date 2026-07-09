@@ -121,6 +121,13 @@ with a working PoC. This is the composable answer to Strix's monolithic
   `strix_run` / `strix_result` / `strix_available`, **scope-gated by reusing
   `moonmcp.scope.ScopeManager`** so Strix inherits MoonMCP's guard, plus
   `docs/STRIX_INTEGRATION.md` (opencode + hermes wiring).
+- ✅ **Reverse direction — MoonMCP inside Strix.** Strix has no MCP client but has
+  a shell + Python runtime, so MoonMCP is reachable via a **CLI bridge**
+  (`moonmcp call <tool>` / `moonmcp tools`, JSON out) and `import moonmcp`. **Tool
+  profiles** (`MOONMCP_PROFILE=strix` + `MOONMCP_EXPOSE_TOOLS`/`MOONMCP_HIDE_TOOLS`)
+  hand Strix a *curated slice* — knowledge + memory + recon + findings, not the
+  scanners/proxy it already has. This makes MoonMCP the shared brain/memory/guard
+  in the `you → orchestrator → Strix → MoonMCP` chain.
 - ✅ **Shared memory hub** (`moonmcp/memory.py`) — the keystone that lets a chain
   of agents share state instead of re-deriving it. A persistent SQLite store
   (stdlib, FTS5-ranked search, `MOONMCP_STATE_DIR/memory.db`) with **trust +

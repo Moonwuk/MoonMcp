@@ -134,6 +134,60 @@ TOOL_FAMILY: dict[str, str] = {
     name: fam for fam, (_t, _b, names) in FAMILIES.items() for name in names
 }
 
+# Named exposure profiles → the set of families to expose. Used to hand a *curated
+# slice* of MoonMCP to another agent (e.g. embed the knowledge + memory + recon
+# slice inside Strix, which already has its own scanners/proxy/browser). ``full``
+# (None) exposes everything and is the default.
+PROFILES: dict[str, set[str] | None] = {
+    "full": None,
+    # For strengthening an external autonomous tool (Strix): give it MoonMCP's
+    # reference brain + shared memory + cheap scope-gated recon, NOT the heavy
+    # scanners/proxy it already has (intrusive / external / intercept / orchestration).
+    "strix": {"setup", "passive_osint", "light_active", "knowledge", "memory", "reporting"},
+    # No active probing of the target — safe to expose broadly.
+    "passive": {"setup", "passive_osint", "knowledge", "memory", "reporting"},
+    # Pure offline reference + shared memory.
+    "knowledge": {"knowledge", "memory"},
+    # Recon-only (no knowledge bases, no memory).
+    "recon": {"setup", "passive_osint", "light_active", "orchestration", "reporting"},
+}
+
+# Always reachable so an agent can orient itself and check scope, whatever the profile.
+_ALWAYS_ON = {"server_status", "tool_catalog", "scope_list"}
+
+
+def profile_names() -> list[str]:
+    return list(PROFILES)
+
+
+def select_profile(all_names, *, profile: str | None = None,
+                   expose=(), hide=()) -> set[str]:
+    """Return the subset of ``all_names`` to expose for the given profile /
+    expose-list / hide-list. Names in ``expose``/``hide`` may be tool names or
+    family names. Empty inputs → expose everything (the default)."""
+
+    names = set(all_names)
+    prof = (profile or "").strip().lower()
+    expose = {str(e).strip() for e in expose if str(e).strip()}
+    hide = {str(h).strip() for h in hide if str(h).strip()}
+    if not prof and not expose and not hide:
+        return names
+
+    fam_set = PROFILES.get(prof)
+    if prof in PROFILES and fam_set is not None:
+        allowed = {n for n in names if TOOL_FAMILY.get(n) in fam_set}
+    elif expose:  # an explicit expose-list with no (or 'full') profile → whitelist
+        allowed = set()
+    else:  # 'full', unknown profile, or hide-only → start from everything
+        allowed = set(names)
+
+    if expose:
+        allowed |= {n for n in names if n in expose or TOOL_FAMILY.get(n) in expose}
+    if hide:
+        allowed -= {n for n in names if n in hide or TOOL_FAMILY.get(n) in hide}
+    allowed |= (names & _ALWAYS_ON)
+    return allowed
+
 
 def _first_sentence(text: str, limit: int = 160) -> str:
     """The first sentence of a tool description (what the tool is *for*)."""

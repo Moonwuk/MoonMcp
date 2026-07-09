@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import os
 import platform
 import re
 from collections.abc import Awaitable, Callable
@@ -344,6 +345,8 @@ async def server_status() -> dict:
         "python": platform.python_version(),
         "scope": ctx.scope.entries(),
         "scope_enforced": s.enforce_scope,
+        "tool_profile": os.environ.get("MOONMCP_PROFILE") or "full",
+        "tools_exposed": len(mcp._tool_manager.list_tools()),
         "active_program": ctx.programs.active.summary() if ctx.programs.active else None,
         "auth_context": ctx.auth.redacted(),
         "block_private_addresses": s.block_private,
@@ -2954,6 +2957,34 @@ def privesc_hunt(target: str = "the compromised host", platform: str = "") -> st
     """KB-backed privilege-escalation triage from an authorised foothold (enumerate → match → verify)."""
 
     return promptmod.privesc_hunt(target, platform)
+
+
+def _apply_tool_profile() -> None:
+    """Filter the registered tools down to a curated slice when
+    ``MOONMCP_PROFILE`` / ``MOONMCP_EXPOSE_TOOLS`` / ``MOONMCP_HIDE_TOOLS`` are set.
+
+    This is how a *curated* MoonMCP is handed to another agent — e.g. embedding
+    the knowledge + memory + recon slice (``MOONMCP_PROFILE=strix``) inside a tool
+    that already has its own scanners/proxy. Default (no env) exposes everything.
+    """
+
+    profile = os.environ.get("MOONMCP_PROFILE")
+    expose = _split_entries(os.environ.get("MOONMCP_EXPOSE_TOOLS"))
+    hide = _split_entries(os.environ.get("MOONMCP_HIDE_TOOLS"))
+    if not (profile or expose or hide):
+        return
+    tools = mcp._tool_manager._tools
+    all_names = set(tools)
+    if profile and profile.strip().lower() not in catalogmod.PROFILES:
+        import sys
+        print(f"[moonmcp] unknown MOONMCP_PROFILE={profile!r}; known: "
+              f"{catalogmod.profile_names()} — exposing all", file=sys.stderr)
+    allowed = catalogmod.select_profile(all_names, profile=profile, expose=expose, hide=hide)
+    for name in all_names - allowed:
+        tools.pop(name, None)
+
+
+_apply_tool_profile()
 
 
 def run() -> None:

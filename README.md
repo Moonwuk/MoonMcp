@@ -225,6 +225,23 @@ See [`examples/claude_desktop_config.json`](examples/claude_desktop_config.json)
 Then, in the client: *"Using MoonMCP, run recon on example.com"* — the agent will
 call `scope_add`, then the passive/light tools, and summarise the attack surface.
 
+### Use it from a shell-based agent (no MCP client needed)
+
+Any agent with a shell (or a CI step) can drive MoonMCP without an MCP client:
+
+```bash
+moonmcp tools                                              # list exposed tools
+moonmcp call fingerprint   --arg target=https://example.com
+moonmcp call injection_info --json '{"injection_class":"ssti"}'
+```
+
+Each call prints JSON; scope-gated tools still enforce `MOONMCP_SCOPE`. Expose a
+**curated slice** with a profile — `MOONMCP_PROFILE=strix` (knowledge + memory +
+recon + findings; hides the heavy scanners/proxy), or `passive` / `knowledge` /
+`recon`, or fine-grained `MOONMCP_EXPOSE_TOOLS` / `MOONMCP_HIDE_TOOLS`. This is how
+MoonMCP plugs into a tool like **Strix** as a shared brain/memory/guard
+(see [`docs/STRIX_INTEGRATION.md`](docs/STRIX_INTEGRATION.md)).
+
 ### Claude Code skill
 
 A packaged **skill** ships in [`.claude/skills/moonmcp/`](.claude/skills/moonmcp/SKILL.md)
