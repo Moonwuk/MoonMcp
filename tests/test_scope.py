@@ -103,6 +103,40 @@ def test_public_ip_unaffected_by_private_guard():
     assert s.is_in_scope("8.8.8.8")
 
 
+def test_obfuscated_ip_literals_are_blocked():
+    # decimal / hex / octal / short-form encodings of 127.0.0.1 must not slip past.
+    s = ScopeManager(enforce=True, block_private=True)
+    for form in ("2130706433", "0x7f000001", "0177.0.0.1", "127.1", "017700000001"):
+        ok, reason = s.evaluate(form)
+        assert not ok, form
+        assert "private/reserved" in reason, form
+    # IPv4-mapped IPv6 loopback too
+    assert s.blocked_connect_reason("::ffff:127.0.0.1") is not None
+
+
+def test_blocked_connect_reason_resolves_hostnames():
+    # a hostname that RESOLVES to an internal IP must be blocked at connect time,
+    # even though it is not an IP literal and is nominally in scope.
+    resolved = {"internal.example.com": ["10.0.0.5"],
+                "metadata.example.com": ["169.254.169.254"],
+                "public.example.com": ["93.184.216.34"]}
+    s = ScopeManager(enforce=True, block_private=True,
+                     resolver=lambda h: resolved.get(h, []))
+    s.add("example.com")
+    assert s.blocked_connect_reason("internal.example.com") is not None
+    assert s.blocked_connect_reason("metadata.example.com") is not None
+    assert s.blocked_connect_reason("public.example.com") is None
+    # disabling the guard makes it a no-op
+    s.block_private = False
+    assert s.blocked_connect_reason("internal.example.com") is None
+
+
+def test_blocked_connect_reason_unresolvable_is_open():
+    # can't resolve → can't connect anyway → don't hard-block
+    s = ScopeManager(block_private=True, resolver=lambda h: [])
+    assert s.blocked_connect_reason("nxdomain.invalid") is None
+
+
 def test_remove_entry():
     s = ScopeManager()
     s.add("example.com")

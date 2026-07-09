@@ -20,6 +20,8 @@ bug-bounty programs carve exceptions out of a wildcard.
 from __future__ import annotations
 
 import ipaddress
+import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -71,18 +73,39 @@ def normalize_target(raw: str) -> str:
     return value.rstrip(".").lower()
 
 
-def is_blocked_address(host: str) -> bool:
-    """True if *host* is an IP literal in a private/reserved/loopback/link-local
-    range that should be off-limits by default (SSRF guard).
+def canonical_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return an IP address object if *host* is any IP literal, else ``None``.
 
-    Non-IP hostnames return False here — hostname→IP resolution is guarded
-    separately by the tools that resolve.
+    Crucially this also recognises the *obfuscated* IPv4 forms an SSRF attacker
+    uses to slip past a naive dotted-quad check — decimal (``2130706433``),
+    hex (``0x7f000001``), octal (``017700000001``) and short (``127.1``) — by
+    routing numeric-looking input through :func:`socket.inet_aton`.
     """
 
+    h = host.strip()
+    if not h:
+        return None
     try:
-        addr = ipaddress.ip_address(host)
+        return ipaddress.ip_address(h)
     except ValueError:
-        return False
+        pass
+    # Legacy/obfuscated IPv4 literal — only attempt when the token is numeric-ish
+    # (hex digits, 'x', dots) so real hostnames like "cafe.example" aren't coerced.
+    if all(c in "0123456789abcdefABCDEFxX." for c in h):
+        try:
+            packed = socket.inet_aton(h)
+        except OSError:
+            return None
+        return ipaddress.IPv4Address(packed)
+    return None
+
+
+def _ip_is_blocked(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True if *addr* is in a private/reserved range that is off-limits by default."""
+
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:  # ::ffff:127.0.0.1 must be judged as its IPv4 form
+        addr = mapped
     return bool(
         addr.is_private
         or addr.is_loopback
@@ -91,6 +114,19 @@ def is_blocked_address(host: str) -> bool:
         or addr.is_multicast
         or addr.is_unspecified
     )
+
+
+def is_blocked_address(host: str) -> bool:
+    """True if *host* is an IP literal (including obfuscated IPv4 encodings) in a
+    private/reserved/loopback/link-local range that should be off-limits by
+    default (SSRF guard).
+
+    Non-IP hostnames return False here — hostname→IP resolution is guarded at
+    connect time by :meth:`ScopeManager.blocked_connect_reason`.
+    """
+
+    ip = canonical_ip(host)
+    return False if ip is None else _ip_is_blocked(ip)
 
 
 def _as_network(entry: str) -> ipaddress._BaseNetwork | None:
@@ -124,15 +160,68 @@ class _DomainRule:
 class ScopeManager:
     """Holds the in-scope allowlist / out-of-scope denylist and checks targets."""
 
-    def __init__(self, enforce: bool = True, block_private: bool = True) -> None:
+    def __init__(self, enforce: bool = True, block_private: bool = True,
+                 resolver: Callable[[str], list[str]] | None = None) -> None:
         self.enforce = enforce
         self.block_private = block_private
+        # resolver(host) -> list of IP strings; defaults to the system resolver.
+        # Injectable so the SSRF guard can be tested without real DNS.
+        self._resolver = resolver
         self._allow_domains: list[_DomainRule] = []
         self._deny_domains: list[_DomainRule] = []
         self._allow_nets: list[ipaddress._BaseNetwork] = []
         self._deny_nets: list[ipaddress._BaseNetwork] = []
         self._raw_allow: list[str] = []
         self._raw_deny: list[str] = []
+
+    def _resolve(self, host: str) -> list[str]:
+        """Resolve *host* to a list of IP strings (empty on failure — fail closed
+        at the caller only for *blocked* answers, open for unresolvable ones since
+        an unresolvable host cannot be connected to anyway)."""
+
+        if self._resolver is not None:
+            try:
+                return list(self._resolver(host))
+            except Exception:
+                return []
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (OSError, UnicodeError):
+            return []
+        return [ai[4][0] for ai in infos]
+
+    def blocked_connect_reason(self, target: str) -> str | None:
+        """SSRF guard applied at *connect* time: return a reason string if
+        connecting to *target* is unsafe, else ``None``.
+
+        Unlike :meth:`evaluate` (which only sees IP literals), this resolves a
+        hostname and blocks it if **any** resolved address is private/reserved —
+        closing the "in-scope hostname that points at 127.0.0.1 / cloud-metadata"
+        SSRF hole. No-op when ``block_private`` is disabled.
+        """
+
+        if not self.block_private:
+            return None
+        try:
+            host = normalize_target(target)
+        except ValueError:
+            return None
+        ip = canonical_ip(host)
+        if ip is not None:
+            if _ip_is_blocked(ip):
+                return f"{host} is a private/reserved address ({ip}) blocked by the SSRF guard"
+            return None
+        for raw in self._resolve(host):
+            try:
+                addr = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if _ip_is_blocked(addr):
+                return (
+                    f"{host} resolves to {addr}, a private/reserved address — blocked by the "
+                    "SSRF guard (set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)"
+                )
+        return None
 
     # -- mutation ----------------------------------------------------------
     @staticmethod
@@ -191,7 +280,8 @@ class ScopeManager:
         return removed
 
     def clear(self) -> None:
-        self.__init__(enforce=self.enforce, block_private=self.block_private)
+        self.__init__(enforce=self.enforce, block_private=self.block_private,
+                      resolver=self._resolver)
 
     # -- querying ----------------------------------------------------------
     @property

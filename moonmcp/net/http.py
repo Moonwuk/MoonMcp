@@ -18,6 +18,7 @@ import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.client import HTTPResponse
+from urllib.parse import urlsplit
 
 from .ratelimit import Governor
 
@@ -38,6 +39,7 @@ class HttpResult:
     error: str | None = None
     truncated: bool = False
     redirect_blocked: str | None = None  # set if a redirect target left the scope
+    blocked_reason: str | None = None  # set if the SSRF connect-guard refused the host
 
     @property
     def ok(self) -> bool:
@@ -206,11 +208,15 @@ class HttpClient:
         user_agent: str,
         default_timeout: float = 10.0,
         max_body: int = DEFAULT_MAX_BODY,
+        connect_guard: Callable[[str], str | None] | None = None,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
         self._timeout = default_timeout
         self._max_body = max_body
+        # connect_guard(host) -> reason-if-blocked | None; applied to every hop
+        # (initial + each redirect) so no fetch reaches a private/internal IP.
+        self._connect_guard = connect_guard
 
     async def fetch(
         self,
@@ -235,6 +241,20 @@ class HttpClient:
         result: HttpResult | None = None
         hops = max_redirects if follow_redirects else 0
         for _ in range(hops + 1):
+            # SSRF connect-guard: resolve+check this hop's host before we touch it.
+            if self._connect_guard is not None:
+                host = urlsplit(current).hostname or current
+                reason = self._connect_guard(host)
+                if reason is not None:
+                    if result is None:  # the very first hop is blocked
+                        return HttpResult(
+                            url=url, final_url=current, status=None, reason="",
+                            headers=[], body=b"", elapsed_ms=0.0,
+                            error=reason, blocked_reason=reason,
+                        )
+                    result.redirect_blocked = current
+                    result.blocked_reason = reason
+                    break
             async with self._gov:
                 result = await asyncio.to_thread(
                     _blocking_fetch,

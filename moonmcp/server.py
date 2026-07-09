@@ -120,7 +120,14 @@ def _require_scope(target: str, *, intrusive: bool = False) -> str:
         raise ToolBlocked(
             "intrusive tools are disabled. Enable with MOONMCP_ALLOW_INTRUSIVE=1."
         )
-    return ctx.scope.check(target)
+    host = ctx.scope.check(target)
+    # Resolve-then-check SSRF guard — covers raw-socket tools (port_scan,
+    # tls_inspect, jarm, desync) as well as an in-scope hostname that points at a
+    # private/internal/cloud-metadata IP. No-op when block_private is disabled.
+    reason = ctx.scope.blocked_connect_reason(target)
+    if reason is not None:
+        raise ScopeError(reason)
+    return host
 
 
 def _scope_check() -> Callable[[str], bool]:
