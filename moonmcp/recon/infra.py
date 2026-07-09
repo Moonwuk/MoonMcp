@@ -86,6 +86,72 @@ def cluster_backends(samples: list[dict]) -> dict:
     }
 
 
+# CDN / WAF / cache / proxy vendors, by header signatures ("key:value" lowercased).
+_EDGE_SIGNS: list[tuple[str, list[str]]] = [
+    ("Cloudflare", ["cf-ray:", "cf-cache-status:", "server:cloudflare"]),
+    ("CloudFront", ["x-amz-cf-id:", "x-amz-cf-pop:", "via:", "server:cloudfront"]),
+    ("Fastly", ["x-served-by:cache", "x-fastly", "fastly"]),
+    ("Akamai", ["x-akamai", "akamai", "server:akamaighost"]),
+    ("Varnish", ["x-varnish:", "via:varnish", "via: varnish"]),
+    ("Sucuri", ["x-sucuri-id:", "x-sucuri-cache:", "server:sucuri"]),
+    ("Imperva/Incapsula", ["x-iinfo:", "incap_ses", "visid_incap"]),
+    ("AWS ELB/ALB", ["server:awselb", "awsalb="]),
+    ("Vercel", ["server:vercel", "x-vercel-"]),
+    ("Netlify", ["server:netlify", "x-nf-request-id:"]),
+    ("Google Frontend", ["server:gws", "server:google frontend", "via:1.1 google"]),
+]
+_CACHE_HDRS = ("age", "x-cache", "cf-cache-status", "x-cache-hits", "x-served-by")
+_CDN_VENDORS = {"Cloudflare", "CloudFront", "Fastly", "Akamai", "Sucuri",
+                "Imperva/Incapsula", "Google Frontend"}
+
+
+def edge_layers(headers: dict[str, str]) -> dict:
+    """Detect CDN/WAF/cache/proxy layers in front of the origin from headers."""
+
+    low = {k.lower(): (v or "") for k, v in headers.items()}
+    text = " ".join(f"{k}:{v}" for k, v in low.items()).lower()
+    vendors = sorted({name for name, signs in _EDGE_SIGNS if any(s in text for s in signs)})
+    via = low.get("via", "")
+    proxy_hops = [h.strip() for h in via.split(",") if h.strip()]
+    cache_headers = [h for h in _CACHE_HDRS if h in low]
+    behind_cdn = any(v in _CDN_VENDORS for v in vendors)
+    concerns: list[str] = []
+    if behind_cdn:
+        concerns.append("a CDN/WAF fronts the origin — find the real origin (origin_discovery) "
+                        "to test it directly and bypass the edge protection")
+    elif not vendors:
+        concerns.append("no CDN/WAF fronting detected — requests likely reach the origin directly")
+    return {"vendors": vendors, "behind_cdn": behind_cdn,
+            "proxy_hops": proxy_hops, "cache_layer": bool(cache_headers),
+            "cache_headers": cache_headers, "concerns": concerns}
+
+
+def summarize_http_behavior(*, baseline_status: int | None, connection: str | None,
+                            http10_status: int | None, invalid_method_status: int | None,
+                            oversized_status: int | None, bare_lf_status: int | None) -> dict:
+    """Turn raw HTTP/1.x edge-case reactions into a behaviour profile + concerns."""
+
+    bare_lf_accepted = bare_lf_status is not None and 200 <= bare_lf_status < 400
+    concerns: list[str] = []
+    if bare_lf_accepted:
+        concerns.append("server accepted bare-LF (no CR) line endings — lenient HTTP parsing, a "
+                        "request-smuggling / desync risk factor; confirm with desync_probe")
+    if oversized_status is None:
+        concerns.append("connection dropped on an oversized header (no HTTP response) — an "
+                        "intermediary enforced a header-size limit before the origin")
+    return {
+        "baseline_status": baseline_status,
+        "keep_alive": (connection or "").lower() != "close",
+        "connection_header": connection,
+        "http_1_0_status": http10_status,
+        "invalid_method_status": invalid_method_status,
+        "oversized_header_status": oversized_status,
+        "bare_lf_status": bare_lf_status,
+        "bare_lf_accepted": bare_lf_accepted,
+        "concerns": concerns,
+    }
+
+
 def ratelimit_summary(statuses: list[int | None], *, first_block: int | None,
                       retry_after: str | None, bypass_reset: bool | None) -> dict:
     """Summarise a burst's status codes into a rate-limit behaviour profile."""

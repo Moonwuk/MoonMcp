@@ -116,6 +116,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"<html><a href='//" + host.encode("utf-8", "replace")
                              + b"/next'>go</a></html>")
             return
+        if self.path.startswith("/edge"):
+            # Looks like it sits behind Cloudflare with a cache layer.
+            self.send_response_only(200)
+            self.send_header("Server", "cloudflare")
+            self.send_header("CF-RAY", "8a1b2c3d4e5f-FRA")
+            self.send_header("CF-Cache-Status", "HIT")
+            self.send_header("Via", "1.1 varnish, 1.1 cloudflare")
+            self.send_header("Age", "42")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if self.path.startswith("/rl"):
             # Rate limit that keys on the (spoofable) X-Forwarded-For header.
             if self.headers.get("X-Forwarded-For"):

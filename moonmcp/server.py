@@ -3108,6 +3108,126 @@ async def ratelimit_probe(target: str, burst: int = 20) -> dict:
                                          retry_after=retry_after, bypass_reset=bypass_reset)}
 
 
+@mcp.tool()
+@active_tool()
+async def tls_behavior(target: str, port: int = 443) -> dict:
+    """**Behavioural TLS profiling.** Compares the certificate served for the real
+    host vs a **bogus SNI** — if a valid cert for another domain comes back, the
+    edge is SNI-routing/shared-hosting (a default-backend / origin-exposure hint);
+    if identical, the host doesn't route on SNI. Also reports supported TLS
+    versions (flagging weak TLS 1.0/1.1), the negotiated cipher, and HTTP/2 (ALPN).
+    In scope only.
+    """
+
+    host, tls_port = _split_host_port(target, port)
+    ctx = get_context()
+    real = await tlsmod.inspect_certificate(host, tls_port, timeout=ctx.settings.timeout,
+                                            server_name=host)
+    bogus = await tlsmod.inspect_certificate(host, tls_port, timeout=ctx.settings.timeout,
+                                             server_name="moontls-notreal.example")
+    profile = await tlsmod.probe_tls_profile(host, tls_port, timeout=ctx.settings.timeout)
+    if not real.connected:
+        return {"target": host, "port": tls_port, "error": "tls_handshake_failed",
+                "detail": real.error}
+    real_serial = real.serial_number
+    bogus_serial = bogus.serial_number if bogus.connected else None
+    sni_routing = bool(bogus_serial) and bogus_serial != real_serial
+    concerns: list[str] = []
+    if profile.weak_versions:
+        concerns.append(f"weak TLS versions accepted: {', '.join(profile.weak_versions)}")
+    if sni_routing:
+        concerns.append("a different certificate is served for an unknown SNI — SNI-based routing "
+                        "/ shared hosting; the default cert may expose another tenant or the origin")
+    if real.expired:
+        concerns.append("the certificate is expired")
+    return {
+        "target": host, "port": tls_port,
+        "certificate": {"subject": real.subject.get("commonName"), "issuer": real.issuer.get("organizationName"),
+                        "san": real.subject_alt_names[:20], "serial": real_serial,
+                        "not_after": real.not_after, "days_until_expiry": real.days_until_expiry},
+        "sni_routing": sni_routing,
+        "default_cert_subject": bogus.subject.get("commonName") if bogus.connected else None,
+        "supported_versions": profile.supported_versions,
+        "weak_versions": profile.weak_versions,
+        "http2": profile.http2,
+        "negotiated_cipher": real.cipher,
+        "concerns": concerns,
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def edge_map(target: str) -> dict:
+    """**Map the edge topology** in front of the origin: which CDN/WAF/cache
+    vendors (Cloudflare, CloudFront, Fastly, Akamai, Sucuri, Imperva, …), the proxy
+    chain (`Via`), and whether a cache layer is present — from the response
+    headers. Tells you whether you're hitting an edge (and should hunt the origin)
+    or the origin directly. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    r = await ctx.http.fetch(url, follow_redirects=True, max_redirects=ctx.settings.max_redirects,
+                             scope_check=_scope_check())
+    if r.status is None:
+        return {"error": "unreachable", "detail": r.error, "url": url}
+    layers = inframod.edge_layers(r.headers_map())
+    return {"target": url, "status": r.status, "server": r.header("Server"), **layers}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def http_behavior(target: str) -> dict:
+    """**Raw HTTP/1.x behaviour fingerprint.** Sends a handful of complete
+    edge-case requests on fresh connections — HTTP/1.0, an unknown method, an
+    oversized header, and **bare-LF** line endings — and reports how the stack
+    reacts. Bare-LF acceptance and inconsistent framing point at **lenient parsing
+    / a proxy-origin mismatch** (request-smuggling surface). Detection-only (no
+    partial requests, nothing left to poison a connection). Intrusive; in scope only.
+    """
+
+    from urllib.parse import urlsplit
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sp = urlsplit(url)
+    host = sp.hostname or ""
+    tls = sp.scheme == "https"
+    hport = sp.port or (443 if tls else 80)
+    path = sp.path or "/"
+    ctx = get_context()
+    t = ctx.settings.timeout
+
+    async def _raw(data: bytes) -> bytes | None:
+        return await desyncmod._raw_request(host, hport, tls, data, t)
+
+    ua = "User-Agent: MoonMCP\r\n"
+    base = await _raw(f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}Connection: close\r\n\r\n".encode("latin-1"))
+    http10 = await _raw(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n{ua}\r\n".encode("latin-1"))
+    badm = await _raw(f"MOONX {path} HTTP/1.1\r\nHost: {host}\r\n{ua}Connection: close\r\n\r\n".encode("latin-1"))
+    big = await _raw((f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}X-Big: "
+                      + "A" * 16384 + "\r\nConnection: close\r\n\r\n").encode("latin-1"))
+    # Bare-LF (no CR) line endings — lenient parsers accept this.
+    lf = await _raw(f"GET {path} HTTP/1.1\nHost: {host}\n{ua.replace(chr(13), '')}Connection: close\n\n".encode("latin-1"))
+
+    base_status, base_server = desyncmod._status_of(base) if base else (None, None)
+    conn = None
+    if base:
+        for hl in base.split(b"\r\n"):
+            if hl.lower().startswith(b"connection:"):
+                conn = hl.split(b":", 1)[1].strip().decode("latin-1", "replace")
+                break
+    summary = inframod.summarize_http_behavior(
+        baseline_status=base_status, connection=conn,
+        http10_status=desyncmod._status_of(http10)[0] if http10 else None,
+        invalid_method_status=desyncmod._status_of(badm)[0] if badm else None,
+        oversized_status=desyncmod._status_of(big)[0] if big else None,
+        bare_lf_status=desyncmod._status_of(lf)[0] if lf else None,
+    )
+    return {"target": url, "server": base_server, **summary}
+
+
 # ---------------------------------------------------------------------------
 # external CLI integration
 # ---------------------------------------------------------------------------

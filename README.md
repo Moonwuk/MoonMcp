@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **112 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **115 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -140,6 +140,9 @@ MoonMCP exposes **112 tools**, **11 resources** and **8 operator prompts**, grou
 | `dns_behavior` | **DNS/zone behaviour:** wildcard-DNS detection (so subdomain enum isn't fooled), DNS load-balancing (rotating A records), IPv6, and the CNAME target (dangling → takeover surface). |
 | `vhost_probe` | **Host-header routing:** does the edge validate the Host or serve the same app for any host (cache/reset poisoning surface)? Is a bogus host **reflected** (host-header injection) directly or via `X-Forwarded-Host`? |
 | `ratelimit_probe` | **Rate-limit behaviour:** finds the throttle threshold/window, `Retry-After`, and whether spoofing `X-Forwarded-For` **resets** the limit (per-IP bypass). Intrusive. |
+| `tls_behavior` | **TLS routing behaviour:** real-host vs **bogus-SNI** cert diff (→ SNI routing / shared hosting / default-cert origin hint), supported versions (flags weak TLS 1.0/1.1), cipher, HTTP/2. |
+| `edge_map` | **Edge topology:** which CDN/WAF/cache vendors front the origin (Cloudflare/CloudFront/Fastly/Akamai/Sucuri/Imperva…), the `Via` proxy chain, cache layer — are you hitting the edge or the origin? |
+| `http_behavior` | **Raw HTTP/1.x fingerprint** (intrusive): reactions to HTTP/1.0, an unknown method, an oversized header, and **bare-LF** line endings → lenient parsing / proxy-origin mismatch (desync surface). Detection-only. |
 
 ### 🔗 Orchestration & reporting
 | Tool | Purpose |

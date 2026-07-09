@@ -82,3 +82,50 @@ async def test_dns_behavior_local(fresh_context):
     assert res["host"] == "127.0.0.1"
     assert "127.0.0.1" in res["a_records"]
     assert res["wildcard_dns"] is False
+
+
+# -- edge_map / http_behavior / tls_behavior --------------------------------
+def test_edge_layers_detects_cloudflare_and_cache():
+    r = infra.edge_layers({"Server": "cloudflare", "CF-RAY": "abc-FRA",
+                           "CF-Cache-Status": "HIT", "Via": "1.1 varnish, 1.1 cloudflare",
+                           "Age": "42"})
+    assert "Cloudflare" in r["vendors"]
+    assert r["behind_cdn"] is True
+    assert r["cache_layer"] is True
+    assert len(r["proxy_hops"]) == 2
+
+
+def test_summarize_http_behavior_flags_bare_lf():
+    r = infra.summarize_http_behavior(baseline_status=200, connection="close",
+                                      http10_status=200, invalid_method_status=501,
+                                      oversized_status=None, bare_lf_status=200)
+    assert r["bare_lf_accepted"] is True
+    assert r["keep_alive"] is False
+    assert any("bare-LF" in c for c in r["concerns"])
+
+
+@pytest.mark.asyncio
+async def test_edge_map_detects_cdn(local_server, fresh_context):
+    base, _ = local_server
+    res = await srv.edge_map(target=f"{base}/edge")
+    assert "Cloudflare" in res["vendors"]
+    assert res["behind_cdn"] is True and res["cache_layer"] is True
+    assert res["concerns"]
+
+
+@pytest.mark.asyncio
+async def test_http_behavior_runs_against_local(local_server, fresh_context):
+    base, _ = local_server
+    res = await srv.http_behavior(target=base)
+    assert res["baseline_status"] == 200
+    # BaseHTTPRequestHandler rejects an unknown method with 501.
+    assert res["invalid_method_status"] in (400, 405, 501)
+    assert "bare_lf_accepted" in res
+
+
+@pytest.mark.asyncio
+async def test_tls_behavior_handshake_fails_gracefully_on_http(local_server, fresh_context):
+    # The local server speaks plain HTTP, so a TLS handshake must fail cleanly.
+    _, port = local_server
+    res = await srv.tls_behavior(target=f"127.0.0.1:{port}")
+    assert res["error"] == "tls_handshake_failed"
