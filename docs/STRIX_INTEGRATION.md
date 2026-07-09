@@ -48,6 +48,10 @@ playbook; this doc is the wiring.
   detached when `wait=false`). With `watch=True` (default) it **opens a terminal
   window that streams Strix's output live** so you can watch it work.
 - `strix_result(run_name=None)` — read a `strix_runs/<name>` directory.
+- `strix_demo(target="demo.example.com")` — **verify the watch window without a
+  real run**: streams a short scripted "Strix run" into a log and opens the live
+  console. No Strix/Docker/LLM, no network — just proof that delegating to Strix
+  from your agent pops a terminal you can watch.
 
 ### Watch Strix work in real time (`watch=True`)
 
@@ -70,6 +74,13 @@ It is **best-effort and never blocks the run**:
 Force a specific emulator with `MOONMCP_TERMINAL` (e.g. `MOONMCP_TERMINAL=kitty`,
 or `MOONMCP_TERMINAL_EXEC` for its exec flag if it isn't `-e`). Disable the window
 entirely with `watch=false`.
+
+**Try it before a real run.** Have your agent call `strix_demo` (or run
+`python examples/strix_mcp/server.py --demo` on the box with your desktop) — a
+terminal should pop open and stream a ~10s scripted run. If it does, `strix_run`
+will do the same with the real Strix output. Run the MCP server *in your graphical
+session* (not a bare SSH shell) so the window can reach your screen; on a headless
+host it falls back to a tmux session / `tail -f` hint instead.
 
 Run it standalone to sanity-check:
 ```bash

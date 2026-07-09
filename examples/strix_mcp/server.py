@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -345,5 +347,84 @@ async def strix_result(run_name: str | None = None) -> dict:
     return _collect_run(run)
 
 
+# A tiny, self-contained "what a Strix run looks like" stream. It sends NO
+# requests and needs neither Strix, Docker nor an LLM — it only writes canned
+# lines (with a small delay) to the log the live console follows, so the operator
+# can confirm the watch window pops on their desktop before spending a real run.
+# Runs as a child ``python -c`` (argv only — no shell), reading the log path and
+# target from argv and the per-line delay from $MOONMCP_DEMO_DELAY.
+_DEMO_SCRIPT = r'''
+import os, sys, time
+log, target = sys.argv[1], sys.argv[2]
+delay = float(os.environ.get("MOONMCP_DEMO_DELAY", "0.6"))
+lines = [
+    "== Strix (DEMO) - autonomous validation; no real requests are sent ==",
+    f"[*] target : {target}",
+    "[*] RoE    : authorised, in-scope only; least-intrusive PoC; stop at proof",
+    "[recon] booting sandbox: Caido proxy + headless browser + exploit runtime ...",
+    "[ooda]  OBSERVE  baseline fetched, attack surface mapped",
+    "[ooda]  ORIENT   MoonMCP lead: reflected {{7*7}} on ?name= -> candidate SSTI",
+    "[ooda]  DECIDE   craft a minimal, non-destructive probe",
+    "[ooda]  ACT      GET /?name={{7331*7}}  ->  response body contains 51317",
+    "[verify] literal payload absent AND arithmetic evaluated -> Jinja2 SSTI CONFIRMED",
+    "[poc]   reproduce: send the URL-encoded {{7331*7}} in ?name=",
+    "[poc]   impact   : server-side template evaluation -> potential RCE (not weaponised)",
+    "[done] 1 vulnerability confirmed; stopped at proof; run saved under strix_runs/",
+]
+with open(log, "a", buffering=1) as f:
+    for ln in lines:
+        f.write(ln + "\n")
+        f.flush()
+        time.sleep(delay)
+'''
+
+
+def _demo_stream_argv(log_path: str, target: str) -> list[str]:
+    """argv for the detached demo streamer (no shell — args are passed directly)."""
+
+    return [sys.executable, "-c", _DEMO_SCRIPT, str(log_path), str(target)]
+
+
+@mcp.tool()
+async def strix_demo(target: str = "demo.example.com") -> dict:
+    """DEMO the live-watch window WITHOUT a real Strix run (no Strix/Docker/LLM,
+    no network). Streams a short, scripted "Strix run" into a log and opens the
+    live console, so you can confirm that delegating to Strix from your agent pops
+    a terminal you can watch. Non-blocking — returns immediately with the
+    `live_console` (how it opened) and the `log` path; the window fills over ~10s.
+    """
+
+    if _live is None:
+        return {"error": "live_unavailable",
+                "detail": "moonmcp.live is not importable; install moonmcp alongside"}
+    log_path, logf = _open_watch_log()
+    if log_path is None:
+        return {"error": "log_unavailable", "detail": "could not create a demo log file"}
+    if logf is not None:
+        logf.close()  # the streamer opens the file itself (append mode)
+    await asyncio.create_subprocess_exec(*_demo_stream_argv(log_path, target))
+    console = _live.open_log_console(log_path, title=f"strix DEMO {target}")
+    return {"demo": True, "target": target, "log": log_path, "live_console": console,
+            "note": "a terminal window should open and stream a ~10s scripted Strix run"}
+
+
+def _run_demo_cli(argv: list[str]) -> None:
+    """`python server.py --demo [target]` — open the console and stream synchronously
+    so a human can eyeball the window without going through an agent."""
+
+    target = next((a for a in argv if not a.startswith("-")), "demo.example.com")
+    log_path, logf = _open_watch_log()
+    if logf is not None:
+        logf.close()
+    console = _live.open_log_console(log_path, title=f"strix DEMO {target}") if _live else None
+    print("live_console:", console)
+    print("log         :", log_path)
+    if log_path is not None:
+        subprocess.run(_demo_stream_argv(log_path, target), check=False)
+
+
 if __name__ == "__main__":
-    mcp.run()
+    if "--demo" in sys.argv[1:]:
+        _run_demo_cli(sys.argv[1:])
+    else:
+        mcp.run()
