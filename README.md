@@ -322,13 +322,26 @@ single place scope lives, so behaviour is uniform and safe:
 ## Augmenting with external CLIs
 
 MoonMCP has native, stdlib implementations for the whole recon workflow, but it
-gets sharper when best-in-class tools are on `PATH`. It auto-detects and can run:
+gets sharper when best-in-class tools are on `PATH` — on **Kali** most already
+are. It auto-detects and can run **36 tools**, grouped by category:
 
-`subfinder`, `httpx`, `nuclei`, `naabu`, `nmap`, `katana`, `ffuf`, `gau`, `dnsx`,
-`amass`, `waybackurls`, `ilspycmd` (.NET decompiler), `monodis`.
+| Category | Tools |
+| --- | --- |
+| subdomain | `subfinder`, `amass`, `assetfinder`, `subjack` |
+| dns | `dnsx`, `dnsrecon`, `dnsenum`, `asnmap` |
+| http | `httpx`, `whatweb`, `wafw00f`, `gowitness` |
+| crawl / url | `katana`, `hakrawler`, `gospider`, `gau`, `waybackurls` |
+| content 🔸 | `ffuf`, `feroxbuster`, `gobuster`, `dirb`, `arjun` |
+| port 🔸 | `naabu`, `nmap`, `masscan` |
+| vuln / cms 🔸 | `nuclei`, `nikto`, `wpscan`, `sqlmap`, `dalfox` |
+| tls | `sslscan`, `sslyze`, `testssl.sh`, `tlsx` |
+| decompile | `ilspycmd`, `monodis` |
 
-If a tool is missing, MoonMCP returns a clear note and the **native fallback** to
-use instead — nothing errors out. Call `external_tools` to see what's available.
+🔸 = **intrusive** — `run_scanner` gates these behind `MOONMCP_ALLOW_INTRUSIVE`
+(on top of the scope check), exactly like the native intrusive tools. If a tool
+is missing, MoonMCP returns a clear note and the **native fallback** to use
+instead — nothing errors out. Call `external_tools` for the live, categorised
+inventory (installed + install hints).
 
 > Note: the ProjectDiscovery `httpx` binary and the Python `httpx` library share a
 > name. MoonMCP detects and ignores the Python shim so it won't be mistaken for the

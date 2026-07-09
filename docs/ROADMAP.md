@@ -50,18 +50,24 @@ for the right tool.
   use which tool, so the capabilities are self-describing rather than tribal
   knowledge.
 
-## Phase 3 — Deep Kali / external-tool integration
+## Phase 3 — Deep Kali / external-tool integration ✅ (core)
 
 **Goal:** when MoonMCP runs on Kali (or any box with the usual toolbox), it
 should safely orchestrate the installed CLIs and parse their output — never
 reinventing nmap/nuclei/ffuf, just driving them behind the scope guard.
 
-- Expand the external-tool registry (auto-detect on PATH) beyond the current set,
-  with a native stdlib fallback documented for each.
-- Scope-gated, structured wrappers that parse tool output into MoonMCP findings.
-- Keep the existing hardening: file-I/O flags are refused, every host/URL token
-  in the args is scope-checked, external tools are gated behind
-  `MOONMCP_ALLOW_EXTERNAL_TOOLS`.
+- ✅ Expanded the external-tool registry to **36 tools** across 11 categories
+  (subdomain, dns, http, crawl, url, content, port, vuln, cms, tls, decompile),
+  each a typed `ToolSpec` with a native fallback + install hint, auto-detected on
+  PATH.
+- ✅ **Intrusive external scanners** (fuzzers, port scanners, active vuln
+  scanners) are now gated behind `MOONMCP_ALLOW_INTRUSIVE` in `run_scanner`, on
+  top of the scope check — matching the native intrusive tools.
+- ✅ `external_tools` returns a **categorised inventory** (installed + intrusive
+  flags + install hints); the file-I/O-flag refusal and per-arg host scope-check
+  are unchanged.
+- ⏭️ Still to do: richer structured parsing (e.g. nmap XML → findings) beyond the
+  JSONL auto-parse.
 
 ## Phase 4 — A Burp-like interception layer *(legal integrations only)*
 

@@ -6,6 +6,11 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Deep Kali integration.** External-tool registry expanded to **36 tools**
+  across 11 categories (typed `ToolSpec` with native fallback + install hint,
+  auto-detected on PATH). Intrusive external scanners (fuzzers, port scanners,
+  active vuln scanners) are gated behind `MOONMCP_ALLOW_INTRUSIVE` in
+  `run_scanner`; `external_tools` now returns a categorised inventory.
 - **`tool_catalog` + Claude Code skill.** A self-describing map of all tools
   (grouped by family, each tagged `scope_gated` / `intrusive`, with the
   recommended recon→report workflow) and a packaged skill

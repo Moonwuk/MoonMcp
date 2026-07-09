@@ -2340,13 +2340,30 @@ async def report(domain: str) -> dict:
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @safe_tool
-async def external_tools() -> dict:
-    """List the external security CLIs MoonMCP knows about and whether each is
-    installed on PATH, plus the native MoonMCP fallback for each. Use before
-    calling run_scanner or vuln_scan to know what is available.
+async def external_tools(category: str | None = None) -> dict:
+    """List the external security CLIs MoonMCP knows about — **grouped by
+    category** (subdomain, dns, http, crawl, content, port, vuln, cms, tls, url,
+    decompile) — with, for each: whether it is installed on PATH, its native
+    MoonMCP fallback, whether it is `intrusive` (gated), and an install hint.
+
+    On Kali most of these are already present. Call this before `run_scanner` /
+    `vuln_scan` to see what is available and what to install. Pass a `category` to
+    filter. `by_category` groups the same data for quick scanning.
     """
 
-    return {"tools": cli.detect_tools(), "runner_enabled": get_context().settings.allow_external_tools}
+    s = get_context().settings
+    grouped = cli.tools_by_category()
+    if category:
+        grouped = {category: grouped.get(category, [])}
+    installed = sorted(n for n, m in cli.detect_tools().items() if m["available"])
+    return {
+        "runner_enabled": s.allow_external_tools,
+        "intrusive_enabled": s.allow_intrusive,
+        "installed": installed,
+        "installed_count": len(installed),
+        "known_count": len(cli.KNOWN_TOOLS),
+        "by_category": grouped,
+    }
 
 
 @mcp.tool()
@@ -2354,17 +2371,28 @@ async def external_tools() -> dict:
 async def run_scanner(tool: str, args: list[str], target: str | None = None) -> dict:
     """Run an installed external security CLI and return its output.
 
-    ``tool`` must be one of the known tools (subfinder, httpx, nuclei, naabu,
-    nmap, katana, ffuf, gau, dnsx, amass, waybackurls). ``args`` are passed
-    through verbatim. If ``target`` is given it is scope-checked first. If the
-    tool is missing, returns a structured note and the native fallback to use
-    instead. JSONL output is auto-parsed. Gated by MOONMCP_ALLOW_EXTERNAL_TOOLS.
+    ``tool`` must be one of the known tools — see `external_tools` for the full,
+    categorised list (subfinder, amass, httpx, whatweb, wafw00f, katana,
+    gau/waybackurls, ffuf/feroxbuster/gobuster, naabu/nmap/masscan,
+    nuclei/nikto/wpscan/sqlmap/dalfox, sslscan/tlsx, …). ``args`` are passed
+    through verbatim. If ``target`` is given it is scope-checked first; every
+    host/URL in ``args`` is scope-checked too. **Intrusive** scanners (fuzzers,
+    port scanners, active vuln scanners) also require MOONMCP_ALLOW_INTRUSIVE. If
+    the tool is missing, returns the native MoonMCP fallback to use instead. JSONL
+    output is auto-parsed. Gated by MOONMCP_ALLOW_EXTERNAL_TOOLS.
     """
 
     ctx = get_context()
     if tool not in cli.KNOWN_TOOLS:
         return {"error": "unknown_tool", "detail": f"{tool} is not a known scanner",
                 "known": list(cli.KNOWN_TOOLS)}
+    # Intrusive external scanners are gated exactly like the native intrusive
+    # tools — scope alone is not enough for a fuzzer/port-scanner/active scanner.
+    if cli.is_intrusive(tool) and not ctx.settings.allow_intrusive:
+        ctx.audit.record("intrusive_blocked", tool="run_scanner", target=(target or tool),
+                         decision="deny")
+        return {"error": "disabled",
+                "detail": f"{tool} is an intrusive scanner; enable with MOONMCP_ALLOW_INTRUSIVE=1."}
     # Refuse file-I/O flags/paths: run_scanner is a network-recon passthrough, not
     # a way to read/write arbitrary files past the host scope check.
     bad = _reject_dangerous_scanner_args(args)
