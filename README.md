@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **67 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **69 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -109,9 +109,11 @@ MoonMCP exposes **67 tools**, **9 resources** and **8 operator prompts**, groupe
 ### 🔗 Orchestration & external tools
 | Tool | Purpose |
 | --- | --- |
+| `probe_batch` | Probe a **list** of hosts/URLs in parallel (liveness, status, title, tech) — the enum→probe step; feed it `enumerate_subdomains`. Scope-gated + rate-limited. |
 | `recon_target` | One-shot passive+light sweep (subdomains → DNS → TLS → HTTP → headers → fingerprint → email security). |
 | `report` | Full safe sweep → a severity-ranked **Markdown** report (surface, posture grades, findings). |
 | `add_finding` / `list_findings` / `clear_findings` | Record / read / clear findings in the session store (also on the `findings://` resource). |
+| `export_findings` | Export findings as **SARIF 2.1.0** (GitHub code-scanning / DAST pipelines) or JSON. |
 | `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
 | `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
 
@@ -290,7 +292,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 67 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 69 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

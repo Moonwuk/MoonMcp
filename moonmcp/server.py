@@ -18,6 +18,7 @@ Tool families
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import platform
 import re
@@ -53,7 +54,7 @@ from .recon import origin as originmod
 from .recon import secrets as secretsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
-from .reporting import format_markdown
+from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, normalize_target
 from .web import behavior as behaviormod
 from .web import cors as corsmod
@@ -1231,6 +1232,32 @@ async def clear_findings(target: str | None = None) -> dict:
     return {"removed": removed, "summary": get_context().findings.summary()}
 
 
+@mcp.tool()
+@safe_tool
+async def export_findings(format: str = "sarif", target: str | None = None,
+                          severity: str | None = None) -> dict:
+    """Export the recorded findings in a machine-readable format for CI / triage.
+
+    `format`: `sarif` (SARIF 2.1.0 — GitHub code-scanning / most DAST pipelines)
+    or `json` (the raw findings + summary). Optionally filter by `target` /
+    `severity`. Returns the document inline; no network.
+    """
+
+    ctx = get_context()
+    fmt = format.strip().lower()
+    findings = [
+        {"id": f.id, "target": f.target, "severity": f.severity, "title": f.title,
+         "type": f.type, "detail": f.detail, "evidence": f.evidence,
+         "source": f.source, "created_at": f.created_at}
+        for f in ctx.findings.list(target=target, severity=severity)
+    ]
+    if fmt == "json":
+        return {"format": "json", "summary": ctx.findings.summary(), "findings": findings}
+    if fmt == "sarif":
+        return {"format": "sarif", "sarif": format_sarif(findings, version=__version__)}
+    return {"error": "invalid_input", "detail": f"unknown format '{format}' (use sarif or json)"}
+
+
 # ---------------------------------------------------------------------------
 # knowledge base — injections (patterns, causes, signatures)
 # ---------------------------------------------------------------------------
@@ -1506,6 +1533,59 @@ async def identify_waf(text: str) -> dict:
 # ---------------------------------------------------------------------------
 # orchestration
 # ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
+    """Probe a LIST of hosts/URLs in parallel — the enum→probe step of the recon
+    loop. Pass the output of `enumerate_subdomains` to find which hosts are live
+    and what they run. For each: status, final URL, title and detected tech.
+
+    Out-of-scope or private-resolving targets are skipped with a note; the shared
+    rate limiter caps real concurrency. Up to 300 targets per call. In scope only.
+    """
+
+    seen: list[str] = list(dict.fromkeys(t.strip() for t in targets if t and t.strip()))[:300]
+
+    async def _one(t: str) -> dict:
+        raw = t.strip()
+        url = raw if "://" in raw else f"https://{raw}"
+        try:
+            host = _require_scope(url)
+        except ScopeError as exc:
+            return {"target": raw, "skipped": "out_of_scope", "detail": str(exc)}
+        ctx = get_context()
+        try:
+            r = await ctx.http.fetch(
+                url, follow_redirects=True, max_redirects=ctx.settings.max_redirects,
+                scope_check=_scope_check(),
+            )
+        except Exception as exc:  # never let one host sink the batch
+            return {"target": host, "url": url, "error": f"{type(exc).__name__}: {exc}"}
+        entry: dict[str, Any] = {
+            "target": host, "url": url, "status": r.status,
+            "final_url": r.final_url, "length": len(r.body),
+        }
+        if r.error:
+            entry["error"] = r.error
+        if fingerprint and r.status:
+            fp = fpmod.fingerprint(r)
+            if fp.title:
+                entry["title"] = fp.title
+            techs = [t.name for t in fp.technologies]
+            if techs:
+                entry["tech"] = techs
+        return entry
+
+    results = await asyncio.gather(*[_one(t) for t in seen])
+    live = [r for r in results if r.get("status")]
+    return {
+        "requested": len(seen),
+        "live": len(live),
+        "skipped": sum(1 for r in results if r.get("skipped")),
+        "results": results,
+    }
+
+
 @mcp.tool()
 @safe_tool
 async def recon_target(domain: str, include_subdomains: bool = True) -> dict:

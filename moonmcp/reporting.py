@@ -14,6 +14,65 @@ def _sev_key(f: dict) -> int:
     return _SEV_ORDER.get(str(f.get("severity", "info")).lower(), 5)
 
 
+# SARIF severity → level mapping (SARIF only has error/warning/note).
+_SARIF_LEVEL = {"critical": "error", "high": "error", "medium": "warning",
+                "low": "note", "info": "note"}
+
+
+def _slug(text: str) -> str:
+    out = "".join(c if c.isalnum() else "-" for c in str(text).lower()).strip("-")
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out or "finding"
+
+
+def format_sarif(findings: list[dict], *, version: str = "0.0.0") -> dict:
+    """Render findings as a SARIF 2.1.0 document (for GitHub code-scanning, etc.).
+
+    Pure — no I/O, no clock. ``findings`` are dicts as stored by FindingsStore.
+    """
+
+    rules: dict[str, dict] = {}
+    results: list[dict] = []
+    for f in findings:
+        rule_id = _slug(f.get("type") or f.get("title") or "finding")
+        if rule_id not in rules:
+            rules[rule_id] = {
+                "id": rule_id,
+                "name": rule_id.replace("-", " ").title().replace(" ", ""),
+                "shortDescription": {"text": str(f.get("type") or rule_id)},
+            }
+        sev = str(f.get("severity", "info")).lower()
+        target = str(f.get("target") or "").strip()
+        uri = target if "://" in target else (f"https://{target}" if target else "unknown")
+        msg = str(f.get("title") or rule_id)
+        if f.get("detail"):
+            msg += f" — {f['detail']}"
+        result = {
+            "ruleId": rule_id,
+            "level": _SARIF_LEVEL.get(sev, "note"),
+            "message": {"text": msg},
+            "locations": [{"physicalLocation": {"artifactLocation": {"uri": uri}}}],
+            "properties": {"severity": sev},
+        }
+        if f.get("evidence"):
+            result["properties"]["evidence"] = str(f["evidence"])[:2000]
+        results.append(result)
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "MoonMCP",
+                "informationUri": "https://github.com/Moonwuk/MoonMcp",
+                "version": version,
+                "rules": list(rules.values()),
+            }},
+            "results": results,
+        }],
+    }
+
+
 def format_markdown(report: dict, *, generated_at: str | None = None) -> str:
     target = report.get("target", "?")
     lines: list[str] = [f"# MoonMCP recon report — `{target}`", ""]
