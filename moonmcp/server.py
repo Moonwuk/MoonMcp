@@ -1578,6 +1578,33 @@ async def clear_findings(target: str | None = None) -> dict:
 
 @mcp.tool()
 @safe_tool
+async def surface_diff(name: str, items: list[str]) -> dict:
+    """Track how the attack surface **changes** over time. Pass a snapshot `name`
+    (e.g. `acme-subdomains`) and the current list of `items` (subdomains, live
+    hosts, endpoints, params). The first call sets the baseline; every later call
+    returns only what was **added** / **removed** since last time — the fresh,
+    under-competed surface. Persists across runs if MOONMCP_STATE_DIR is set.
+    """
+
+    return get_context().snapshots.diff(name, items)
+
+
+@mcp.tool()
+@safe_tool
+async def surface_snapshots(clear: str | None = None) -> dict:
+    """List the tracked surface snapshots (name → item count), or clear one by
+    name (or all with `clear="*"`).
+    """
+
+    ctx = get_context()
+    if clear is not None:
+        removed = ctx.snapshots.clear(None if clear == "*" else clear)
+        return {"cleared": removed, "snapshots": ctx.snapshots.names()}
+    return {"snapshots": ctx.snapshots.names()}
+
+
+@mcp.tool()
+@safe_tool
 async def export_findings(format: str = "sarif", target: str | None = None,
                           severity: str | None = None) -> dict:
     """Export the recorded findings in a machine-readable format for CI / triage.

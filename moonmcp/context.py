@@ -7,12 +7,14 @@ and HTTP client so every tool draws on the same rate limit and scope state.
 from __future__ import annotations
 
 import dataclasses
+import os
 from dataclasses import dataclass
 
 from .auth import AuthContext
 from .config import Settings, load_settings
 from .findings import FindingsStore
 from .intel.oast import OastStore
+from .monitor import SnapshotStore
 from .net.http import HttpClient
 from .net.ratelimit import Governor
 from .scope import ScopeManager
@@ -27,6 +29,7 @@ class AppContext:
     findings: FindingsStore
     auth: AuthContext
     oast: OastStore
+    snapshots: SnapshotStore
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
@@ -46,7 +49,8 @@ def build_context(settings: Settings | None = None) -> AppContext:
         auth_provider=auth.merged_headers,
     )
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
-                      findings=FindingsStore(), auth=auth, oast=OastStore.from_env())
+                      findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
+                      snapshots=SnapshotStore(state_dir=os.environ.get("MOONMCP_STATE_DIR")))
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:
