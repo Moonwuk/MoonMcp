@@ -29,6 +29,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
+from . import catalog as catalogmod
 from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
@@ -356,6 +357,36 @@ async def server_status() -> dict:
             "nvd": bool(s.nvd_api_key),
         },
     }
+
+
+def _tool_meta() -> dict[str, dict]:
+    """Live name -> {description, gated, intrusive} for every registered tool."""
+
+    out: dict[str, dict] = {}
+    for t in mcp._tool_manager.list_tools():
+        out[t.name] = {
+            "description": t.description or "",
+            "gated": getattr(t.fn, "__moonmcp_gated__", False),
+            "intrusive": getattr(t.fn, "__moonmcp_intrusive__", False),
+        }
+    return out
+
+
+@mcp.tool()
+@safe_tool
+async def tool_catalog(family: str | None = None) -> dict:
+    """Get a self-describing MAP of MoonMCP's own tools — call this second (after
+    `server_status`) to orient before you start.
+
+    Groups every tool into a family (setup, passive_osint, light_active,
+    intrusive, orchestration, knowledge, reporting, external) with a one-line
+    purpose and, crucially, how much each touches the target: `scope_gated`
+    (refuses out-of-scope targets) and `intrusive` (needs MOONMCP_ALLOW_INTRUSIVE
+    + consent). Also returns the recommended recon→report `workflow`. Pass a
+    `family` to drill into one group. Offline — describes the server itself.
+    """
+
+    return catalogmod.build_catalog(_tool_meta(), family=family)
 
 
 @mcp.tool()

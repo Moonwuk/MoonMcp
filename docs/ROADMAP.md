@@ -33,19 +33,22 @@ every bug-bounty program carry its own identity (custom header + User-Agent).
   to `MOONMCP_STATE_DIR` so they survive restarts. Tools: `program_add`,
   `program_use`, `program_list`, `program_remove`.
 
-## Phase 2 — Discoverability (a skill + a catalog)
+## Phase 2 — Discoverability (a skill + a catalog) ✅
 
 **Goal:** an agent should immediately understand what MoonMCP can do and reach
 for the right tool.
 
-- **`tool_catalog` tool.** Returns the tool inventory grouped by family
-  (meta/scope, passive OSINT, light active, intrusive, knowledge, reporting,
-  external), each with a one-line purpose, whether it is scope-gated / intrusive,
-  and a suggested workflow order — a machine-readable map of the server.
-- **A Claude Code skill (`SKILL.md`).** A packaged skill that teaches an agent
-  the MoonMCP workflow (status → scope/program → passive → light active →
-  intrusive-with-consent → report), the safety rules, and when to use which
-  tool, so the capabilities are self-describing rather than tribal knowledge.
+- ✅ **`tool_catalog` tool.** Returns the tool inventory grouped by family
+  (setup, passive OSINT, light active, intrusive, orchestration, knowledge,
+  reporting, external), each with a one-line purpose, its `scope_gated` /
+  `intrusive` flags, and the suggested recon→report workflow — a machine-readable
+  map of the server (`moonmcp/catalog.py`; a test asserts it never drifts from the
+  registered tools).
+- ✅ **A Claude Code skill** (`.claude/skills/moonmcp/SKILL.md`) that teaches an
+  agent the MoonMCP workflow (status → catalog → scope/program → passive → light
+  active → intrusive-with-consent → report), the rules of engagement, and when to
+  use which tool, so the capabilities are self-describing rather than tribal
+  knowledge.
 
 ## Phase 3 — Deep Kali / external-tool integration
 

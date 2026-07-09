@@ -14,7 +14,8 @@ from moonmcp import server as srv
 # an @active_tool. Adding a new tool here is a deliberate, reviewed decision.
 PASSIVE = {
     # meta / management
-    "server_status", "scope_list", "scope_add", "scope_exclude", "scope_remove",
+    "server_status", "tool_catalog",
+    "scope_list", "scope_add", "scope_exclude", "scope_remove",
     "program_add", "program_use", "program_list", "program_remove",
     "auth_set", "auth_clear",
     "oast_configure", "oast_generate", "oast_poll", "oast_list",

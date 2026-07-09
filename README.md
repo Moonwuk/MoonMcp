@@ -44,12 +44,13 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **91 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **92 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
 | `server_status` | Report config, active program, detected enhancers and external CLIs. |
+| `tool_catalog` | Self-describing **map of all tools** grouped by family, each tagged `scope_gated` / `intrusive`, plus the recommended recon→report workflow — call it second to orient. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
@@ -204,6 +205,15 @@ See [`examples/claude_desktop_config.json`](examples/claude_desktop_config.json)
 Then, in the client: *"Using MoonMCP, run recon on example.com"* — the agent will
 call `scope_add`, then the passive/light tools, and summarise the attack surface.
 
+### Claude Code skill
+
+A packaged **skill** ships in [`.claude/skills/moonmcp/`](.claude/skills/moonmcp/SKILL.md)
+that teaches an agent the MoonMCP workflow, the rules of engagement, and the tool
+map. Copy that folder into your `~/.claude/skills/` (or a project's `.claude/skills/`)
+and the agent will orient itself with `server_status` + `tool_catalog` and drive
+the tools in the right order — scope/program first, passive → light → intrusive
+(with consent) → report.
+
 ---
 
 ## Configuration
@@ -330,7 +340,8 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 91 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 92 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
+├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail

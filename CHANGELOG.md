@@ -6,6 +6,12 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`tool_catalog` + Claude Code skill.** A self-describing map of all tools
+  (grouped by family, each tagged `scope_gated` / `intrusive`, with the
+  recommended recon→report workflow) and a packaged skill
+  (`.claude/skills/moonmcp/`) so an agent orients itself and drives the tools in
+  the right order. `moonmcp/catalog.py`; a test keeps the map in sync with the
+  registered tools.
 - **`@active_tool` — one scope gate.** Scope logic (target normalization +
   scope/SSRF check + intrusive gate + audit + structured-error envelope) is now
   centralized in a single decorator; every packet-sending tool declares it and a
