@@ -82,7 +82,12 @@ Two ways, pick based on the user's situation:
 4. **Batch:** feed `enumerate_subdomains` output to `probe_batch` for liveness.
 5. **Intrusive (with consent):** `port_scan`, `content_discovery`, `vuln_scan`
    (needs nuclei), `waf_efficacy`, `http_methods`, `desync_probe`.
-6. **Record & report:** `add_finding` as you go; `triage_findings` to dedupe and
+6. **Confirm before you report:** `confirm_finding` proves a lead with a
+   baseline-vs-test differential + injection signatures + an OAST callback →
+   `confirmed`/`likely`/`unconfirmed`; score it with `cvss_score`. A lead that
+   won't confirm cheaply is a candidate to delegate to Strix (see the
+   `strix-orchestration` skill), not to report.
+7. **Record & report:** `add_finding` as you go; `triage_findings` to dedupe and
    prioritise (and spot systemic issues across targets); then `report`,
    `export_findings` (SARIF/JSON), or `export_obsidian` (linked vault + graph).
 

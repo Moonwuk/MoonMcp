@@ -31,6 +31,8 @@ from mcp.server.fastmcp import FastMCP
 
 from . import __version__
 from . import catalog as catalogmod
+from . import confirm as confirmmod
+from . import cvss as cvssmod
 from . import intercept as interceptmod
 from . import obsidian as obsidianmod
 from . import prompts as promptmod
@@ -1799,6 +1801,23 @@ async def triage_findings(apply: bool = False) -> dict:
     return out
 
 
+@mcp.tool()
+@safe_tool
+async def cvss_score(vector: str | None = None, av: str | None = None, ac: str | None = None,
+                     pr: str | None = None, ui: str | None = None, s: str | None = None,
+                     c: str | None = None, i: str | None = None, a: str | None = None) -> dict:
+    """Compute a **CVSS 3.1 base score** + severity band from a `vector`
+    (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`) and/or individual metrics
+    (`av`/`ac`/`pr`/`ui`/`s`/`c`/`i`/`a`), so a confirmed finding carries a
+    defensible standard severity. Metrics you omit default to a conservative
+    low-impact base (C/I/A = None). Offline — pure calculation.
+    """
+
+    metrics = {k: v for k, v in (("AV", av), ("AC", ac), ("PR", pr), ("UI", ui),
+                                 ("S", s), ("C", c), ("I", i), ("A", a)) if v}
+    return cvssmod.base_score(metrics or None, vector=vector)
+
+
 # ---------------------------------------------------------------------------
 # shared memory hub (persistent, cross-agent, provenance/trust-tagged)
 # ---------------------------------------------------------------------------
@@ -2630,6 +2649,96 @@ async def http_history(exchange_id: int | None = None, host: str | None = None,
             for e in items
         ],
     }
+
+
+@mcp.tool()
+@active_tool(self_scoped=True)
+async def confirm_finding(target: str, payload: str, param: str | None = None,
+                          method: str = "GET", injection_class: str | None = None,
+                          oast_token: str | None = None, record: bool = False,
+                          severity: str = "medium", title: str = "") -> dict:
+    """**Confirm a lead** before you report it — MoonMCP's differential + out-of-band
+    validation gate (the "prove it, don't guess" step).
+
+    Sends a **baseline** request (a benign canary) and a **test** request (your
+    `payload`), then weighs the difference: was the payload **reflected** (and not
+    in the baseline)? did the **status**/**length**/**timing** change? do
+    **injection signatures** fire in the response (pass `injection_class`)? and —
+    the strongest signal — did an **out-of-band callback** land (pass the
+    `oast_token` from `oast_generate`)? Returns a verdict (`confirmed` / `likely` /
+    `inconclusive` / `unconfirmed`) with the concrete signals. `param` injects into
+    that query parameter; else the payload is the request body (POST). With
+    `record`, a `confirmed` result is written to findings + memory. In scope only.
+    """
+
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url, tool="confirm_finding")
+    ctx = get_context()
+    m = method.upper()
+    canary = "moonc0nfirm42"
+
+    if param:
+        sp = urlsplit(url)
+        q = dict(parse_qsl(sp.query, keep_blank_values=True))
+        base_url = urlunsplit(sp._replace(query=urlencode({**q, param: canary})))
+        test_url = urlunsplit(sp._replace(query=urlencode({**q, param: payload})))
+        base_body = test_body = None
+    else:
+        base_url = test_url = url
+        base_body = canary.encode() if m not in ("GET", "HEAD") else None
+        test_body = payload.encode() if m not in ("GET", "HEAD") else None
+
+    b = await ctx.http.fetch(base_url, method=m, body=base_body, follow_redirects=False,
+                             scope_check=_scope_check())
+    t = await ctx.http.fetch(test_url, method=m, body=test_body, follow_redirects=False,
+                             scope_check=_scope_check())
+
+    pb = payload.encode()
+    reflected = bool(payload) and pb in t.body and pb not in b.body
+    status_changed = b.status != t.status
+    length_delta = len(t.body) - len(b.body)
+    timing_delta = (t.elapsed_ms or 0.0) - (b.elapsed_ms or 0.0)
+
+    hits = injmod.match_signatures(t.text(200_000), class_id=injection_class) if injection_class else []
+    hit_labels = [f"{h['class']}/{h['technology']}" for h in hits]
+
+    interactions: list[dict] = []
+    if oast_token:
+        poll = ctx.oast.poll_target(oast_token)
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
+                interactions = oastmod.parse_interactions(r.text())
+            except Exception:
+                interactions = []
+
+    verdict = confirmmod.evaluate(
+        reflected=reflected, status_changed=status_changed, length_delta=length_delta,
+        injection_hits=hit_labels, oast_count=len(interactions), timing_delta_ms=timing_delta,
+    )
+    out: dict[str, Any] = {
+        "target": url, "param": param, **verdict,
+        "baseline": {"status": b.status, "length": len(b.body)},
+        "test": {"status": t.status, "length": len(t.body)},
+        "reflected": reflected, "injection_matches": hits[:10],
+        "oast_interactions": interactions[:20],
+    }
+    if verdict["verdict"] == "confirmed" and record:
+        ts = ""
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        ftitle = title or f"Confirmed {injection_class or 'issue'} on {param or url}"
+        f = ctx.findings.add(target=normalize_target(url), severity=severity, title=ftitle,
+                             detail="; ".join(verdict["signals"]), evidence=payload,
+                             type="confirmed", source="confirm_finding", created_at=ts)
+        ctx.memory.add(kind="finding", title=ftitle, body="; ".join(verdict["signals"]),
+                       target=normalize_target(url), severity=f.severity, source="confirm_finding",
+                       trust="curated", provenance="manual", tags="finding,confirmed", created_at=ts)
+        out["recorded_finding_id"] = f.id
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **101 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **103 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -126,6 +126,7 @@ MoonMCP exposes **101 tools**, **11 resources** and **8 operator prompts**, grou
 | `http_repeater` | **Repeater** — send one fully-controlled request (structured **or** a `raw` Burp-style HTTP request) to an in-scope target; full response + quick passive scan; logged for replay. |
 | `intruder` | **Intruder** — a request `template` with a `§` marker + payload list, fired and **diffed** (status / length / reflection) vs a baseline → injection/IDOR entry points. Intrusive. |
 | `passive_scan` | One benign GET → all passive analysers at once (header grade + issues, tech fingerprint, redacted secret hits). |
+| `confirm_finding` | **Prove a lead before reporting it:** baseline vs test request → weighs **reflection**, status/length/timing diff, **injection signatures**, and an **out-of-band callback** (OAST) into a verdict (`confirmed` / `likely` / `inconclusive` / `unconfirmed`). Optionally records a confirmed hit. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 
 ### 🔗 Orchestration & reporting
@@ -136,6 +137,7 @@ MoonMCP exposes **101 tools**, **11 resources** and **8 operator prompts**, grou
 | `report` | Full safe sweep → a severity-ranked **Markdown** report (surface, posture grades, findings). |
 | `add_finding` / `list_findings` / `clear_findings` | Record / read / clear findings in the session store (also on the `findings://` resource). |
 | `triage_findings` | **Dedupe + prioritise** findings before reporting: collapse exact duplicates, rank by severity × frequency, and surface **systemic** issues (same finding across many targets). Dry-run or `apply=true`. |
+| `cvss_score` | Compute a **CVSS 3.1 base score** + severity band from a vector or individual metrics — so a confirmed finding carries a defensible standard severity. Offline. |
 | `export_findings` | Export findings as **SARIF 2.1.0** (GitHub code-scanning / DAST pipelines) or JSON. |
 | `export_obsidian` | "Graphify" the session into an **Obsidian vault** — linked notes (asset ↔ finding, vuln ↔ root cause) + tags + an Obsidian **Canvas** graph. Open the folder and use the graph view. |
 | `surface_diff` / `surface_snapshots` | Track how the attack surface **changes over time** — baseline a set (subdomains/endpoints/…) and surface only what's **new** since last run (persists via `MOONMCP_STATE_DIR`). |
@@ -398,6 +400,8 @@ inventory (installed + install hints).
 moonmcp/
 ├── server.py        # FastMCP server: 101 tools, 11 resources, 8 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
+├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
+├── cvss.py          # CVSS 3.1 base-score calculator
 ├── memory.py        # shared persistent memory hub (SQLite + FTS5, trust/provenance tags)
 ├── intercept.py     # Burp-style repeater / intruder / passive scan + request-response history
 ├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)

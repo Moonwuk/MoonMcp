@@ -27,7 +27,8 @@ PASSIVE = {
     # shared memory hub (local store; no traffic)
     "memory_add", "memory_search", "memory_get", "memory_stats",
     # findings / reporting / monitoring
-    "add_finding", "list_findings", "clear_findings", "triage_findings", "audit_log",
+    "add_finding", "list_findings", "clear_findings", "triage_findings", "cvss_score",
+    "audit_log",
     "export_obsidian", "surface_diff", "surface_snapshots", "export_findings",
     # offline knowledge bases
     "injection_info", "injection_search", "match_injection_signatures",

@@ -6,6 +6,12 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Finding confirmation + CVSS.** `confirm_finding` proves a lead before you
+  report it — a baseline-vs-test differential weighing reflection, status/length/
+  timing change, injection signatures, and out-of-band (OAST) callbacks into a
+  verdict (`confirmed`/`likely`/`inconclusive`/`unconfirmed`), optionally recording
+  a confirmed hit. `cvss_score` computes a CVSS 3.1 base score + severity band
+  from a vector or metrics. `moonmcp/confirm.py`, `moonmcp/cvss.py`.
 - **Tool-exposure profiles + a CLI bridge.** `MOONMCP_PROFILE` (`full`/`strix`/
   `passive`/`knowledge`/`recon`) + `MOONMCP_EXPOSE_TOOLS` / `MOONMCP_HIDE_TOOLS`
   expose a *curated slice* of MoonMCP; `moonmcp tools` and `moonmcp call <tool>`

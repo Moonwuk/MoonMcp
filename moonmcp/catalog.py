@@ -77,7 +77,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Drive the Burp workflow from tools: repeater (resend one request), "
         "intruder (payload sweep + diff), passive scan, and request/response "
         "history.",
-        ["http_repeater", "intruder", "passive_scan", "http_history"],
+        ["http_repeater", "intruder", "passive_scan", "confirm_finding", "http_history"],
     )),
     ("knowledge", (
         "Knowledge bases",
@@ -97,7 +97,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "surface across runs.",
         [
             "add_finding", "list_findings", "clear_findings", "triage_findings",
-            "export_findings", "export_obsidian",
+            "cvss_score", "export_findings", "export_obsidian",
             "surface_diff", "surface_snapshots",
         ],
     )),

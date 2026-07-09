@@ -136,10 +136,11 @@ with a working PoC. This is the composable answer to Strix's monolithic
   `memory_get`, `memory_stats` + the `memory://recent` resource; `add_finding`
   auto-mirrors findings in as `curated`. This is the substrate the orchestrator,
   a delegated Strix, and a local "librarian" curator all read/write.
-- ⏭️ Next: a MoonMCP-native validation layer (`confirm_finding` — differential +
-  OAST + repeater → `confirmed`/`unconfirmed`) and CVSS scoring, so cheap
-  confirmation happens in MoonMCP before paying for a Strix run; local embeddings
-  + a librarian-loop over the memory hub.
+- ✅ **Native validation layer** (`confirm_finding` + `cvss_score`): differential
+  (baseline vs test) + injection-signature + out-of-band (OAST) confirmation →
+  `confirmed`/`likely`/`inconclusive`/`unconfirmed`, plus a CVSS 3.1 base score —
+  so cheap confirmation happens in MoonMCP before paying for a Strix run.
+- ⏭️ Next: local embeddings + a librarian-loop over the memory hub (deferred).
 
 ---
 
