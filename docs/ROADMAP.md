@@ -105,6 +105,26 @@ reinventing nmap/nuclei/ffuf, just driving them behind the scope guard.
 - **nuclei template management** (list/select/update template sets safely).
 - **OAuth / session capture** via the browser tools to feed `auth_set`.
 
+## Phase 6 — Composable autonomy (Strix as a co-tool) ✅ (foundation)
+
+**Goal:** an agent (opencode / hermes / Claude) drives MoonMCP *and* a
+heavyweight autonomous validator side-by-side, in one window — MoonMCP *finds*
+cheaply and scope-first, [Strix](https://github.com/usestrix/strix) *confirms*
+with a working PoC. This is the composable answer to Strix's monolithic
+"graph of agents": both are MCP tools of the same agent, not a separate app.
+
+- ✅ **`strix-orchestration` skill** — the playbook: recon/detect with MoonMCP →
+  delegate only high-value in-scope leads to Strix → merge validated findings
+  back into `add_finding` / `triage_findings` / `report`. Reuses the existing
+  prompt base (`prompts.py` RoE + PoC gate) to instruct Strix.
+- ✅ **Reference MCP wrapper** (`examples/strix_mcp/server.py`) exposing
+  `strix_run` / `strix_result` / `strix_available`, **scope-gated by reusing
+  `moonmcp.scope.ScopeManager`** so Strix inherits MoonMCP's guard, plus
+  `docs/STRIX_INTEGRATION.md` (opencode + hermes wiring).
+- ⏭️ Next: a MoonMCP-native validation layer (`confirm_finding` — differential +
+  OAST + repeater → `confirmed`/`unconfirmed`) and CVSS scoring, so cheap
+  confirmation happens in MoonMCP before paying for a Strix run.
+
 ---
 
 ## Non-negotiables (every phase)

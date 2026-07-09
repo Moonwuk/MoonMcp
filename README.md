@@ -223,6 +223,12 @@ and the agent will orient itself with `server_status` + `tool_catalog` and drive
 the tools in the right order — scope/program first, passive → light → intrusive
 (with consent) → report.
 
+A second skill, `strix-orchestration`, teaches an agent to drive MoonMCP
+(fast, scope-first **detection**) together with [Strix](https://github.com/usestrix/strix)
+(autonomous **validation** with working PoCs) as two MCP tools of the *same* agent
+— MoonMCP finds, Strix confirms. See [`docs/STRIX_INTEGRATION.md`](docs/STRIX_INTEGRATION.md)
+and the scope-gated reference wrapper in [`examples/strix_mcp/`](examples/strix_mcp/server.py).
+
 ---
 
 ## Configuration
