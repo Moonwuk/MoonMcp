@@ -938,6 +938,36 @@ async def browser_eval(target: str, script: str, wait_until: str = "load") -> di
 
 @mcp.tool()
 @safe_tool
+async def browser_interact(target: str, actions: list[dict]) -> dict:
+    """Drive the headless browser through a sequence of ACTIONS against an in-scope
+    URL — click, fill/type inputs, submit forms, wait for selectors, run JS — to
+    walk a real user flow (login, multi-step form, SPA navigation). Returns the
+    resulting page state (final URL, title, text), per-step results, plus the
+    console log, network requests, page errors, **cookies and localStorage**.
+
+    `actions` is a list of dicts, e.g.
+    `[{"action":"fill","selector":"#user","value":"a"},
+      {"action":"fill","selector":"#pass","value":"b"},
+      {"action":"click","selector":"#login"},
+      {"action":"wait_for","selector":".dashboard"},
+      {"action":"eval","script":"localStorage.getItem('token')"}]`.
+    Supported: click, fill, type, press, wait_for, wait, goto (scope-checked),
+    eval. Uses the engagement auth. Authorised testing only; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    headers, cookies = _browser_auth(url)
+    result = await browsermod.interact(
+        url, actions or [], extra_headers=headers, cookies=cookies,
+        scope_ok=lambda u: get_context().scope.is_in_scope(u),
+    )
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
 async def analyze_binary(target: str, decompile: bool = True) -> dict:
     """Download an in-scope compiled artifact (.dll/.exe/.jar/.so/.apk/…) and
     triage it: identify the file type (incl. .NET assemblies), extract ASCII +

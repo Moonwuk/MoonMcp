@@ -64,3 +64,32 @@ async def test_browser_eval_error_is_structured(local_server, fresh_context):
     res = await srv.browser_eval(target=base, script="throw new Error('boom-eval')")
     assert res.get("eval_result") is None
     assert "boom-eval" in (res.get("eval_error") or "")
+
+
+@pytest.mark.asyncio
+async def test_browser_interact_registered():
+    tools = {t.name for t in await srv.mcp.list_tools()}
+    assert "browser_interact" in tools
+
+
+@_skip_live
+@pytest.mark.asyncio
+async def test_browser_interact_flow(local_server, fresh_context):
+    base, _ = local_server
+    res = await srv.browser_interact(target=f"{base}/app", actions=[
+        {"action": "fill", "selector": "#q", "value": "hello"},
+        {"action": "click", "selector": "#go"},
+        {"action": "wait_for", "selector": "#out"},
+        {"action": "eval", "script": "document.getElementById('out').innerText"},
+    ])
+    assert res["available"] is True
+    assert all(s.get("ok") for s in res["steps"]), res["steps"]
+    # the click ran the inline JS → localStorage + console + DOM update
+    assert res["local_storage"].get("token") == "t0ken"
+    assert any("go-clicked" in c.get("text", "") for c in res["console"])
+    assert res["steps"][-1].get("result") == "clicked:hello"
+    # an out-of-scope goto step is refused, not followed
+    res2 = await srv.browser_interact(target=f"{base}/app", actions=[
+        {"action": "goto", "url": "http://evil.example.test/"},
+    ])
+    assert res2["steps"][0].get("error") == "out_of_scope"

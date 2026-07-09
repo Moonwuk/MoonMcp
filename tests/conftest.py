@@ -22,6 +22,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.path == "/app":
+            # A tiny interactive page: fill #q, click #go → writes #out + localStorage.
+            body = (
+                b"<title>App</title><input id='q'>"
+                b"<button id='go' onclick=\"document.getElementById('out').innerText="
+                b"'clicked:'+document.getElementById('q').value;"
+                b"localStorage.setItem('token','t0ken');console.log('go-clicked')\">Go</button>"
+                b"<div id='out'></div>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/robots.txt":
             body = b"User-agent: *\nDisallow: /admin\nDisallow: /secret\n"
             self.send_response(200)
