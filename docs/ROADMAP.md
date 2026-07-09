@@ -121,9 +121,18 @@ with a working PoC. This is the composable answer to Strix's monolithic
   `strix_run` / `strix_result` / `strix_available`, **scope-gated by reusing
   `moonmcp.scope.ScopeManager`** so Strix inherits MoonMCP's guard, plus
   `docs/STRIX_INTEGRATION.md` (opencode + hermes wiring).
+- ✅ **Shared memory hub** (`moonmcp/memory.py`) — the keystone that lets a chain
+  of agents share state instead of re-deriving it. A persistent SQLite store
+  (stdlib, FTS5-ranked search, `MOONMCP_STATE_DIR/memory.db`) with **trust +
+  provenance on every item** (`untrusted` scraped content vs `curated`
+  conclusions) as the anti-poisoning guard. Tools: `memory_add`, `memory_search`,
+  `memory_get`, `memory_stats` + the `memory://recent` resource; `add_finding`
+  auto-mirrors findings in as `curated`. This is the substrate the orchestrator,
+  a delegated Strix, and a local "librarian" curator all read/write.
 - ⏭️ Next: a MoonMCP-native validation layer (`confirm_finding` — differential +
   OAST + repeater → `confirmed`/`unconfirmed`) and CVSS scoring, so cheap
-  confirmation happens in MoonMCP before paying for a Strix run.
+  confirmation happens in MoonMCP before paying for a Strix run; local embeddings
+  + a librarian-loop over the memory hub.
 
 ---
 

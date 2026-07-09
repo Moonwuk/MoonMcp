@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **97 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **101 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -128,7 +128,7 @@ MoonMCP exposes **97 tools**, **10 resources** and **8 operator prompts**, group
 | `passive_scan` | One benign GET → all passive analysers at once (header grade + issues, tech fingerprint, redacted secret hits). |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 
-### 🔗 Orchestration & external tools
+### 🔗 Orchestration & reporting
 | Tool | Purpose |
 | --- | --- |
 | `probe_batch` | Probe a **list** of hosts/URLs in parallel (liveness, status, title, tech) — the enum→probe step; feed it `enumerate_subdomains`. Scope-gated + rate-limited. |
@@ -139,8 +139,19 @@ MoonMCP exposes **97 tools**, **10 resources** and **8 operator prompts**, group
 | `export_findings` | Export findings as **SARIF 2.1.0** (GitHub code-scanning / DAST pipelines) or JSON. |
 | `export_obsidian` | "Graphify" the session into an **Obsidian vault** — linked notes (asset ↔ finding, vuln ↔ root cause) + tags + an Obsidian **Canvas** graph. Open the folder and use the graph view. |
 | `surface_diff` / `surface_snapshots` | Track how the attack surface **changes over time** — baseline a set (subdomains/endpoints/…) and surface only what's **new** since last run (persists via `MOONMCP_STATE_DIR`). |
-| `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
-| `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
+
+### 🧠 Shared memory hub (persistent, cross-agent)
+| Tool | Purpose |
+| --- | --- |
+| `memory_add` | Store an item in a **shared, persistent** knowledge store (SQLite; persists via `MOONMCP_STATE_DIR`) so multiple agents/sessions build on each other's work. Every item is **trust-tagged** — `untrusted` (scraped/observed content — a prompt-injection vector) vs `curated` (a vetted conclusion). |
+| `memory_search` | Full-text search (bm25 via SQLite **FTS5**, LIKE fallback) over the hub; filter by `kind` / `target` / `trust` (`trust=curated` returns only vetted knowledge). Also on `memory://recent`. |
+| `memory_get` / `memory_stats` | Fetch one item; summarise the hub (counts by kind/trust). `add_finding` auto-mirrors findings into the hub as `curated`. |
+
+### 🛠️ External tools
+| Tool | Purpose |
+| --- | --- |
+| `external_tools` | List known security CLIs (36, categorised) and whether each is installed + its native fallback. |
+| `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed; intrusive scanners gated by `MOONMCP_ALLOW_INTRUSIVE`. |
 
 ### 📚 Knowledge bases
 Referenced catalogs built into the server (offline, searchable as tools + MCP resources) — descriptions, detection guidance and links to public research, **not** weaponized exploit code:
@@ -368,8 +379,9 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 97 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 101 tools, 11 resources, 8 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
+├── memory.py        # shared persistent memory hub (SQLite + FTS5, trust/provenance tags)
 ├── intercept.py     # Burp-style repeater / intruder / passive scan + request-response history
 ├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)

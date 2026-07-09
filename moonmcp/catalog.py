@@ -101,6 +101,12 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "surface_diff", "surface_snapshots",
         ],
     )),
+    ("memory", (
+        "Shared memory hub",
+        "Persistent, cross-agent, provenance/trust-tagged memory (SQLite + FTS) "
+        "so agents build on each other's work instead of re-deriving context.",
+        ["memory_add", "memory_search", "memory_get", "memory_stats"],
+    )),
     ("external", (
         "External CLIs",
         "Detect and safely drive installed security CLIs (scope-checked, "

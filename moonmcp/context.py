@@ -16,6 +16,7 @@ from .config import Settings, load_settings
 from .findings import FindingsStore
 from .intel.oast import OastStore
 from .intercept import HistoryStore
+from .memory import MemoryStore
 from .monitor import SnapshotStore
 from .net.http import HttpClient
 from .net.ratelimit import Governor
@@ -36,6 +37,7 @@ class AppContext:
     audit: AuditLog
     programs: ProgramStore
     history: HistoryStore
+    memory: MemoryStore
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
@@ -76,7 +78,8 @@ def build_context(settings: Settings | None = None) -> AppContext:
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
                       findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
                       snapshots=SnapshotStore(state_dir=os.environ.get("MOONMCP_STATE_DIR")),
-                      audit=AuditLog.from_env(), programs=programs, history=HistoryStore())
+                      audit=AuditLog.from_env(), programs=programs, history=HistoryStore(),
+                      memory=MemoryStore.from_env())
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

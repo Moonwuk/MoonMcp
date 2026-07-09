@@ -6,6 +6,12 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Shared memory hub** (`memory_add` / `memory_search` / `memory_get` /
+  `memory_stats` + `memory://recent`): a persistent, cross-agent SQLite store
+  (stdlib, FTS5-ranked search) so a chain of agents shares state instead of
+  re-deriving it. Every item is **trust-tagged** (`untrusted` scraped content vs
+  `curated` conclusions) — the anti-prompt-injection guard — and `add_finding`
+  auto-mirrors findings in as curated. `moonmcp/memory.py`.
 - **Finding triage** (`triage_findings`): dedupe exact duplicates, rank unique
   findings by severity × frequency, and surface *systemic* issues (the same
   finding across many targets). Dry-run, or `apply=true` to collapse in place.

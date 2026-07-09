@@ -24,6 +24,8 @@ PASSIVE = {
     "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze",
     # interception history (reads the in-memory log; no traffic)
     "http_history",
+    # shared memory hub (local store; no traffic)
+    "memory_add", "memory_search", "memory_get", "memory_stats",
     # findings / reporting / monitoring
     "add_finding", "list_findings", "clear_findings", "triage_findings", "audit_log",
     "export_obsidian", "surface_diff", "surface_snapshots", "export_findings",
