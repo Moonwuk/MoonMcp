@@ -65,6 +65,7 @@ from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
+from .web import params as paramsmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
 from .web import takeover as takeovermod
@@ -803,6 +804,28 @@ async def graphql_check(target: str) -> dict:
     ctx = get_context()
     result = await graphqlmod.discover_graphql(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def discover_parameters(target: str, method: str = "GET",
+                              wordlist: list[str] | None = None) -> dict:
+    """Discover **hidden parameters** on an in-scope URL: probe a wordlist of
+    common param names with a benign canary and flag the ones the app reacts to —
+    `reflected` (the value echoes back → candidate XSS/SSRF/injection entry point)
+    or a behavioural `status-change` / `length-change` (the param is recognised).
+    Hidden params are where XSS/SSRF/IDOR/SQLi entry points hide. Pass your own
+    `wordlist` to override the defaults; `method` GET or POST. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    ctx = get_context()
+    result = await paramsmod.discover_parameters(
+        ctx.http, url, method=method, wordlist=wordlist, scope_check=_scope_check(),
+    )
+    return result
 
 
 @mcp.tool()

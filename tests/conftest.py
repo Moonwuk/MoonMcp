@@ -22,6 +22,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.path.startswith("/reflect"):
+            # Reflect the value of ?name= into the body (reflected-param signal) and
+            # add a chunk of text when ?admin is present (length-change signal).
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            body = b"<html>base"
+            if "name" in qs:
+                body += b" name=" + qs["name"][0].encode("utf-8", "replace")
+            if "admin" in qs:
+                body += b" ADMIN-PANEL-VISIBLE-EXTRA-CONTENT-BLOCK-XYZ"
+            body += b"</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/app":
             # A tiny interactive page: fill #q, click #go → writes #out + localStorage.
             body = (
