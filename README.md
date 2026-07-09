@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **75 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **80 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -52,6 +52,7 @@ MoonMCP exposes **75 tools**, **9 resources** and **8 operator prompts**, groupe
 | `server_status` | Report config, detected enhancers and external CLIs. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
+| `oast_configure` / `oast_generate` / `oast_poll` / `oast_list` | Out-of-band **callback** canaries (interactsh/Collaborator-compatible) to confirm **blind** vulns (blind SSRF/XXE/RCE/SQLi, blind XSS): mint a canary URL, plant it, poll for the callback. |
 
 ### 🔵 Passive OSINT (never touches the target)
 | Tool | Purpose |
@@ -89,6 +90,7 @@ MoonMCP exposes **75 tools**, **9 resources** and **8 operator prompts**, groupe
 | `waf_detect` | Fingerprint WAF/CDN (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, …). |
 | `takeover_check` | Subdomain-takeover detection over a 40+ provider fingerprint DB (S3, GH Pages, Heroku, Azure, …). |
 | `open_redirect` | Inject a canary into common redirect params (url, next, returnTo, …) — Location / meta / JS. |
+| `trace_redirects` | Follow a URL's **redirect chain** hop by hop and flag offsite / `https→http` downgrade / leaves-scope / loop / meta-refresh / JS redirect (OAuth `redirect_uri`, SSRF-via-redirect). |
 | `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
 | `screenshot` | Render a page to PNG via Playwright+Chromium **when installed** (else a graceful note). |
 | `browser_open` | Drive a **headless browser**: render a JS-heavy SPA and return the post-JS text/HTML, the **console log**, the **network requests** the page made, and page errors — endpoint/secret discovery a raw fetch can't see. Uses `auth_set`. |
@@ -298,7 +300,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 75 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 80 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

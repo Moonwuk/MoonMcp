@@ -70,6 +70,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "http://evil.example/pwned")
             self.end_headers()
             return
+        if self.path in ("/r1", "/r2"):
+            # A same-host redirect chain: /r1 -> /r2 -> / (all in scope).
+            self.send_response(302)
+            self.send_header("Location", "/r2" if self.path == "/r1" else "/")
+            self.end_headers()
+            return
+        if self.path.startswith("/oast-poll"):
+            # A mock OAST poll endpoint returning one interaction.
+            from urllib.parse import parse_qs, urlparse
+            tok = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
+            payload = ('{"interactions":[{"protocol":"http","from":"203.0.113.9","token":"'
+                       + tok + '"}]}').encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path.rstrip("/") in ("/admin",):
             self.send_response(403)
             self.end_headers()

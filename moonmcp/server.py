@@ -34,6 +34,7 @@ from .external import cli
 from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
+from .intel import oast as oastmod
 from .intel import search as searchmod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
@@ -354,6 +355,77 @@ async def auth_clear() -> dict:
     ctx = get_context()
     ctx.auth.clear()
     return {"auth": ctx.auth.redacted()}
+
+
+@mcp.tool()
+@safe_tool
+async def oast_configure(interaction_domain: str | None = None,
+                         poll_url: str | None = None) -> dict:
+    """Configure the out-of-band (OAST) interaction server used to confirm BLIND
+    vulnerabilities via callbacks. `interaction_domain` is the domain whose
+    subdomains are your canaries (e.g. an interactsh self-host or Burp
+    Collaborator domain); `poll_url` is its poll API (optionally with a `{token}`
+    placeholder). Can also be set via MOONMCP_OAST_DOMAIN / MOONMCP_OAST_POLL_URL.
+    """
+
+    ctx = get_context()
+    ctx.oast.configure(interaction_domain=interaction_domain, poll_url=poll_url)
+    return {"configured": ctx.oast.configured, "interaction_domain": ctx.oast.interaction_domain,
+            "poll_url": ctx.oast.poll_url}
+
+
+@mcp.tool()
+@safe_tool
+async def oast_generate(label: str = "") -> dict:
+    """Mint a unique **callback canary** to embed in a payload for blind-vuln
+    detection (blind SSRF/XXE/RCE/SQLi, blind XSS). Returns the canary hostname
+    and http/https URLs plus a correlation token; `label` notes where you planted
+    it. Poll later with `oast_poll` to see if the target called back. Configure a
+    server first with `oast_configure` for a live callback domain.
+    """
+
+    ctx = get_context()
+    cb = ctx.oast.generate(label=label)
+    out = to_dict(cb)
+    if not ctx.oast.configured:
+        out["note"] = "No OAST server configured — run oast_configure (or set MOONMCP_OAST_DOMAIN)."
+    return out
+
+
+@mcp.tool()
+@safe_tool
+async def oast_poll(token: str | None = None) -> dict:
+    """Poll the configured OAST server for interactions (callbacks) — evidence a
+    blind vulnerability fired. Pass a `token` from `oast_generate` to correlate,
+    or omit for all. If no poll server is configured, returns the tracked canaries
+    so you can check them manually. No target traffic — talks to your OAST server.
+    """
+
+    ctx = get_context()
+    target = ctx.oast.poll_target(token)
+    if target is None:
+        return {"configured": ctx.oast.configured,
+                "note": "No poll_url configured — set one with oast_configure.",
+                "canaries": [to_dict(c) for c in ctx.oast.list()]}
+    try:
+        r = await ctx.http.fetch(target, method="GET", follow_redirects=True)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}", "poll_url": target}
+    if r.status is None:
+        return {"error": r.error or "poll request failed", "poll_url": target}
+    interactions = oastmod.parse_interactions(r.text())
+    return {"token": token, "status": r.status, "interaction_count": len(interactions),
+            "interactions": interactions[:200]}
+
+
+@mcp.tool()
+@safe_tool
+async def oast_list() -> dict:
+    """List the callback canaries minted this session (token, host, URLs, label)."""
+
+    ctx = get_context()
+    return {"count": len(ctx.oast.list()), "configured": ctx.oast.configured,
+            "canaries": [to_dict(c) for c in ctx.oast.list()]}
 
 
 # ---------------------------------------------------------------------------
@@ -879,6 +951,75 @@ async def open_redirect(target: str) -> dict:
     ctx = get_context()
     result = await redirectmod.check_open_redirect(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def trace_redirects(target: str, max_hops: int = 10) -> dict:
+    """Follow and analyse an in-scope URL's **redirect chain** hop by hop: each
+    hop's status, resolved Location, host and scheme, plus flags for
+    `offsite-redirect`, `https-to-http-downgrade`, `redirect-leaves-scope`
+    (recorded, not followed), `redirect-loop`, `meta-refresh` and `js-redirect`.
+    Useful for auth/OAuth `redirect_uri` flows, SSRF-via-redirect and downgrade
+    issues. Off-scope hops are reported but never contacted. In scope only.
+    """
+
+    from urllib.parse import urljoin, urlsplit
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    start_host = _require_scope(url)
+    ctx = get_context()
+    hops: list[dict] = []
+    flags: set[str] = set()
+    current = url
+    seen: set[str] = set()
+    final = url
+    for _ in range(max(1, min(max_hops, 20))):
+        r = await ctx.http.fetch(current, method="GET", follow_redirects=False)
+        sp = urlsplit(current)
+        hop: dict[str, Any] = {"url": current, "status": r.status,
+                               "host": sp.hostname, "scheme": sp.scheme}
+        final = current
+        if r.status is None:
+            hop["error"] = r.error
+            hops.append(hop)
+            break
+        location = r.header("Location") if (300 <= r.status < 400) else None
+        if location:
+            nxt = urljoin(current, location)
+            nsp = urlsplit(nxt)
+            hop["location"] = nxt
+            in_scope = ctx.scope.is_in_scope(nxt)
+            hop["location_in_scope"] = in_scope
+            if nsp.hostname and nsp.hostname != sp.hostname:
+                flags.add("offsite-redirect")
+            if sp.scheme == "https" and nsp.scheme == "http":
+                flags.add("https-to-http-downgrade")
+            hops.append(hop)
+            if nxt in seen:
+                flags.add("redirect-loop")
+                final = nxt
+                break
+            seen.add(nxt)
+            if not in_scope:
+                flags.add("redirect-leaves-scope")  # report, don't follow
+                final = nxt
+                break
+            current = nxt
+            continue
+        # terminal page — check for client-side redirects
+        body = r.text(4096)
+        mr = re.search(r'http-equiv=["\']?refresh["\']?[^>]*url=([^"\'>\s]+)', body, re.IGNORECASE)
+        if mr:
+            hop["meta_refresh"] = urljoin(current, mr.group(1))
+            flags.add("meta-refresh")
+        if re.search(r'(?:window\.)?location(?:\.href|\.replace\(|\s*=)', body, re.IGNORECASE):
+            flags.add("js-redirect")
+        hops.append(hop)
+        break
+    return {"start": url, "start_host": start_host, "hop_count": len(hops),
+            "final_url": final, "flags": sorted(flags), "hops": hops}
 
 
 @mcp.tool()
