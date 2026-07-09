@@ -6,6 +6,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`@active_tool` — one scope gate.** Scope logic (target normalization +
+  scope/SSRF check + intrusive gate + audit + structured-error envelope) is now
+  centralized in a single decorator; every packet-sending tool declares it and a
+  CI guard test asserts none ships un-gated.
+- **Bug-bounty program profiles** (`program_add` / `program_use` / `program_list`
+  / `program_remove`): each program carries its own scope **and its own
+  identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional
+  User-Agent, auto-attached to in-scope requests. Persist across restarts via
+  `MOONMCP_STATE_DIR`. `docs/ROADMAP.md` tracks the multi-phase plan.
 - **Engagement auth context** (`auth_set` / `auth_clear`) threaded into every
   in-scope request, unlocking authenticated testing.
 - **Access control / IDOR** (`access_control_check`) — user-A vs user-B vs

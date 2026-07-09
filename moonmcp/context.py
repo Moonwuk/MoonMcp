@@ -18,6 +18,7 @@ from .intel.oast import OastStore
 from .monitor import SnapshotStore
 from .net.http import HttpClient
 from .net.ratelimit import Governor
+from .programs import ProgramStore
 from .scope import ScopeManager
 
 
@@ -32,6 +33,7 @@ class AppContext:
     oast: OastStore
     snapshots: SnapshotStore
     audit: AuditLog
+    programs: ProgramStore
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
@@ -44,17 +46,35 @@ def build_context(settings: Settings | None = None) -> AppContext:
         scope.exclude(entry)
     governor = Governor(rate=settings.rate_limit, max_concurrency=settings.max_concurrency)
     auth = AuthContext()
+    programs = ProgramStore.from_env()
+    # If a program was persisted as active, apply its scope so a restart resumes
+    # the same engagement rather than an empty scope.
+    active = programs.active
+    if active is not None:
+        for entry in active.scope:
+            scope.add(entry)
+        for entry in active.scope_exclude:
+            scope.exclude(entry)
+
+    def _request_headers() -> dict[str, str]:
+        # The active program's bug-bounty header + User-Agent, with engagement
+        # credentials layered on top (auth wins on a key collision). Merged into
+        # every in-scope request by the HTTP client.
+        merged = dict(programs.active_headers())
+        merged.update(auth.merged_headers())
+        return merged
+
     http = HttpClient(
         governor,
         user_agent=settings.user_agent,
         default_timeout=settings.timeout,
         connect_guard=scope.blocked_connect_reason,
-        auth_provider=auth.merged_headers,
+        auth_provider=_request_headers,
     )
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
                       findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
                       snapshots=SnapshotStore(state_dir=os.environ.get("MOONMCP_STATE_DIR")),
-                      audit=AuditLog.from_env())
+                      audit=AuditLog.from_env(), programs=programs)
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

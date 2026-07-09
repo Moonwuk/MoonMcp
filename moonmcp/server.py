@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import platform
 import re
 from collections.abc import Awaitable, Callable
@@ -46,6 +47,7 @@ from .net import dns as dnsmod
 from .net import jarm as jarmmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
+from .programs import Program, parse_header
 from .recon import binary as binarymod
 from .recon import buckets as bucketsmod
 from .recon import config_audit as configmod
@@ -137,9 +139,9 @@ def _caller_tool() -> str:
         return "?"
 
 
-def _require_scope(target: str, *, intrusive: bool = False) -> str:
+def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = None) -> str:
     ctx = get_context()
-    tool = _caller_tool()
+    tool = tool or _caller_tool()
     if intrusive and not ctx.settings.allow_intrusive:
         ctx.audit.record("intrusive_blocked", tool=tool, target=str(target), decision="deny")
         raise ToolBlocked(
@@ -161,6 +163,61 @@ def _require_scope(target: str, *, intrusive: bool = False) -> str:
         raise ScopeError(reason)
     ctx.audit.record("scope_check", tool=tool, target=host, decision="allow")
     return host
+
+
+def active_tool(
+    target: str | None = None,
+    *,
+    intrusive: bool = False,
+    self_scoped: bool = False,
+) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+    """Declare a scope-gated **active** tool — the single place scope lives.
+
+    Applies, in one wrapper: the intrusive gate, the scope check + resolve-then-
+    check SSRF guard, the audit trail, and the ``safe_tool`` structured-error
+    envelope. A tool decorated with ``@active_tool()`` no longer calls
+    ``_require_scope`` itself — it just does its work, and its target argument is
+    authorised for it.
+
+    Args:
+        target: name of the parameter holding the host/URL/IP to authorise;
+            defaults to the tool's first parameter.
+        intrusive: gate behind ``MOONMCP_ALLOW_INTRUSIVE`` as well as scope.
+        self_scoped: for the handful of tools that authorise several targets (or
+            a conditional one) *themselves* — the decorator then skips the
+            automatic gate but still marks the tool as active so the scope-
+            coverage guard test passes. Such a body must call ``_require_scope``.
+
+    Every decorated tool carries ``__moonmcp_gated__ = True`` so the guard test
+    can prove no packet-sending tool ships un-gated.
+    """
+
+    def decorate(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        sig = inspect.signature(func)
+        names = list(sig.parameters)
+        tname = target if target is not None else (names[0] if names else None)
+
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not self_scoped:
+                if tname is None:
+                    raise ValueError(f"{func.__name__}: no target parameter to scope-check")
+                bound = sig.bind_partial(*args, **kwargs)
+                bound.apply_defaults()
+                raw = bound.arguments.get(tname)
+                if raw is None or (isinstance(raw, str) and not raw.strip()):
+                    raise ValueError(f"'{tname}' is required")
+                _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
+            return await func(*args, **kwargs)
+
+        gated = safe_tool(wrapper)
+        gated.__moonmcp_gated__ = True  # type: ignore[attr-defined]
+        gated.__moonmcp_intrusive__ = intrusive  # type: ignore[attr-defined]
+        gated.__moonmcp_self_scoped__ = self_scoped  # type: ignore[attr-defined]
+        gated.__moonmcp_scope_target__ = tname  # type: ignore[attr-defined]
+        return gated
+
+    return decorate
 
 
 def _scope_check() -> Callable[[str], bool]:
@@ -285,6 +342,7 @@ async def server_status() -> dict:
         "python": platform.python_version(),
         "scope": ctx.scope.entries(),
         "scope_enforced": s.enforce_scope,
+        "active_program": ctx.programs.active.summary() if ctx.programs.active else None,
         "auth_context": ctx.auth.redacted(),
         "block_private_addresses": s.block_private,
         "intrusive_allowed": s.allow_intrusive,
@@ -343,6 +401,113 @@ async def scope_remove(target: str) -> dict:
     ctx = get_context()
     removed = ctx.scope.remove(target)
     return {"removed": removed, "scope": ctx.scope.entries()}
+
+
+# ---------------------------------------------------------------------------
+# programs (bug-bounty engagement profiles)
+# ---------------------------------------------------------------------------
+def _split_entries(raw: str | None) -> list[str]:
+    """Split a comma/space/newline-separated scope string into entries."""
+
+    if not raw:
+        return []
+    return [e.strip() for e in raw.replace("\n", ",").replace(" ", ",").split(",") if e.strip()]
+
+
+def _activate_program(ctx: AppContext, prog: Program) -> None:
+    """Make *prog* the active engagement: swap the scope to its entries and start
+    attaching its header/UA (the HTTP client reads ``programs.active_headers``)."""
+
+    ctx.programs.use(prog.name)
+    ctx.scope.clear()
+    for entry in prog.scope:
+        ctx.scope.add(entry)
+    for entry in prog.scope_exclude:
+        ctx.scope.exclude(entry)
+
+
+@mcp.tool()
+@safe_tool
+async def program_add(name: str, scope: str | None = None, exclude: str | None = None,
+                      header: str | None = None, user_agent: str | None = None,
+                      note: str = "", activate: bool = True) -> dict:
+    """Register a bug-bounty **program / engagement profile** — the tidy way to run
+    many programs at once, each with its own scope and its own required header.
+
+    Every program tends to want its own IDENTIFYING header on your traffic so its
+    WAF/SOC recognises authorised testing: pass `header` as a raw ``"Name: value"``
+    (e.g. ``"X-HackerOne-Research: yourhandle"`` or ``"X-Bug-Bounty: you@example.com"``)
+    and, optionally, a per-program `user_agent`. `scope` / `exclude` accept
+    comma/space/newline-separated entries (same syntax as `scope_add`). When
+    `activate` (default), MoonMCP swaps in this program's scope and auto-attaches
+    its header + UA to every in-scope request. Profiles persist across restarts
+    when MOONMCP_STATE_DIR is set. Switch later with `program_use`.
+    """
+
+    ctx = get_context()
+    header_name = header_value = None
+    if header:
+        header_name, header_value = parse_header(header)
+    prog = Program(
+        name=name.strip(),
+        scope=_split_entries(scope),
+        scope_exclude=_split_entries(exclude),
+        header_name=header_name,
+        header_value=header_value,
+        user_agent=(user_agent or None),
+        note=note,
+    )
+    ctx.programs.add(prog)
+    result: dict[str, Any] = {"added": prog.name, "program": prog.summary(), "active": False}
+    if activate:
+        _activate_program(ctx, prog)
+        result["active"] = True
+        result["scope"] = ctx.scope.entries()
+    return result
+
+
+@mcp.tool()
+@safe_tool
+async def program_use(name: str) -> dict:
+    """Activate a registered program: swap in ITS scope and start attaching its
+    bug-bounty header + User-Agent to every in-scope request. See `program_list`
+    for the available names.
+    """
+
+    ctx = get_context()
+    prog = ctx.programs.get(name)
+    if prog is None:
+        return {"error": "not_found", "detail": f"no program named {name!r}",
+                "known": [p.name for p in ctx.programs.list()]}
+    _activate_program(ctx, prog)
+    return {"active": prog.name, "program": prog.summary(), "scope": ctx.scope.entries()}
+
+
+@mcp.tool()
+@safe_tool
+async def program_list() -> dict:
+    """List the registered bug-bounty programs and which one is active (with each
+    program's scope, bug-bounty header and User-Agent)."""
+
+    ctx = get_context()
+    return {
+        "active": ctx.programs.active_name,
+        "count": len(ctx.programs.list()),
+        "programs": [p.summary() for p in ctx.programs.list()],
+    }
+
+
+@mcp.tool()
+@safe_tool
+async def program_remove(name: str) -> dict:
+    """Remove a registered program. If it was active its header/UA stop being
+    attached; the current scope is left in place (clear it with scope_remove)."""
+
+    ctx = get_context()
+    was_active = ctx.programs.active_name == name
+    removed = ctx.programs.remove(name)
+    return {"removed": removed, "was_active": was_active,
+            "programs": [p.name for p in ctx.programs.list()]}
 
 
 @mcp.tool()
@@ -483,7 +648,7 @@ async def search_dorks(domain: str, category: str | None = None) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def enumerate_subdomains(domain: str, sources: list[str] | None = None) -> dict:
     """Passively enumerate subdomains of a domain via free OSINT sources.
 
@@ -493,7 +658,7 @@ async def enumerate_subdomains(domain: str, sources: list[str] | None = None) ->
     to use (see server_status / available list: crtsh, hackertarget, anubis, otx).
     """
 
-    host = _require_scope(domain)
+    host = normalize_target(domain)
     ctx = get_context()
     result = await submod.enumerate_subdomains(ctx.http, host, sources=sources)
     data = to_dict(result)
@@ -502,7 +667,7 @@ async def enumerate_subdomains(domain: str, sources: list[str] | None = None) ->
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def wayback_urls(domain: str, limit: int = 500, include_subdomains: bool = True) -> dict:
     """Fetch historical URLs for a domain from the Internet Archive (Wayback).
 
@@ -510,7 +675,7 @@ async def wayback_urls(domain: str, limit: int = 500, include_subdomains: bool =
     'interesting' URLs (backups, configs, .git, api, tokens, ...) separately.
     """
 
-    host = _require_scope(domain)
+    host = normalize_target(domain)
     ctx = get_context()
     result = await waybackmod.fetch_wayback_urls(
         ctx.http, host, limit=limit, include_subdomains=include_subdomains
@@ -610,14 +775,14 @@ async def cloud_buckets(keyword: str, max_candidates: int = 80) -> dict:
 # active (light) — scope-gated
 # ---------------------------------------------------------------------------
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def dns_lookup(target: str) -> dict:
     """Resolve a host's DNS records (A/AAAA, plus MX/NS/TXT/CNAME/SOA/CAA when
     dnspython is installed) and attempt a reverse PTR lookup on its A records.
     Requires the target to be in scope.
     """
 
-    host = _require_scope(target)
+    host = normalize_target(target)
     result = await dnsmod.resolve(host, http_client=get_context().http)
     data = to_dict(result)
     ptr = {}
@@ -631,7 +796,7 @@ async def dns_lookup(target: str) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def http_probe(
     target: str,
     method: str = "GET",
@@ -646,7 +811,7 @@ async def http_probe(
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    host = _require_scope(url)
+    host = normalize_target(url)
     ctx = get_context()
     result = await ctx.http.fetch(
         url,
@@ -682,7 +847,7 @@ async def http_probe(
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def tls_inspect(target: str, port: int = 443) -> dict:
     """Inspect a host's TLS certificate: subject, issuer, validity window, days
     until expiry, negotiated protocol/cipher, and — most useful for recon — the
@@ -690,13 +855,12 @@ async def tls_inspect(target: str, port: int = 443) -> dict:
     """
 
     host, tls_port = _split_host_port(target, port)
-    _require_scope(host)
     result = await tlsmod.inspect_certificate(host, tls_port, timeout=get_context().settings.timeout)
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def analyze_headers(target: str) -> dict:
     """Fetch a URL and audit its HTTP security headers.
 
@@ -707,7 +871,6 @@ async def analyze_headers(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await ctx.http.fetch(
         url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
@@ -719,7 +882,7 @@ async def analyze_headers(target: str) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def fingerprint(target: str) -> dict:
     """Fetch a URL and fingerprint its technology stack: web server, CDN/WAF,
     language/runtime, frameworks, CMS and front-end libraries, with version hints
@@ -728,7 +891,7 @@ async def fingerprint(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    host = _require_scope(url)
+    host = normalize_target(url)
     ctx = get_context()
     result = await ctx.http.fetch(
         url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
@@ -742,7 +905,7 @@ async def fingerprint(target: str) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def well_known(target: str) -> dict:
     """Fetch and parse a host's disclosure files: robots.txt (extracting the
     referenced paths), sitemap.xml (extracting <loc> URLs), security.txt and
@@ -750,7 +913,6 @@ async def well_known(target: str) -> dict:
     """
 
     host, port = _split_host_port(target, 443)
-    _require_scope(host)
     raw = target.strip()
     scheme = "http" if raw.startswith("http://") else "https"
     ctx = get_context()
@@ -764,7 +926,7 @@ async def well_known(target: str) -> dict:
 # web-app checks (light active, scope-gated) + email OSINT
 # ---------------------------------------------------------------------------
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def crawl(target: str, max_pages: int = 10) -> dict:
     """Lightly crawl an in-scope site (depth 1, bounded) and extract its attack
     surface: internal links, forms + their input names, JavaScript/asset URLs,
@@ -774,7 +936,6 @@ async def crawl(target: str, max_pages: int = 10) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await crawlmod.crawl(
         ctx.http, url, scope_check=_scope_check(), max_pages=max(1, min(max_pages, 30))
@@ -783,7 +944,7 @@ async def crawl(target: str, max_pages: int = 10) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def analyze_js(target: str, max_scripts: int = 15) -> dict:
     """Deep-extract the hidden API surface from a page **and its JavaScript** —
     absolute and relative endpoints/routes that a UI crawl never sees, plus any
@@ -794,14 +955,13 @@ async def analyze_js(target: str, max_scripts: int = 15) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     return await jsmod.analyze(ctx.http, url, max_scripts=max(1, min(max_scripts, 40)),
                                scope_check=_scope_check())
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(self_scoped=True)
 async def parse_openapi(target: str | None = None, content: str | None = None) -> dict:
     """Parse an OpenAPI/Swagger spec into an endpoint / parameter / method
     inventory — an exposed `openapi.json` / `swagger.json` is a map of the whole
@@ -817,13 +977,13 @@ async def parse_openapi(target: str | None = None, content: str | None = None) -
     if target:
         raw = target.strip()
         url = raw if "://" in raw else f"https://{raw}"
-        _require_scope(url)
+        _require_scope(url, tool="parse_openapi")
         return await openapimod.fetch_and_parse(get_context().http, url, scope_check=_scope_check())
     return {"error": "invalid_input", "detail": "pass a 'target' URL or inline 'content'"}
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def extract_secrets(target: str, scan_js: bool = True, max_js: int = 15) -> dict:
     """Fetch an in-scope page (and, by default, its linked JavaScript) and scan
     for exposed secrets: cloud keys (AWS/GCP), API tokens (GitHub, Slack, Stripe,
@@ -833,7 +993,6 @@ async def extract_secrets(target: str, scan_js: bool = True, max_js: int = 15) -
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     scan = await secretsmod.scan_secrets(
         ctx.http, url, scope_check=_scope_check(), include_js=scan_js,
@@ -845,7 +1004,7 @@ async def extract_secrets(target: str, scan_js: bool = True, max_js: int = 15) -
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def cors_audit(target: str) -> dict:
     """Test an in-scope URL for CORS misconfigurations: arbitrary-origin
     reflection, 'null' origin acceptance, and prefix/suffix/subdomain bypasses —
@@ -855,14 +1014,13 @@ async def cors_audit(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await corsmod.audit_cors(ctx.http, url)
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def access_control_check(target: str, method: str = "GET", body: str | None = None,
                                second_headers: dict[str, str] | None = None) -> dict:
     """Probe an in-scope URL for broken access control / IDOR by replaying the
@@ -884,7 +1042,6 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     bodyb = body.encode() if body else None
     m = method.upper()
@@ -944,7 +1101,7 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def graphql_check(target: str) -> dict:
     """Probe an in-scope host for GraphQL endpoints across common paths and test
     whether schema introspection is enabled (which leaks the full API surface).
@@ -953,14 +1110,13 @@ async def graphql_check(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await graphqlmod.discover_graphql(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def discover_parameters(target: str, method: str = "GET",
                               wordlist: list[str] | None = None) -> dict:
     """Discover **hidden parameters** on an in-scope URL: probe a wordlist of
@@ -973,7 +1129,6 @@ async def discover_parameters(target: str, method: str = "GET",
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await paramsmod.discover_parameters(
         ctx.http, url, method=method, wordlist=wordlist, scope_check=_scope_check(),
@@ -982,7 +1137,7 @@ async def discover_parameters(target: str, method: str = "GET",
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def waf_detect(target: str) -> dict:
     """Fingerprint an in-scope host's WAF/CDN from response headers, cookies and
     server strings (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, ...). When
@@ -992,7 +1147,6 @@ async def waf_detect(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await wafmod.detect_waf(
         ctx.http, url, scope_check=_scope_check(), active=ctx.settings.allow_intrusive
@@ -1001,7 +1155,7 @@ async def waf_detect(target: str) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def takeover_check(target: str) -> dict:
     """Check an in-scope subdomain for a potential subdomain takeover: resolves
     the CNAME chain, matches it against a database of takeover-prone providers
@@ -1010,14 +1164,14 @@ async def takeover_check(target: str) -> dict:
     triage signals — verify manually. In scope only.
     """
 
-    host = _require_scope(target)
+    host = normalize_target(target)
     ctx = get_context()
     result = await takeovermod.check_takeover(ctx.http, host, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def open_redirect(target: str) -> dict:
     """Test an in-scope URL for open-redirect flaws by injecting an external
     canary into the common redirect parameters (url, next, redirect, returnTo, …)
@@ -1028,14 +1182,13 @@ async def open_redirect(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await redirectmod.check_open_redirect(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def trace_redirects(target: str, max_hops: int = 10) -> dict:
     """Follow and analyse an in-scope URL's **redirect chain** hop by hop: each
     hop's status, resolved Location, host and scheme, plus flags for
@@ -1049,7 +1202,7 @@ async def trace_redirects(target: str, max_hops: int = 10) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    start_host = _require_scope(url)
+    start_host = normalize_target(url)
     ctx = get_context()
     hops: list[dict] = []
     flags: set[str] = set()
@@ -1104,7 +1257,7 @@ async def trace_redirects(target: str, max_hops: int = 10) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def vcs_exposure(target: str) -> dict:
     """Check an in-scope host for exposed VCS/config artefacts (.git, .svn, .hg,
     .env, .DS_Store). Confirms real exposure by validating each file's content
@@ -1114,7 +1267,6 @@ async def vcs_exposure(target: str) -> dict:
     """
 
     host, port = _split_host_port(target, 443)
-    _require_scope(host)
     raw = target.strip()
     scheme = "http" if raw.startswith("http://") else "https"
     base = raw if "://" in raw else f"{scheme}://{host}"
@@ -1124,7 +1276,7 @@ async def vcs_exposure(target: str) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def screenshot(target: str, full_page: bool = True, return_base64: bool = False) -> dict:
     """Capture a rendered screenshot of an in-scope page using Playwright +
     Chromium, saved to disk (path returned). Optional and self-degrading: if
@@ -1136,7 +1288,6 @@ async def screenshot(target: str, full_page: bool = True, return_base64: bool = 
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     out_dir = ctx.settings.screenshot_dir or __import__("os").path.join(
         tempfile.gettempdir(), "moonmcp-screenshots"
@@ -1159,7 +1310,7 @@ def _browser_auth(url: str) -> tuple[dict, list[dict]]:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def browser_open(target: str, capture_html: bool = False,
                        wait_until: str = "load") -> dict:
     """Open an in-scope URL in a headless browser (Playwright + Chromium) and
@@ -1174,7 +1325,6 @@ async def browser_open(target: str, capture_html: bool = False,
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     headers, cookies = _browser_auth(url)
     result = await browsermod.browse(
         url, capture_html=capture_html, wait_until=wait_until,
@@ -1184,7 +1334,7 @@ async def browser_open(target: str, capture_html: bool = False,
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def browser_eval(target: str, script: str, wait_until: str = "load") -> dict:
     """Run JavaScript in the page's context — the **browser console** — against an
     in-scope URL and return the (JSON-serialisable) result, plus the console log
@@ -1196,7 +1346,6 @@ async def browser_eval(target: str, script: str, wait_until: str = "load") -> di
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     headers, cookies = _browser_auth(url)
     result = await browsermod.browse(
         url, script=script, capture_text=False, wait_until=wait_until,
@@ -1210,7 +1359,7 @@ async def browser_eval(target: str, script: str, wait_until: str = "load") -> di
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def browser_interact(target: str, actions: list[dict]) -> dict:
     """Drive the headless browser through a sequence of ACTIONS against an in-scope
     URL — click, fill/type inputs, submit forms, wait for selectors, run JS — to
@@ -1230,7 +1379,6 @@ async def browser_interact(target: str, actions: list[dict]) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     headers, cookies = _browser_auth(url)
     result = await browsermod.interact(
         url, actions or [], extra_headers=headers, cookies=cookies,
@@ -1240,7 +1388,7 @@ async def browser_interact(target: str, actions: list[dict]) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def analyze_binary(target: str, decompile: bool = True) -> dict:
     """Download an in-scope compiled artifact (.dll/.exe/.jar/.so/.apk/…) and
     triage it: identify the file type (incl. .NET assemblies), extract ASCII +
@@ -1252,7 +1400,6 @@ async def analyze_binary(target: str, decompile: bool = True) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     fetched = await ctx.http.fetch(url, follow_redirects=True, timeout=30.0,
                                    max_body=12 * 1024 * 1024, scope_check=_scope_check())
@@ -1296,7 +1443,7 @@ async def analyze_binary(target: str, decompile: bool = True) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(self_scoped=True)
 async def analyze_config(content: str | None = None, target: str | None = None,
                          filename: str | None = None) -> dict:
     """Parse a configuration file and lay out **every setting** so you can
@@ -1316,7 +1463,7 @@ async def analyze_config(content: str | None = None, target: str | None = None,
     if content is None:
         raw = target.strip()
         url = raw if "://" in raw else f"https://{raw}"
-        _require_scope(url)
+        _require_scope(url, tool="analyze_config")
         ctx = get_context()
         r = await ctx.http.fetch(url, follow_redirects=True, timeout=15.0,
                                  max_body=2 * 1024 * 1024, scope_check=_scope_check())
@@ -1333,14 +1480,14 @@ async def analyze_config(content: str | None = None, target: str | None = None,
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def email_security(domain: str) -> dict:
     """Analyze a domain's email-spoofing posture over DNS: SPF, DMARC (policy),
     DKIM (common selectors) and CAA, with an A-F grade and specific weaknesses
     (missing/again weak SPF, DMARC p=none, no CAA, ...). Passive DNS. In scope only.
     """
 
-    host = _require_scope(domain)
+    host = normalize_target(domain)
     ctx = get_context()
     result = await emailmod.analyze_email_security(ctx.http, host)
     return to_dict(result)
@@ -1362,7 +1509,7 @@ async def jwt_analyze(token: str) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def favicon_hash(target: str) -> dict:
     """Compute an in-scope site's favicon hash (Shodan-style mmh3). Two hosts
     sharing a favicon hash are usually the same product/instance, so the returned
@@ -1372,14 +1519,13 @@ async def favicon_hash(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await faviconmod.fetch_favicon_hash(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def tls_fingerprint(target: str, port: int = 443) -> dict:
     """Profile a host's TLS configuration: which protocol versions it supports
     (flagging weak TLS 1.0/1.1), the cipher per version, and ALPN / HTTP-2
@@ -1388,13 +1534,12 @@ async def tls_fingerprint(target: str, port: int = 443) -> dict:
     """
 
     host, tls_port = _split_host_port(target, port)
-    _require_scope(host)
     result = await tlsmod.probe_tls_profile(host, tls_port, timeout=get_context().settings.timeout)
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def jarm_fingerprint(target: str, port: int = 443) -> dict:
     """Compute the **JARM** active TLS fingerprint of an in-scope host (Salesforce's
     62-char server fingerprint from 10 crafted TLS handshakes). Two servers with
@@ -1404,14 +1549,13 @@ async def jarm_fingerprint(target: str, port: int = 443) -> dict:
     """
 
     host, jport = _split_host_port(target, port)
-    _require_scope(host)
     ctx = get_context()
     result = await jarmmod.compute_jarm(host, jport, timeout=max(10.0, ctx.settings.timeout))
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def origin_discovery(domain: str) -> dict:
     """Try to find the real origin IP behind a CDN/WAF for an in-scope host.
     Resolves the front IPs and detects the CDN, then hunts candidate origins via
@@ -1420,14 +1564,14 @@ async def origin_discovery(domain: str) -> dict:
     CDN front. Passive+light. In scope only.
     """
 
-    host = _require_scope(domain)
+    host = normalize_target(domain)
     ctx = get_context()
     result = await originmod.discover_origin(ctx.http, host, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def behavior_probe(target: str) -> dict:
     """Profile how an in-scope target *behaves*: 404 handling (soft-404 / custom),
     stack-trace / error disclosure, Host and X-Forwarded-Host reflection
@@ -1437,7 +1581,6 @@ async def behavior_probe(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url)
     ctx = get_context()
     result = await behaviormod.profile_behavior(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
@@ -1447,7 +1590,7 @@ async def behavior_probe(target: str) -> dict:
 # active (intrusive) — scope-gated + allow_intrusive
 # ---------------------------------------------------------------------------
 @mcp.tool()
-@safe_tool
+@active_tool(intrusive=True)
 async def port_scan(
     target: str,
     ports: str = "top",
@@ -1460,7 +1603,7 @@ async def port_scan(
     MOONMCP_ALLOW_INTRUSIVE and the host to be in scope.
     """
 
-    host = _require_scope(target, intrusive=True)
+    host = normalize_target(target)
     port_list = portsmod.parse_ports(ports)
     if len(port_list) > 5000:
         return {"error": "too_many_ports", "detail": f"{len(port_list)} ports requested; cap is 5000"}
@@ -1477,7 +1620,7 @@ async def port_scan(
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(intrusive=True)
 async def content_discovery(
     target: str,
     wordlist: list[str] | None = None,
@@ -1490,7 +1633,6 @@ async def content_discovery(
     """
 
     host, port = _split_host_port(target, 443)
-    _require_scope(host, intrusive=True)
     raw = target.strip()
     scheme = "http" if raw.startswith("http://") else "https"
     ctx = get_context()
@@ -1502,7 +1644,7 @@ async def content_discovery(
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(intrusive=True)
 async def http_methods(target: str) -> dict:
     """Enumerate an in-scope URL's allowed HTTP methods (from OPTIONS) and probe
     sensitive ones (TRACE, PUT, DELETE, PATCH) to flag XST or write-enabled
@@ -1512,14 +1654,13 @@ async def http_methods(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url, intrusive=True)
     ctx = get_context()
     result = await methodsmod.check_methods(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(intrusive=True)
 async def waf_efficacy(target: str) -> dict:
     """Test how effective an in-scope target's WAF is: sends **benign canary**
     payloads across the common attack categories (XSS, SQLi, LFI, RCE, SSTI,
@@ -1532,14 +1673,13 @@ async def waf_efficacy(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url, intrusive=True)
     ctx = get_context()
     result = await wafbypassmod.test_waf_efficacy(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(intrusive=True)
 async def desync_probe(target: str) -> dict:
     """Detection-only HTTP request-smuggling **indicator** probe for an in-scope
     host. Sends single, complete, well-formed requests (no partial/dangling
@@ -1552,7 +1692,6 @@ async def desync_probe(target: str) -> dict:
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url, intrusive=True)
     result = await desyncmod.probe_desync(url, timeout=max(10.0, get_context().settings.timeout))
     return to_dict(result)
 
@@ -1979,7 +2118,7 @@ async def identify_waf(text: str) -> dict:
 # orchestration
 # ---------------------------------------------------------------------------
 @mcp.tool()
-@safe_tool
+@active_tool(self_scoped=True)
 async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
     """Probe a LIST of hosts/URLs in parallel — the enum→probe step of the recon
     loop. Pass the output of `enumerate_subdomains` to find which hosts are live
@@ -1995,7 +2134,7 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
         raw = t.strip()
         url = raw if "://" in raw else f"https://{raw}"
         try:
-            host = _require_scope(url)
+            host = _require_scope(url, tool="probe_batch")
         except ScopeError as exc:
             return {"target": raw, "skipped": "out_of_scope", "detail": str(exc)}
         ctx = get_context()
@@ -2032,7 +2171,7 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     """One-shot passive+light recon of an in-scope domain.
 
@@ -2042,7 +2181,7 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     performed. Ideal as the first call against a new target.
     """
 
-    host = _require_scope(domain)
+    host = normalize_target(domain)
     ctx = get_context()
     report: dict[str, Any] = {"target": host}
 
@@ -2087,7 +2226,7 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool()
 async def report(domain: str) -> dict:
     """Run a full safe recon sweep of an in-scope target and return both a
     structured report and a rendered **Markdown** document, with findings
@@ -2098,7 +2237,7 @@ async def report(domain: str) -> dict:
 
     from datetime import datetime, timezone
 
-    host = _require_scope(domain)
+    host = normalize_target(domain)
     ctx = get_context()
     check = _scope_check()
     apex_url = f"https://{host}"
@@ -2180,7 +2319,7 @@ async def external_tools() -> dict:
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(self_scoped=True)
 async def run_scanner(tool: str, args: list[str], target: str | None = None) -> dict:
     """Run an installed external security CLI and return its output.
 
@@ -2210,7 +2349,7 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
                           "enforcement is on. Pass a 'target' that is in scope, or include the "
                           "host/URL in args."}
     for t in to_check:
-        _require_scope(t)
+        _require_scope(t, tool="run_scanner")
     ctx.audit.record("external_tool", tool=tool, target=(target or ",".join(to_check)),
                      decision="run", args=args[:20])
     result = await cli.run_tool(
@@ -2225,7 +2364,7 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
 
 
 @mcp.tool()
-@safe_tool
+@active_tool(intrusive=True)
 async def vuln_scan(target: str, templates: str | None = None, severity: str | None = None) -> dict:
     """Run a nuclei template-based vulnerability scan against an in-scope target.
 
@@ -2235,7 +2374,7 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
     MOONMCP_ALLOW_INTRUSIVE, MOONMCP_ALLOW_EXTERNAL_TOOLS and the host in scope.
     """
 
-    host = _require_scope(target, intrusive=True)
+    host = normalize_target(target)
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{host}"

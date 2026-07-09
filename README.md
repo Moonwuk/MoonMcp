@@ -44,13 +44,14 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **87 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **91 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
-| `server_status` | Report config, detected enhancers and external CLIs. |
+| `server_status` | Report config, active program, detected enhancers and external CLIs. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
+| `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
 | `oast_configure` / `oast_generate` / `oast_poll` / `oast_list` | Out-of-band **callback** canaries (interactsh/Collaborator-compatible) to confirm **blind** vulns (blind SSRF/XXE/RCE/SQLi, blind XSS): mint a canary URL, plant it, poll for the callback. |
 | `audit_log` | Read the session **audit trail** — one record per scope decision (allow / deny / SSRF-block) and external command (also on `audit://recent`, persisted via `MOONMCP_AUDIT_LOG`). |
@@ -259,29 +260,52 @@ you've declared authorised.
 * **Scope-checks external-CLI targets** — `run_scanner` extracts and validates the
   host/URL from its args, not just the optional `target` field.
 
+### Program profiles (one header per program)
+
+Bug-bounty programs each want their own identifying header on your traffic so
+their WAF/SOC recognises authorised testing. A **program profile** bundles that
+with the program's scope:
+
+```
+program_add(name="acme", scope="*.acme.com, api.acme.io",
+            exclude="blog.acme.com",
+            header="X-HackerOne-Research: yourhandle",
+            user_agent="acme-recon/1.0")     # activates by default
+program_use(name="acme")                     # switch engagements later
+```
+
+Activating a program swaps in **its** scope and auto-attaches its header +
+User-Agent to every **in-scope** request (through the same merge path as
+`auth_set`, so it never leaks to out-of-scope hosts). Profiles persist to
+`MOONMCP_STATE_DIR`, so a restart resumes the same engagement. Engagement
+credentials from `auth_set` still layer on top and win on a key collision.
+
 ---
 
 ## How a tool call is processed
 
-Every tool runs through the same pipeline, so behaviour is uniform and safe:
+Every packet-sending tool wears **one decorator — `@active_tool`** — that is the
+single place scope lives, so behaviour is uniform and safe:
 
 1. **Normalise** the target — a URL, `host:port`, bracketed IPv6 or bare host is
    reduced to a canonical host.
-2. **Classify & gate** — the tool declares its class:
+2. **Classify & gate** — the tool declares its class via the decorator:
    *passive OSINT* (third-party datasets, e.g. `ip_intel`, `cve_search`) runs
-   without touching the target; *light active* (`http_probe`, `favicon_hash`, …)
-   and *intrusive* (`port_scan`, `waf_efficacy`, …) call `scope.check()`, which
-   fails closed if the host isn't in scope, is a blocked private IP, or — for
-   intrusive tools — `MOONMCP_ALLOW_INTRUSIVE` is off.
+   without touching the target; *light active* (`@active_tool()`, e.g.
+   `http_probe`, `favicon_hash`) and *intrusive* (`@active_tool(intrusive=True)`,
+   e.g. `port_scan`, `waf_efficacy`) route through `_require_scope`, which fails
+   closed if the host isn't in scope, is a blocked private IP, or — for intrusive
+   tools — `MOONMCP_ALLOW_INTRUSIVE` is off. A CI guard test asserts every
+   packet-sending tool carries the gate, so an un-gated capability can't ship.
 3. **Rate-limit** — all outbound traffic passes one shared token-bucket +
    concurrency `Governor`, so a fan-out never exceeds `MOONMCP_RATE_LIMIT`.
 4. **Execute** on the async stdlib layer (blocking calls wrapped in
    `asyncio.to_thread`), preferring an installed CLI when present and detected.
 5. **Structure the result** — dataclasses are converted to clean JSON; the HTTP
    client caps body size and re-checks redirects against scope.
-6. **Contain failures** — the `@safe_tool` wrapper turns scope/validation errors
-   into structured `{"error": …}` objects instead of exceptions, so one bad
-   input never crashes the session.
+6. **Contain failures** — the `@active_tool` gate (and the `@safe_tool` wrapper it
+   applies) turns scope/validation errors into structured `{"error": …}` objects
+   instead of exceptions, so one bad input never crashes the session.
 
 ---
 
@@ -306,11 +330,12 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 87 tools, 10 resources, 8 prompts
+├── server.py        # FastMCP server: 91 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
+├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
-├── context.py       # shared Settings + Scope + rate Governor + HttpClient
+├── context.py       # shared Settings + Scope + rate Governor + HttpClient + Programs
 ├── net/             # stdlib networking (async via asyncio.to_thread)
 │   ├── http.py      #   urllib-based HTTP client w/ redirect tracing + rate limit
 │   ├── dns.py       #   getaddrinfo + DNS-over-HTTPS (+ optional dnspython)
@@ -338,7 +363,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 100 tests: scope logic, parsers, web-app checks, and local-server integration
+pytest -q          # 190+ tests: scope logic, the @active_tool gate, program profiles, parsers, web-app checks, local-server integration
 ruff check .
 ```
 
