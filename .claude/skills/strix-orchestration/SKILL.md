@@ -41,6 +41,12 @@ Think of it as: **MoonMCP finds, Strix confirms.**
    - the exact in-scope `target`,
    - a tight `instruction` that carries the **rules of engagement** and the
      concrete lead(s) MoonMCP found (see the instruction recipe below).
+
+   `strix_run` defaults to `watch=True`: it opens a terminal window that streams
+   Strix's live output (falling back to a tmux session, then a `tail -f` hint on
+   headless boxes) so the operator can watch the autonomous run in real time. The
+   result's `live_console` says how it opened; `MOONMCP_TERMINAL` forces a specific
+   emulator, `watch=False` disables the window.
 4. **Consume & merge.** Take Strix's validated findings + PoCs, record them with
    MoonMCP `add_finding` (severity + evidence), then `triage_findings` to dedupe
    and rank, and `report` / `export_findings` for the writeup. Strix's PoC is your

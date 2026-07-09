@@ -40,12 +40,36 @@ playbook; this doc is the wiring.
 
 `examples/strix_mcp/server.py` is a small MCP server exposing:
 
-- `strix_available()` — is `strix` + Docker + the LLM env ready?
-- `strix_run(target, instruction, wait=True, timeout=1800)` — scope-checks
-  `target`, prepends MoonMCP's `RULES_OF_ENGAGEMENT`, runs
+- `strix_available()` — is `strix` + Docker + the LLM env ready? (also reports
+  how a live-watch console would open — see below).
+- `strix_run(target, instruction, wait=True, timeout=1800, watch=True)` —
+  scope-checks `target`, prepends MoonMCP's `RULES_OF_ENGAGEMENT`, runs
   `strix -n --target … --instruction-file …`, returns the parsed run (or launches
-  detached when `wait=false`).
+  detached when `wait=false`). With `watch=True` (default) it **opens a terminal
+  window that streams Strix's output live** so you can watch it work.
 - `strix_result(run_name=None)` — read a `strix_runs/<name>` directory.
+
+### Watch Strix work in real time (`watch=True`)
+
+Strix runs its own long autonomous loop, so `strix_run` tees that output to a log
+under `strix_runs/strix-live-*.log` and pops open a terminal window that follows
+it (`tail -f`). The result carries a `live_console` object describing what opened
+(`method`, `pid`/`session`) and a `log` path.
+
+It is **best-effort and never blocks the run**:
+
+1. **GUI terminal** — the first available emulator: `x-terminal-emulator`,
+   `gnome-terminal`, `konsole`, `qterminal`, `kitty`, `xterm`, … (needs
+   `$DISPLAY`/`$WAYLAND_DISPLAY`). On macOS it drives Terminal.app via `osascript`;
+   on Windows a PowerShell `Get-Content -Wait` window.
+2. **tmux** — if there's no GUI, it streams into a detached tmux session and hands
+   back `tmux attach -t strix-…`.
+3. **Hint** — otherwise it returns a copy-pasteable `tail -f <log>` so you can
+   follow it yourself. Nothing is lost — the log file is always written.
+
+Force a specific emulator with `MOONMCP_TERMINAL` (e.g. `MOONMCP_TERMINAL=kitty`,
+or `MOONMCP_TERMINAL_EXEC` for its exec flag if it isn't `-e`). Disable the window
+entirely with `watch=false`.
 
 Run it standalone to sanity-check:
 ```bash
