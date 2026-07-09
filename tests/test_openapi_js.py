@@ -40,6 +40,22 @@ def test_parse_spec_invalid():
     assert "error" in openapimod.parse_spec("<<not a spec>>")
 
 
+def test_parse_spec_null_or_nonstring_description():
+    # a null / non-string description must not crash the whole parse (regression)
+    for desc in ("null", "123", '{"a":1}'):
+        spec = '{"openapi":"3.0.0","paths":{"/x":{"get":{"description":' + desc + "}}}}"
+        out = openapimod.parse_spec(spec)
+        assert out["endpoint_count"] == 1
+        assert out["endpoints"][0]["summary"] == ""
+
+
+def test_js_analyze_ignores_malformed_script_src():
+    # a malformed src must be skipped, not raise ValueError (regression)
+    assert jsmod.script_srcs('<script src="//["></script>') == ["//["]
+    # extract still works on the surrounding content
+    assert jsmod.extract_endpoints('a="/api/ok"') == ["/api/ok"]
+
+
 def test_js_extract_endpoints_pure():
     js = "fetch('/api/v1/x');var u=\"/api/v2/y?id=1\";img='/logo.png';a='https://cdn.x/app.js'"
     eps = jsmod.extract_endpoints(js)

@@ -17,6 +17,13 @@ def test_generate_bucket_names():
     assert all(3 <= len(n) <= 63 for n in names)
 
 
+def test_valid_rejects_consecutive_dots():
+    # regression: 'a..b' has an empty DNS label and must be rejected
+    assert bucketsmod._valid("acme-backup")
+    assert not bucketsmod._valid("ex..ample")
+    assert "ex..ample" not in bucketsmod.generate_bucket_names("ex..ample")
+
+
 def test_classify_status():
     assert bucketsmod.classify_status(200) == "public-listable"
     assert bucketsmod.classify_status(403) == "exists-private"

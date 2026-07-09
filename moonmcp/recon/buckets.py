@@ -48,8 +48,10 @@ def _base_keywords(keyword: str) -> list[str]:
 
 
 def _valid(name: str) -> bool:
-    # DNS-style bucket naming: 3-63 chars, lowercase alnum plus - and .
-    return bool(3 <= len(name) <= 63 and re.fullmatch(r"[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]", name))
+    # DNS-style bucket naming: 3-63 chars, lowercase alnum plus - and ., no empty
+    # labels (consecutive dots) which S3/GCS/DNS reject.
+    return bool(3 <= len(name) <= 63 and ".." not in name
+                and re.fullmatch(r"[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]", name))
 
 
 def generate_bucket_names(keyword: str, limit: int = 120) -> list[str]:

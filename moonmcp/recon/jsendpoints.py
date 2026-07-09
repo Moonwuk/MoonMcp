@@ -77,12 +77,20 @@ async def analyze(http_client, url: str, *, max_scripts: int = 15, scope_check=N
     base = page.final_url or url
     srcs = script_srcs(html)
     # only follow same-origin scripts (in-scope); cap the count
-    origin = urlsplit(base).hostname
+    try:
+        origin = urlsplit(base).hostname
+    except ValueError:
+        origin = None
     to_fetch = []
     for s in srcs:
-        full = urljoin(base, s)
-        if urlsplit(full).hostname == origin:
-            to_fetch.append(full)
+        # a malformed src (e.g. an unclosed IPv6 bracket) must not abort the whole
+        # analysis and discard the endpoints already found in the page HTML.
+        try:
+            full = urljoin(base, s)
+            if urlsplit(full).hostname == origin:
+                to_fetch.append(full)
+        except ValueError:
+            continue
     for js_url in to_fetch[:max_scripts]:
         r = await http_client.fetch(js_url, method="GET", follow_redirects=True,
                                     scope_check=scope_check)

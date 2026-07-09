@@ -102,11 +102,16 @@ def parse_spec(content: str) -> dict:
             rb = op.get("requestBody")
             if isinstance(rb, dict) and isinstance(rb.get("content"), dict):
                 body_types = list(rb["content"].keys())
+            # summary/description may be null or non-string in a malformed spec —
+            # coerce to "" rather than slicing a None/int (which would TypeError
+            # and abort the whole otherwise-parseable spec).
+            summ = op.get("summary") or op.get("description") or ""
+            summ = summ[:120] if isinstance(summ, str) else ""
             endpoints.append({
                 "method": method.upper(),
                 "path": path,
                 "operation_id": op.get("operationId"),
-                "summary": op.get("summary") or op.get("description", "")[:120],
+                "summary": summ,
                 "tags": op.get("tags", []),
                 "parameters": _params(op, shared),
                 "request_body_types": body_types,
