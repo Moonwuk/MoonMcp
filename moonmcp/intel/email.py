@@ -63,7 +63,9 @@ async def analyze_email_security(client, domain: str) -> EmailSecurity:
             for part in val.split(";"):
                 part = part.strip()
                 if part.lower().startswith("p="):
-                    result.dmarc_policy = part[2:].strip()
+                    # lower-cased so the downstream enforcement check
+                    # (`in ("quarantine","reject")`) matches `p=Reject` / `p=None`.
+                    result.dmarc_policy = part[2:].strip().lower()
             break
     if not result.dmarc:
         result.issues.append("No DMARC record — spoofed mail is not reported/rejected")

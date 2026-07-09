@@ -84,7 +84,10 @@ async def _hackertarget(client: HttpClient, domain: str) -> tuple[str, set[str],
     if r.error or r.status != 200:
         return "hackertarget", set(), r.error or f"HTTP {r.status}"
     text = r.text()
-    if "API count exceeded" in text or "error" in text.lower()[:40]:
+    # Anchor the error match: HackerTarget errors read "error <msg>" / "API count
+    # exceeded", so a valid first result like "errors.example.com,1.2.3.4" (no
+    # space after "error") must not discard the whole set.
+    if "API count exceeded" in text or text.lstrip().lower().startswith("error "):
         return "hackertarget", set(), text.strip()[:120]
     found: set[str] = set()
     for line in text.splitlines():

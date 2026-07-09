@@ -144,7 +144,8 @@ class MemoryStore:
 
     # -- querying ----------------------------------------------------------
     def get(self, item_id: int) -> dict | None:
-        row = self._db.execute("SELECT * FROM memory WHERE id=?", (item_id,)).fetchone()
+        with self._lock:  # the shared connection is used under the lock everywhere else
+            row = self._db.execute("SELECT * FROM memory WHERE id=?", (item_id,)).fetchone()
         return dict(row) if row else None
 
     def _filtered(self, rows: list, *, kind: str | None, trust: str | None,

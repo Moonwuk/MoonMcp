@@ -57,14 +57,16 @@ def _analyze_cookies(result: HttpResult) -> list[Finding]:
     is_https = (result.final_url or result.url or "").startswith("https")
     for cookie in result.get_all("set-cookie"):
         name = cookie.split("=", 1)[0].strip()
-        low = cookie.lower()
-        if is_https and "secure" not in low:
+        # Test the ATTRIBUTE names, not a substring of the whole cookie — otherwise
+        # a value like `mode=insecure` contains "secure" and masks the missing flag.
+        attrs = {seg.strip().split("=", 1)[0].lower() for seg in cookie.split(";")[1:]}
+        if is_https and "secure" not in attrs:
             issues.append(Finding(header=f"cookie:{name}", severity="medium",
                                    detail="Cookie without Secure flag over HTTPS"))
-        if "httponly" not in low:
+        if "httponly" not in attrs:
             issues.append(Finding(header=f"cookie:{name}", severity="low",
                                    detail="Cookie without HttpOnly (readable from JS)"))
-        if "samesite" not in low:
+        if "samesite" not in attrs:
             issues.append(Finding(header=f"cookie:{name}", severity="low",
                                    detail="Cookie without SameSite (CSRF exposure)"))
     return issues

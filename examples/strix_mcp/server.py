@@ -104,7 +104,10 @@ async def strix_available() -> dict:
         try:
             proc = await asyncio.create_subprocess_exec(
                 docker, "info", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            docker_ok = (await asyncio.wait_for(proc.wait(), timeout=10)) == 0
+            try:
+                docker_ok = (await asyncio.wait_for(proc.wait(), timeout=10)) == 0
+            except asyncio.TimeoutError:
+                await _kill_quietly(proc)  # don't orphan the `docker info` child
         except Exception:
             docker_ok = False
     return {
@@ -275,7 +278,8 @@ async def strix_run(target: str, instruction: str, wait: bool = True,
                     *args, stdout=logf, stderr=asyncio.subprocess.STDOUT)
                 logf.close()  # the child inherited its own copy of the fd
                 logf = None
-                console = _live.open_log_console(log_path, title=_watch_title(target))
+                console = await asyncio.to_thread(
+                    _live.open_log_console, log_path, title=_watch_title(target))
             else:
                 proc = await asyncio.create_subprocess_exec(
                     *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
@@ -291,7 +295,8 @@ async def strix_run(target: str, instruction: str, wait: bool = True,
                 *args, stdout=logf, stderr=asyncio.subprocess.STDOUT)
             logf.close()  # the child inherited its own copy of the fd
             logf = None
-            console = _live.open_log_console(log_path, title=_watch_title(target))
+            console = await asyncio.to_thread(
+                _live.open_log_console, log_path, title=_watch_title(target))
             try:
                 await asyncio.wait_for(proc.wait(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -403,7 +408,8 @@ async def strix_demo(target: str = "demo.example.com") -> dict:
     if logf is not None:
         logf.close()  # the streamer opens the file itself (append mode)
     await asyncio.create_subprocess_exec(*_demo_stream_argv(log_path, target))
-    console = _live.open_log_console(log_path, title=f"strix DEMO {target}")
+    console = await asyncio.to_thread(
+        _live.open_log_console, log_path, title=f"strix DEMO {target}")
     return {"demo": True, "target": target, "log": log_path, "live_console": console,
             "note": "a terminal window should open and stream a ~10s scripted Strix run"}
 

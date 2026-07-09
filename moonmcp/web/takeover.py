@@ -68,6 +68,14 @@ _FINGERPRINTS: list[tuple[str, list[str], list[str], str, bool]] = [
 
 _STATUS_CONFIDENCE = {"vulnerable": "high", "edge": "medium", "notvuln": "low"}
 
+# Body phrases too generic to assert a takeover WITHOUT a DNS/CNAME anchor — they
+# match ordinary 404 pages (a default nginx/Apache error would otherwise be
+# reported as a high-confidence takeover). Only used to suppress step-3 hits.
+_GENERIC_FPS = frozenset({
+    "not found", "404 not found", "page not found", "project not found",
+    "find that page", "error code: 404",
+})
+
 
 @dataclass
 class TakeoverResult:
@@ -85,7 +93,10 @@ class TakeoverResult:
 async def check_takeover(client: HttpClient, host: str, *, scope_check=None) -> TakeoverResult:
     result = TakeoverResult(host=host)
 
-    dns = await resolve(host, rdtypes=("A", "AAAA", "CNAME"), http_client=client)
+    # Query CNAME FIRST: for a dangling CNAME whose target is NXDOMAIN, the A
+    # lookup raises NXDOMAIN and the resolver returns early — so asking for A
+    # before CNAME would drop the very record that proves the takeover.
+    dns = await resolve(host, rdtypes=("CNAME", "A", "AAAA"), http_client=client)
     cnames = dns.records.get("CNAME", [])
     if dns.canonical_name and dns.canonical_name not in cnames:
         cnames = [dns.canonical_name, *cnames]
@@ -131,16 +142,20 @@ async def check_takeover(client: HttpClient, host: str, *, scope_check=None) -> 
                 result.detail = f"CNAME points at {name} but no unclaimed fingerprint in body"
         return result
 
-    # 3) No CNAME match — still scan the body against every fingerprint.
+    # 3) No CNAME match — a body fingerprint ALONE (no DNS anchor) is only a lead,
+    # never a confirmed takeover, and generic 404 phrases are ignored entirely so
+    # an ordinary error page is not reported as a takeover.
     for name, _patterns, fps, status, _nxdomain in _FINGERPRINTS:
-        hit = next((f for f in fps if f and f.lower() in body.lower()), None)
+        hit = next((f for f in fps
+                    if f and f.lower() not in _GENERIC_FPS and f.lower() in body.lower()), None)
         if hit:
             result.service = name
             result.matched_fingerprint = hit
             result.status = status
-            result.confidence = _STATUS_CONFIDENCE.get(status)
-            result.vulnerable = status != "notvuln"
-            result.detail = f"body shows {name} unclaimed-resource fingerprint (no CNAME match) — verify manually"
+            result.confidence = "low"       # no DNS anchor → weak signal
+            result.vulnerable = False        # a lead to verify, not a confirmation
+            result.detail = (f"body shows {name} unclaimed-resource fingerprint but no matching "
+                             "CNAME — unconfirmed lead, verify DNS/ownership manually")
             return result
     return result
 

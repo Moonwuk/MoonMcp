@@ -24,8 +24,10 @@ REDIRECT_PARAMS = [
 _CANARY = "moonmcp-open-redirect.example"
 _PAYLOADS = [f"https://{_CANARY}/", f"//{_CANARY}/", f"https:/{_CANARY}"]
 
+# Match a refresh <meta> tag and capture its url= regardless of attribute order
+# (a lookahead asserts http-equiv=refresh; url= may come before OR after it).
 _META_REFRESH_RE = re.compile(
-    r"""<meta[^>]+http-equiv=['"]?refresh['"]?[^>]+url=([^"'>\s]+)""", re.IGNORECASE)
+    r"""<meta(?=[^>]*http-equiv=['"]?refresh)[^>]*?url=([^"'>\s]+)""", re.IGNORECASE)
 _JS_REDIRECT_RE = re.compile(
     r"""(?:location\.(?:href|replace)\s*[=(]|window\.location\s*=)\s*['"]([^'"]+)['"]""", re.IGNORECASE)
 

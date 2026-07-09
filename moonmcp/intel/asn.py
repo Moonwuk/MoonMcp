@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from dataclasses import dataclass, field
 
 from ..net.http import HttpClient
@@ -43,8 +44,10 @@ class IpIntel:
 
 def _detect_cloud(*fields: str | None) -> str | None:
     blob = " ".join(f for f in fields if f).lower()
+    # Match each marker at a WORD BOUNDARY (prefix), so "aws" hits "aws"/"awselb"
+    # but not "lawson", while prefix markers like "goog" still match "google".
     for marker, name in _CLOUD_MARKERS.items():
-        if marker in blob:
+        if re.search(r"\b" + re.escape(marker), blob):
             return name
     return None
 
@@ -110,7 +113,10 @@ async def reverse_ip(client: HttpClient, ip: str) -> ReverseIp:
         result.error = r.error or f"HTTP {r.status}"
         return result
     text = r.text()
-    if "error" in text.lower()[:40] or "API count exceeded" in text:
+    # Anchor the error match: HackerTarget errors read "error <msg>" / "API count
+    # exceeded", so a legitimate first result like "error-tracking.io" (no space
+    # after "error") must not discard the whole set.
+    if text.lstrip().lower().startswith("error ") or "API count exceeded" in text:
         result.error = text.strip()[:120]
         return result
     domains = sorted({line.strip().lower() for line in text.splitlines()

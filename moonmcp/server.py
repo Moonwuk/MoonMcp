@@ -147,7 +147,7 @@ def _caller_tool() -> str:
         return "?"
 
 
-def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = None) -> str:
+async def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = None) -> str:
     ctx = get_context()
     tool = tool or _caller_tool()
     if intrusive and not ctx.settings.allow_intrusive:
@@ -164,7 +164,8 @@ def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = N
     # Resolve-then-check SSRF guard — covers raw-socket tools (port_scan,
     # tls_inspect, jarm, desync) as well as an in-scope hostname that points at a
     # private/internal/cloud-metadata IP. No-op when block_private is disabled.
-    reason = ctx.scope.blocked_connect_reason(target)
+    # The resolve is a blocking getaddrinfo, so run it off the event loop.
+    reason = await asyncio.to_thread(ctx.scope.blocked_connect_reason, target)
     if reason is not None:
         ctx.audit.record("ssrf_blocked", tool=tool, target=str(target),
                          decision="deny", reason=reason)
@@ -215,7 +216,7 @@ def active_tool(
                 raw = bound.arguments.get(tname)
                 if raw is None or (isinstance(raw, str) and not raw.strip()):
                     raise ValueError(f"'{tname}' is required")
-                _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
+                await _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
             return await func(*args, **kwargs)
 
         gated = safe_tool(wrapper)
@@ -313,8 +314,17 @@ def _host_like_tokens(args: list[str]) -> list[str]:
         if "://" in t:
             found.append(t)
             continue
-        if "/" in t or "," in t or " " in t:
-            continue  # path / list / not a bare host
+        if "," in t or " " in t:
+            continue  # list / not a single bare host
+        if "/" in t:
+            # A CIDR block is itself a scan target; a host/path (example.com/api)
+            # must still have its host scope-checked — don't skip either.
+            try:
+                ipaddress.ip_network(t, strict=False)
+                found.append(t)
+                continue
+            except ValueError:
+                t = t.split("/", 1)[0]
         try:
             ipaddress.ip_address(t.split(":", 1)[0])
             found.append(t)
@@ -1066,7 +1076,7 @@ async def parse_openapi(target: str | None = None, content: str | None = None) -
     if target:
         raw = target.strip()
         url = raw if "://" in raw else f"https://{raw}"
-        _require_scope(url, tool="parse_openapi")
+        await _require_scope(url, tool="parse_openapi")
         return await openapimod.fetch_and_parse(get_context().http, url, scope_check=_scope_check())
     return {"error": "invalid_input", "detail": "pass a 'target' URL or inline 'content'"}
 
@@ -1104,7 +1114,7 @@ async def cors_audit(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
-    result = await corsmod.audit_cors(ctx.http, url)
+    result = await corsmod.audit_cors(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
@@ -1552,7 +1562,7 @@ async def analyze_config(content: str | None = None, target: str | None = None,
     if content is None:
         raw = target.strip()
         url = raw if "://" in raw else f"https://{raw}"
-        _require_scope(url, tool="analyze_config")
+        await _require_scope(url, tool="analyze_config")
         ctx = get_context()
         r = await ctx.http.fetch(url, follow_redirects=True, timeout=15.0,
                                  max_body=2 * 1024 * 1024, scope_check=_scope_check())
@@ -1655,7 +1665,7 @@ async def origin_discovery(domain: str) -> dict:
 
     host = normalize_target(domain)
     ctx = get_context()
-    result = await originmod.discover_origin(ctx.http, host, scope_check=_scope_check())
+    result = await originmod.discover_origin(ctx.http, host)
     return to_dict(result)
 
 
@@ -2333,7 +2343,7 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
         raw = t.strip()
         url = raw if "://" in raw else f"https://{raw}"
         try:
-            host = _require_scope(url, tool="probe_batch")
+            host = await _require_scope(url, tool="probe_batch")
         except ScopeError as exc:
             return {"target": raw, "skipped": "out_of_scope", "detail": str(exc)}
         ctx = get_context()
@@ -2359,7 +2369,15 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
                 entry["tech"] = techs
         return entry
 
-    results = await asyncio.gather(*[_one(t) for t in seen])
+    # Bound concurrency so a 300-host batch doesn't launch 300 simultaneous
+    # scope-resolve threads / sockets at once.
+    sem = asyncio.Semaphore(20)
+
+    async def _guarded(t: str) -> dict:
+        async with sem:
+            return await _one(t)
+
+    results = await asyncio.gather(*[_guarded(t) for t in seen])
     live = [r for r in results if r.get("status")]
     return {
         "requested": len(seen),
@@ -2471,7 +2489,7 @@ async def report(domain: str) -> dict:
         sev = "medium" if ("+all" in issue or "No SPF" in issue or "No DMARC" in issue) else "low"
         findings.append({"severity": sev, "title": "Email posture", "detail": issue})
 
-    cors = await corsmod.audit_cors(ctx.http, apex_url)
+    cors = await corsmod.audit_cors(ctx.http, apex_url, scope_check=_scope_check())
     for f in cors.findings:
         findings.append({"severity": f.severity, "title": f"CORS: {f.test}",
                          "detail": f.detail, "evidence": f"ACAO={f.acao} creds={f.acac}"})
@@ -2548,7 +2566,7 @@ async def http_repeater(url: str | None = None, method: str = "GET",
         merged_headers = headers or {}
         body_bytes = body.encode() if body else None
 
-    _require_scope(url, tool="http_repeater")
+    await _require_scope(url, tool="http_repeater")
     ctx = get_context()
     result = await ctx.http.fetch(
         url, method=method, headers=merged_headers or None, body=body_bytes,
@@ -2602,7 +2620,7 @@ async def intruder(template: str, payloads: list[str], marker: str = "§",
     raw_t = base_url.strip()
     base_url = raw_t if "://" in raw_t else f"https://{raw_t}"
     # Intruder is intrusive: this gates on MOONMCP_ALLOW_INTRUSIVE + scope.
-    _require_scope(template.replace(marker, ""), intrusive=True, tool="intruder")
+    await _require_scope(template.replace(marker, ""), intrusive=True, tool="intruder")
     ctx = get_context()
 
     async def _one(payload: str) -> dict:
@@ -2727,7 +2745,7 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url, tool="confirm_finding")
+    await _require_scope(url, tool="confirm_finding")
     ctx = get_context()
     m = method.upper()
     canary = "moonc0nfirm42"
@@ -3347,7 +3365,7 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
                           "enforcement is on. Pass a 'target' that is in scope, or include the "
                           "host/URL in args."}
     for t in to_check:
-        _require_scope(t, tool="run_scanner")
+        await _require_scope(t, tool="run_scanner")
     ctx.audit.record("external_tool", tool=tool, target=(target or ",".join(to_check)),
                      decision="run", args=args[:20])
     result = await cli.run_tool(

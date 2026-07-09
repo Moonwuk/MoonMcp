@@ -92,7 +92,9 @@ def base_score(metrics: dict[str, str] | None = None, *, vector: str | None = No
     if scope == "U":
         impact = 6.42 * iss
     else:
-        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+        # CVSS 3.1 modified-impact term. (CVSS 3.0 used (iss-0.02)**15 — a different
+        # curve that under-scores Scope:Changed vectors and can drop a severity band.)
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss * 0.9731 - 0.02) ** 13
     exploitability = 8.22 * av * ac * pr * ui
 
     if impact <= 0:
