@@ -30,7 +30,7 @@ stood out:
 | Observation across the ecosystem | MoonMCP's answer |
 | --- | --- |
 | **Almost everything is a thin CLI wrapper.** They shell out to `subfinder`, `amass`, `nmap`, `masscan`, `httpx`, `nuclei`, `sqlmap`, `ffuf`, `gobuster`, … and are **useless until you install a pile of Go/native binaries.** | **Stdlib-first.** Every core tool is implemented on the Python standard library, so MoonMCP is useful the moment it starts — no external binaries required. |
-| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused, ~54-tool surface** covering the recon workflow end-to-end, each with structured JSON output. |
+| **Kitchen-sink surfaces** (some expose 40–50 tools) that assume a fully-loaded pentest box and offer little safety. | **A focused tool surface** covering the recon workflow end-to-end, each with structured JSON output, plus offline knowledge bases (injections, techniques, privilege escalation, server-side vulns, WAF). |
 | **No authorization model.** Point-and-scan primitives with no notion of "is this target in scope?" | **Scope-first.** Every packet-sending tool is gated by an authorization scope; intrusive scans are opt-in and rate-limited. |
 
 MoonMCP's design principles:
@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **58 tools**, **6 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **64 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -118,6 +118,9 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 - **Injections** — **29 classes** (255 detection payloads · 318 response signatures). [`docs/INJECTIONS.md`](docs/INJECTIONS.md)
 - **Exploitation techniques & notable PoCs** — **115 techniques** across **14 categories**, from assembler-level memory corruption to the highest-level web / supply-chain. [`docs/TECHNIQUES.md`](docs/TECHNIQUES.md)
 - **Privilege escalation** — **129 techniques** (Linux · Windows · container · cloud · Active Directory · macOS) + **68 tools**. [`docs/PRIVESC.md`](docs/PRIVESC.md)
+- **Server-side vulnerabilities** — **44 classes** (popular *and* obscure), each mapped to its **root cause** and the concrete point where apps break, + **29 tools**. [`docs/SERVER_SIDE_VULNS.md`](docs/SERVER_SIDE_VULNS.md)
+- **Root-cause taxonomy** — the **13 fundamental causes** from which nearly all server-side bugs spring, each with its systemic fix. *Where the core of all problems is.* [`docs/ROOT_CAUSES.md`](docs/ROOT_CAUSES.md)
+- **WAF reference** — **24 entries**: how WAFs work, vendor **fingerprints**, and conceptual/defensive **bypass** classes. [`docs/WAF.md`](docs/WAF.md)
 
 | Tool | Purpose |
 | --- | --- |
@@ -127,8 +130,11 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 | `privesc_info` / `privesc_search` | 129 privilege-escalation techniques across Linux/Windows/container/cloud/AD/macOS: enumeration commands, detection indicators, mitigations, references. |
 | `privesc_tools` | Catalog of 68 privesc tools (LinPEAS/WinPEAS, GTFOBins, LOLBAS, PowerUp, Seatbelt, pspy, potato family, BloodHound, Impacket, …). |
 | `match_privesc` | Scan pasted enumeration output (`sudo -l`, `id`, `getcap -r /`, `whoami /priv`, `systeminfo`) → which escalation vectors it indicates. |
+| `vuln_info` / `vuln_search` / `vuln_tools` | 44 server-side vuln classes (popular + obscure) with root cause, `where_it_breaks`, detection, WAF notes and real-world incidents; + a 29-tool discovery catalog. |
+| `rootcause_info` | The root-cause taxonomy — the ~13 fundamental causes underneath all these bugs, each with why it recurs, the systemic fix, and the catalog vulns that derive from it. |
+| `waf_info` / `identify_waf` | WAF KB (how they work · fingerprints · bypass concepts); `identify_waf` names the vendor from a raw HTTP response (CF-RAY, `__cfduid`, `x-akamai`, `incap_ses`, BigIP, …). |
 
-**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`, `privesc://all`
+**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`, `privesc://all`, `vulns://all`, `rootcauses://all`, `waf://all`
 
 **Operator prompts** ([`docs/SYSTEM_PROMPTS.md`](docs/SYSTEM_PROMPTS.md)) — system prompts that make an agent using MoonMCP plan, pick the right tool, verify before it reports, minimise false positives and stay strictly in scope. Synthesised from real pentest-agent prompts (CAI, PentestGPT, XBOW, HexStrike), agent prompt-engineering (ReAct, Plan-and-Execute, Chain-of-Verification, Reflexion) and bug-bounty methodology (TBHM, OWASP WSTG, PortSwigger, HackerOne/Bugcrowd):
 - `bug_bounty_operator` — master engagement prompt (rules of engagement + OODA-style loop + tool map).
@@ -282,7 +288,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 58 tools, 6 resources, 8 prompts
+├── server.py        # FastMCP server: 64 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
