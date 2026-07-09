@@ -31,6 +31,15 @@ def test_dedupe_collapses_exact_duplicates():
     assert "params" in xss[0].source
 
 
+def test_unique_is_non_mutating_and_deduped():
+    s = _store()
+    u = s.unique()
+    assert len(s.list()) == 4  # not mutated
+    # 3 unique signatures: xss@a, hsts@a, hsts@b.
+    assert len(u) == 3
+    assert u[0].severity == "high"  # severity-ranked
+
+
 def test_triage_is_non_mutating_and_ranks():
     s = _store()
     before = len(s.list())

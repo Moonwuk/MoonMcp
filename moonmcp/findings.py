@@ -59,6 +59,15 @@ class FindingsStore:
             self._items = self._items[-self.cap:]
         return f
 
+    def unique(self) -> list[Finding]:
+        """Deduplicated findings — one representative per type+target+title,
+        severity-ranked. Non-mutating (used by the report/graph exporters)."""
+
+        seen: dict[tuple[str, str, str], Finding] = {}
+        for f in sorted(self._items, key=lambda x: x.id):
+            seen.setdefault(_signature(f), f)
+        return sorted(seen.values(), key=lambda f: (_sev_rank(f.severity), f.id))
+
     def list(self, target: str | None = None, severity: str | None = None) -> list[Finding]:
         items = self._items
         if target:

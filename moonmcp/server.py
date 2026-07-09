@@ -1809,14 +1809,16 @@ async def audit_log(limit: int = 100, event: str | None = None) -> dict:
 @mcp.tool()
 @safe_tool
 async def export_obsidian(out_dir: str | None = None, include_kb: bool = True,
-                          canvas: bool = True, engagement: str = "engagement") -> dict:
+                          canvas: bool = True, engagement: str = "engagement",
+                          dedupe: bool = True) -> dict:
     """Export the session into an **Obsidian vault** as a navigable knowledge
     graph: a Home MOC, one note per asset and finding (cross-linked, tagged by
     severity), and — with `include_kb` — the knowledge bases as a linked web
     (each vulnerability `[[wikilinks]]` to its **root cause**), plus an Obsidian
     **Canvas** (`.canvas`) graph. Also emits a Graphify-style `graph.json`
     (NetworkX node-link, provenance-tagged edges) and a `GRAPH_REPORT.md`
-    ("god nodes"). Open the folder as a vault and use the graph view. Writes to
+    ("god nodes"). By default `dedupe` collapses duplicate findings first so the
+    graph stays clean. Open the folder as a vault and use the graph view. Writes to
     `out_dir` (or MOONMCP_VAULT_DIR, else ./moonmcp-vault); pure files, no network.
     """
 
@@ -1824,10 +1826,11 @@ async def export_obsidian(out_dir: str | None = None, include_kb: bool = True,
 
     ctx = get_context()
     root = out_dir or os.environ.get("MOONMCP_VAULT_DIR") or os.path.join(os.getcwd(), "moonmcp-vault")
+    src = ctx.findings.unique() if dedupe else ctx.findings.list()
     findings = [
         {"id": f.id, "target": f.target, "severity": f.severity, "title": f.title,
          "type": f.type, "detail": f.detail, "evidence": f.evidence, "created_at": f.created_at}
-        for f in ctx.findings.list()
+        for f in src
     ]
     inj = vulns = rc = tech = None
     if include_kb:
@@ -1839,6 +1842,8 @@ async def export_obsidian(out_dir: str | None = None, include_kb: bool = True,
         root, engagement=engagement, findings=findings, injections=inj, vulns=vulns,
         root_causes=rc, techniques=tech, want_canvas=canvas,
     )
+    if dedupe:
+        manifest["duplicates_folded"] = len(ctx.findings.list()) - len(src)
     ctx.audit.record("export_obsidian", tool="export_obsidian", target=root, decision="write")
     return manifest
 
