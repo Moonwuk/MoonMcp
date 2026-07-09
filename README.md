@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **69 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **71 tools**, **9 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -88,6 +88,8 @@ MoonMCP exposes **69 tools**, **9 resources** and **8 operator prompts**, groupe
 | `open_redirect` | Inject a canary into common redirect params (url, next, returnTo, …) — Location / meta / JS. |
 | `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
 | `screenshot` | Render a page to PNG via Playwright+Chromium **when installed** (else a graceful note). |
+| `browser_open` | Drive a **headless browser**: render a JS-heavy SPA and return the post-JS text/HTML, the **console log**, the **network requests** the page made, and page errors — endpoint/secret discovery a raw fetch can't see. Uses `auth_set`. |
+| `browser_eval` | Run JavaScript in the page (the **browser console**) and return the result + console log — inspect the live DOM, read `window`/JS state, extract SPA-rendered data. |
 | `analyze_binary` | Download a compiled artifact (.dll/.exe/.jar/.so) → filetype (incl. .NET), strings (ASCII+UTF-16), secrets, URLs, conn-strings; optional `ilspycmd` decompile. |
 | `analyze_config` | Parse a config file (.env/INI/JSON/YAML/.properties/XML/PHP) → **every setting** by category + flags (secrets, DEBUG, TLS-off, wildcard CORS, weak creds, conn-strings). |
 | `favicon_hash` | Shodan-style favicon mmh3 hash + `http.favicon.hash:` pivot query (find siblings / origin behind CDN). |
@@ -292,7 +294,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 69 tools, 9 resources, 8 prompts
+├── server.py        # FastMCP server: 71 tools, 9 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings

@@ -57,6 +57,7 @@ from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, normalize_target
 from .web import behavior as behaviormod
+from .web import browser as browsermod
 from .web import cors as corsmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
@@ -872,6 +873,67 @@ async def screenshot(target: str, full_page: bool = True, return_base64: bool = 
         timeout_ms=int(ctx.settings.timeout * 2000),
     )
     return to_dict(result)
+
+
+def _browser_auth(url: str) -> tuple[dict, list[dict]]:
+    """Build (extra_headers, cookies) for the headless browser from the engagement
+    auth context, so it drives the target authenticated."""
+
+    ctx = get_context()
+    headers = dict(ctx.auth.headers)  # raw headers (Cookie goes via the jar)
+    cookies = [{"name": k, "value": v, "url": url} for k, v in ctx.auth.cookies.items()]
+    return headers, cookies
+
+
+@mcp.tool()
+@safe_tool
+async def browser_open(target: str, capture_html: bool = False,
+                       wait_until: str = "load") -> dict:
+    """Open an in-scope URL in a headless browser (Playwright + Chromium) and
+    return what a real browser sees after JavaScript runs: final URL, status,
+    title, the rendered page **text** (and HTML if `capture_html`), plus the
+    **console log**, the **network requests** the page made, and any page errors.
+    Ideal for JS-heavy SPAs (endpoint/secret discovery) where a raw HTTP fetch
+    sees almost nothing. Uses the engagement auth (`auth_set`) so the app is
+    driven authenticated. Optional/self-degrading if Playwright is absent.
+    `wait_until`: load | domcontentloaded | networkidle. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    headers, cookies = _browser_auth(url)
+    result = await browsermod.browse(
+        url, capture_html=capture_html, wait_until=wait_until,
+        extra_headers=headers, cookies=cookies,
+    )
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def browser_eval(target: str, script: str, wait_until: str = "load") -> dict:
+    """Run JavaScript in the page's context — the **browser console** — against an
+    in-scope URL and return the (JSON-serialisable) result, plus the console log
+    and any page errors. Use it to inspect the live DOM, read `window`/JS state,
+    extract data a SPA rendered, or check a JS value. `script` is a JS expression
+    (e.g. `document.title`, `Object.keys(window)`, `[...document.querySelectorAll('a')].map(a=>a.href)`).
+    Uses the engagement auth. Authorised testing only; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    _require_scope(url)
+    headers, cookies = _browser_auth(url)
+    result = await browsermod.browse(
+        url, script=script, capture_text=False, wait_until=wait_until,
+        extra_headers=headers, cookies=cookies,
+    )
+    out = to_dict(result)
+    # trim the network/text noise — browser_eval is about the script result
+    out.pop("html", None)
+    out.pop("text", None)
+    return out
 
 
 @mcp.tool()

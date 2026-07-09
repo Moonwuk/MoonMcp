@@ -40,7 +40,8 @@ dependencies = [
 enhanced = [
     "dnspython>=2.4",
 ]
-# Enables the `screenshot` tool. Chromium still needs `playwright install chromium`.
+# Enables the `screenshot` tool and the headless-browser tools (`browser_open`,
+# `browser_eval`). Chromium still needs `playwright install chromium`.
 screenshots = [
     "playwright>=1.40",
 ]
