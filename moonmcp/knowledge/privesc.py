@@ -129,7 +129,14 @@ def search_tools(query: str) -> list[dict]:
 
 # --- enumeration-output matching -------------------------------------------
 def _is_signalish(indicator: str) -> bool:
-    """True if an indicator is specific enough to match against pasted output."""
+    """True if an indicator is specific enough to match against pasted output.
+
+    Requires some specificity marker (a capital, digit, or one of ``_./:=-``) so
+    bare generic words — ``docker``, ``enabled``, ``unquoted`` — can't fire a
+    CRITICAL match on unrelated prose, while keeping precise tokens like
+    ``SeImpersonatePrivilege``, ``cap_setuid``, ``docker.sock``, ``NOPASSWD`` and
+    ``/etc/passwd``.
+    """
 
     ind = indicator.strip()
     if not (4 <= len(ind) <= 48):
@@ -137,6 +144,8 @@ def _is_signalish(indicator: str) -> bool:
     if ind.count(" ") > 4:  # a full sentence, not a token/pattern
         return False
     if ind.lower() in _STOPWORDS:
+        return False
+    if not any(c.isupper() or c.isdigit() or c in "_./:=-" for c in ind):
         return False
     return True
 

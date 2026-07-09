@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **54 tools**, **5 resources** and **7 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **58 tools**, **6 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -113,17 +113,22 @@ MoonMCP exposes **54 tools**, **5 resources** and **7 operator prompts**, groupe
 | `external_tools` | List known security CLIs and whether each is installed + its native fallback. |
 | `run_scanner` | Run an installed CLI (`subfinder`, `httpx`, `nuclei`, `nmap`, `ffuf`, …); JSONL auto-parsed. |
 
-### 📚 Knowledge base — injections & techniques
-Two referenced catalogs built into the server: **29 injection classes** (255 detection payloads · 318 response signatures) and **115 exploitation techniques** across **14 categories** — from assembler-level memory corruption to the highest-level web and supply-chain attacks. Full listings in [`docs/INJECTIONS.md`](docs/INJECTIONS.md) and [`docs/TECHNIQUES.md`](docs/TECHNIQUES.md).
+### 📚 Knowledge bases
+Referenced catalogs built into the server (offline, searchable as tools + MCP resources) — descriptions, detection guidance and links to public research, **not** weaponized exploit code:
+- **Injections** — **29 classes** (255 detection payloads · 318 response signatures). [`docs/INJECTIONS.md`](docs/INJECTIONS.md)
+- **Exploitation techniques & notable PoCs** — **115 techniques** across **14 categories**, from assembler-level memory corruption to the highest-level web / supply-chain. [`docs/TECHNIQUES.md`](docs/TECHNIQUES.md)
+- **Privilege escalation** — **129 techniques** (Linux · Windows · container · cloud · Active Directory · macOS) + **68 tools**. [`docs/PRIVESC.md`](docs/PRIVESC.md)
 
 | Tool | Purpose |
 | --- | --- |
-| `injection_info` | Look up one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, and exact error/regex signatures per DBMS/engine. |
-| `injection_search` | Search the injection KB by keyword / CWE. |
-| `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology it indicates (e.g. `ORA-01756` → Oracle SQLi). |
-| `technique_info` / `technique_search` | Referenced catalog of 115 exploitation techniques & landmark public PoCs across all languages (web, deserialization, interpreter-level, memory-corruption/asm, heap, code-reuse/ROP, mitigation-bypass, kernel/low-level, microarchitectural, supply-chain, famous CVEs) — descriptions + links to public research, **not** exploit code. |
+| `injection_info` / `injection_search` | Look up / search one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, per-engine signatures. |
+| `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology (e.g. `ORA-01756` → Oracle SQLi). |
+| `technique_info` / `technique_search` | 115 exploitation techniques & landmark public PoCs across all languages/levels — descriptions + links, not exploit code. |
+| `privesc_info` / `privesc_search` | 129 privilege-escalation techniques across Linux/Windows/container/cloud/AD/macOS: enumeration commands, detection indicators, mitigations, references. |
+| `privesc_tools` | Catalog of 68 privesc tools (LinPEAS/WinPEAS, GTFOBins, LOLBAS, PowerUp, Seatbelt, pspy, potato family, BloodHound, Impacket, …). |
+| `match_privesc` | Scan pasted enumeration output (`sudo -l`, `id`, `getcap -r /`, `whoami /priv`, `systeminfo`) → which escalation vectors it indicates. |
 
-**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`
+**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`, `privesc://all`
 
 **Operator prompts** ([`docs/SYSTEM_PROMPTS.md`](docs/SYSTEM_PROMPTS.md)) — system prompts that make an agent using MoonMCP plan, pick the right tool, verify before it reports, minimise false positives and stay strictly in scope. Synthesised from real pentest-agent prompts (CAI, PentestGPT, XBOW, HexStrike), agent prompt-engineering (ReAct, Plan-and-Execute, Chain-of-Verification, Reflexion) and bug-bounty methodology (TBHM, OWASP WSTG, PortSwigger, HackerOne/Bugcrowd):
 - `bug_bounty_operator` — master engagement prompt (rules of engagement + OODA-style loop + tool map).
@@ -132,6 +137,7 @@ Two referenced catalogs built into the server: **29 injection classes** (255 det
 - `technique_advisor` — referenced technique guidance for an observed tech/CVE.
 - `triage_and_report` — verify, dedupe, severity-rate and write accepted-quality reports.
 - `safe_recon` — conservative, passive-first, scope-strict default.
+- `privesc_hunt` — KB-backed privilege-escalation triage from an authorised foothold (enumerate → `match_privesc` → verify).
 - `recon_methodology` — the original quick-start recon playbook.
 
 ---
@@ -276,7 +282,7 @@ use instead — nothing errors out. Call `external_tools` to see what's availabl
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 54 tools, 5 resources, 7 prompts
+├── server.py        # FastMCP server: 58 tools, 6 resources, 8 prompts
 ├── prompts.py       # operator system prompts (see docs/SYSTEM_PROMPTS.md)
 ├── scope.py         # ScopeManager — the authorization guardrail
 ├── config.py        # env-driven Settings
