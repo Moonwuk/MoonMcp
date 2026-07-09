@@ -1,0 +1,23 @@
+{
+  "//": "Example MCP client config (Claude Desktop / Claude Code). Copy the 'moonmcp' block into your mcpServers map.",
+  "mcpServers": {
+    "moonmcp": {
+      "command": "uvx",
+      "args": ["--from", "/absolute/path/to/MoonMcp", "moonmcp"],
+      "env": {
+        "MOONMCP_SCOPE": "*.example.com, 203.0.113.0/24",
+        "MOONMCP_SCOPE_EXCLUDE": "admin.example.com",
+        "MOONMCP_ENFORCE_SCOPE": "1",
+        "MOONMCP_ALLOW_INTRUSIVE": "0",
+        "MOONMCP_RATE_LIMIT": "10",
+        "MOONMCP_SHODAN_API_KEY": "",
+        "MOONMCP_NVD_API_KEY": ""
+      }
+    },
+    "//moonmcp-installed": {
+      "command": "moonmcp",
+      "args": [],
+      "env": { "MOONMCP_SCOPE": "*.example.com" }
+    }
+  }
+}
