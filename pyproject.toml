@@ -53,6 +53,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
     "ruff>=0.4",
+    "mypy>=1.8",
 ]
 
 [project.scripts]
@@ -68,6 +69,25 @@ packages = ["moonmcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+# A growing type-checking baseline: the core logic modules are checked; the
+# heavier I/O modules (and the large server.py monolith) are excluded for now and
+# the exclude list is meant to shrink over time.
+[[tool.mypy.overrides]]
+module = [
+    "moonmcp.server",
+    "moonmcp.web.browser",
+    "moonmcp.net.tls",
+    "moonmcp.net.http",
+    "moonmcp.net.dns",
+    "moonmcp.recon.openapi",
+    "moonmcp.recon.subdomains",
+    "moonmcp.web.desync",
+]
+ignore_errors = true
 
 [tool.ruff]
 line-length = 100

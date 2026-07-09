@@ -188,7 +188,7 @@ class ScopeManager:
             infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
         except (OSError, UnicodeError):
             return []
-        return [ai[4][0] for ai in infos]
+        return [str(ai[4][0]) for ai in infos]
 
     def blocked_connect_reason(self, target: str) -> str | None:
         """SSRF guard applied at *connect* time: return a reason string if
@@ -280,7 +280,7 @@ class ScopeManager:
         return removed
 
     def clear(self) -> None:
-        self.__init__(enforce=self.enforce, block_private=self.block_private,
+        self.__init__(enforce=self.enforce, block_private=self.block_private,  # type: ignore[misc]
                       resolver=self._resolver)
 
     # -- querying ----------------------------------------------------------

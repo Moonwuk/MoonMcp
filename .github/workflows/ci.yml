@@ -30,6 +30,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: Type-check (mypy)
+        run: mypy moonmcp
+
       - name: Test (pytest + coverage gate)
         run: pytest -q --cov=moonmcp --cov-report=term-missing --cov-fail-under=70
 

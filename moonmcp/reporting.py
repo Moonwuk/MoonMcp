@@ -6,6 +6,8 @@ gathers the data and passes a timestamp in.
 
 from __future__ import annotations
 
+from typing import Any
+
 _SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 _SEV_BADGE = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵", "info": "⚪"}
 
@@ -48,7 +50,7 @@ def format_sarif(findings: list[dict], *, version: str = "0.0.0") -> dict:
         msg = str(f.get("title") or rule_id)
         if f.get("detail"):
             msg += f" — {f['detail']}"
-        result = {
+        result: dict[str, Any] = {
             "ruleId": rule_id,
             "level": _SARIF_LEVEL.get(sev, "note"),
             "message": {"text": msg},
