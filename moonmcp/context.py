@@ -15,6 +15,7 @@ from .auth import AuthContext
 from .config import Settings, load_settings
 from .findings import FindingsStore
 from .intel.oast import OastStore
+from .intel.oast_server import CallbackServer
 from .intercept import HistoryStore
 from .memory import MemoryStore
 from .monitor import SnapshotStore
@@ -38,6 +39,7 @@ class AppContext:
     programs: ProgramStore
     history: HistoryStore
     memory: MemoryStore
+    oast_server: CallbackServer | None = None
 
 
 def build_context(settings: Settings | None = None) -> AppContext:

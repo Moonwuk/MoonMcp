@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **103 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **108 tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -54,7 +54,7 @@ MoonMCP exposes **103 tools**, **11 resources** and **8 operator prompts**, grou
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
-| `oast_configure` / `oast_generate` / `oast_poll` / `oast_list` | Out-of-band **callback** canaries (interactsh/Collaborator-compatible) to confirm **blind** vulns (blind SSRF/XXE/RCE/SQLi, blind XSS): mint a canary URL, plant it, poll for the callback. |
+| `oast_configure` / `oast_selfhost` / `oast_generate` / `oast_poll` / `oast_list` | Out-of-band **callback** canaries to confirm **blind** vulns (blind SSRF/XXE/RCE/SQLi, blind XSS): point at an interactsh/Collaborator (`oast_configure`) **or start the built-in catcher** (`oast_selfhost`, stdlib — no third party), mint a canary URL, plant it, poll for the callback. |
 | `audit_log` | Read the session **audit trail** — one record per scope decision (allow / deny / SSRF-block) and external command (also on `audit://recent`, persisted via `MOONMCP_AUDIT_LOG`). |
 
 ### 🔵 Passive OSINT (never touches the target)
@@ -127,6 +127,10 @@ MoonMCP exposes **103 tools**, **11 resources** and **8 operator prompts**, grou
 | `intruder` | **Intruder** — a request `template` with a `§` marker + payload list, fired and **diffed** (status / length / reflection) vs a baseline → injection/IDOR entry points. Intrusive. |
 | `passive_scan` | One benign GET → all passive analysers at once (header grade + issues, tech fingerprint, redacted secret hits). |
 | `confirm_finding` | **Prove a lead before reporting it:** baseline vs test request → weighs **reflection**, status/length/timing diff, **injection signatures**, and an **out-of-band callback** (OAST) into a verdict (`confirmed` / `likely` / `inconclusive` / `unconfirmed`). Optionally records a confirmed hit. |
+| `ssti_probe` | **SSTI** detector — arithmetic markers per engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor); reports which engine *evaluated* the expression. Intrusive. |
+| `sqli_probe` | **SQLi** detector — single-quote error signatures + a benign boolean pair (no data extraction). Reports the DBMS. Intrusive. |
+| `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
+| `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 
 ### 🔗 Orchestration & reporting
@@ -402,6 +406,8 @@ moonmcp/
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
+├── web/probes.py    # active detectors: SSTI / SQLi / SSRF / cache poisoning
+├── intel/oast_server.py  # built-in OAST callback catcher (self-host)
 ├── memory.py        # shared persistent memory hub (SQLite + FTS5, trust/provenance tags)
 ├── intercept.py     # Burp-style repeater / intruder / passive scan + request-response history
 ├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)

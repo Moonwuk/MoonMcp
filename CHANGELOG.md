@@ -6,6 +6,19 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Active detectors + built-in OAST + eval harness.** `ssti_probe` (multi-engine
+  template-eval differential), `sqli_probe` (error signatures + benign boolean
+  pair), `ssrf_probe` (OAST-callback confirmation), `cache_probe` (unkeyed-header
+  reflection × cacheability) — detection-oriented, intrusive-gated, feeding
+  `confirm_finding`. `oast_selfhost` runs a stdlib callback catcher so blind-vuln
+  confirmation needs no third party. A detection **eval harness**
+  (`tests/test_eval_detectors.py` + deliberately-vulnerable endpoints) asserts each
+  probe detects its class and doesn't false-positive. `moonmcp/web/probes.py`,
+  `moonmcp/intel/oast_server.py`.
+
+## [Released — v0.1.x, PR #1]
+
+### Added
 - **Finding confirmation + CVSS.** `confirm_finding` proves a lead before you
   report it — a baseline-vs-test differential weighing reflection, status/length/
   timing change, injection signatures, and out-of-band (OAST) callbacks into a

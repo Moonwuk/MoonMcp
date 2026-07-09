@@ -26,7 +26,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "scope_list", "scope_add", "scope_exclude", "scope_remove",
             "program_add", "program_use", "program_list", "program_remove",
             "auth_set", "auth_clear",
-            "oast_configure", "oast_generate", "oast_poll", "oast_list",
+            "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
             "audit_log",
         ],
     )),
@@ -73,11 +73,12 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         ["probe_batch", "recon_target", "report"],
     )),
     ("intercept", (
-        "Interception (Burp-style)",
-        "Drive the Burp workflow from tools: repeater (resend one request), "
-        "intruder (payload sweep + diff), passive scan, and request/response "
-        "history.",
-        ["http_repeater", "intruder", "passive_scan", "confirm_finding", "http_history"],
+        "Interception & active probes",
+        "Drive the Burp workflow from tools (repeater, intruder, passive scan, "
+        "history), plus differential detectors for top-payout classes (SSTI, SQLi, "
+        "blind SSRF, cache poisoning) and the confirm_finding gate.",
+        ["http_repeater", "intruder", "passive_scan", "confirm_finding",
+         "ssti_probe", "sqli_probe", "ssrf_probe", "cache_probe", "http_history"],
     )),
     ("knowledge", (
         "Knowledge bases",

@@ -79,6 +79,9 @@ Two ways, pick based on the user's situation:
    `vcs_exposure`. For JS-heavy SPAs use `browser_open` / `browser_eval` /
    `browser_interact` (post-JS DOM, console, network). For IDOR run
    `access_control_check` after `auth_set`.
+   - **Active detectors** (intrusive, on a discovered param): `ssti_probe`,
+     `sqli_probe`, `cache_probe`, and `ssrf_probe` (start `oast_selfhost` first for
+     blind-callback confirmation).
 4. **Batch:** feed `enumerate_subdomains` output to `probe_batch` for liveness.
 5. **Intrusive (with consent):** `port_scan`, `content_discovery`, `vuln_scan`
    (needs nuclei), `waf_efficacy`, `http_methods`, `desync_probe`.

@@ -42,6 +42,7 @@ from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
 from .intel import oast as oastmod
+from .intel import oast_server as oastsrvmod
 from .intel import search as searchmod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
@@ -78,6 +79,7 @@ from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
 from .web import params as paramsmod
+from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
 from .web import takeover as takeovermod
@@ -602,6 +604,49 @@ async def oast_configure(interaction_domain: str | None = None,
 
 @mcp.tool()
 @safe_tool
+async def oast_selfhost(action: str = "start", port: int = 0, host: str = "0.0.0.0",
+                        advertise_host: str | None = None) -> dict:
+    """Start a **built-in OAST callback catcher** so blind-vuln confirmation does
+    not depend on a third party (interactsh/Collaborator).
+
+    `action`: `start` (launch a threaded HTTP listener; `port=0` picks a free
+    port), `stop`, or `status`. Canaries then become `http://<host:port>/<token>`
+    and `oast_poll` reads the catcher directly. **The target must be able to reach
+    this listener** — run MoonMCP on a reachable host (public IP or authorised
+    internal network), or tunnel the port; pass `advertise_host` to put your
+    reachable address in the canary URLs. For unreachable external targets, use a
+    public interactsh via `oast_configure` instead.
+    """
+
+    ctx = get_context()
+    act = action.strip().lower()
+    if act == "stop":
+        if ctx.oast_server is not None:
+            ctx.oast_server.stop()
+            ctx.oast_server = None
+        ctx.oast.self_host_base = ""
+        return {"running": False, "stopped": True}
+    if act == "status":
+        running = ctx.oast_server is not None and ctx.oast_server.running
+        return {"running": running,
+                "base": ctx.oast_server.base() if running else None,
+                "self_host_base": ctx.oast.self_host_base}
+    # start
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        return {"running": True, "base": ctx.oast_server.base(),
+                "note": "already running — stop first to rebind"}
+    server = oastsrvmod.CallbackServer(host=host, port=port, advertise_host=advertise_host)
+    server.start()
+    ctx.oast_server = server
+    ctx.oast.self_host_base = server.base()
+    ctx.audit.record("oast_selfhost", tool="oast_selfhost", target=server.base(), decision="start")
+    return {"running": True, "base": server.base(), "port": server.port,
+            "example_canary": f"http://{server.base()}/<token>",
+            "note": "target must be able to reach this address; set advertise_host for a public IP."}
+
+
+@mcp.tool()
+@safe_tool
 async def oast_generate(label: str = "") -> dict:
     """Mint a unique **callback canary** to embed in a payload for blind-vuln
     detection (blind SSRF/XXE/RCE/SQLi, blind XSS). Returns the canary hostname
@@ -628,10 +673,16 @@ async def oast_poll(token: str | None = None) -> dict:
     """
 
     ctx = get_context()
+    # Self-host catcher: read interactions straight from the built-in listener.
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(token)
+        return {"source": "self_host", "token": token, "interaction_count": len(hits),
+                "interactions": hits[:200]}
     target = ctx.oast.poll_target(token)
     if target is None:
         return {"configured": ctx.oast.configured,
-                "note": "No poll_url configured — set one with oast_configure.",
+                "note": "No poll_url configured — set one with oast_configure, or start the "
+                        "built-in catcher with oast_selfhost.",
                 "canaries": [to_dict(c) for c in ctx.oast.list()]}
     try:
         r = await ctx.http.fetch(target, method="GET", follow_redirects=True)
@@ -2739,6 +2790,160 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
                        trust="curated", provenance="manual", tags="finding,confirmed", created_at=ts)
         out["recorded_finding_id"] = f.id
     return out
+
+
+# ---------------------------------------------------------------------------
+# active detectors (differential probes for top-payout classes)
+# ---------------------------------------------------------------------------
+def _with_param(url: str, param: str | None, value: str, method: str) -> tuple[str, bytes | None]:
+    """Return ``(request_url, request_body)`` with *value* placed in *param* — the
+    query for GET, a form body for POST-ish methods."""
+
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    if method.upper() in ("GET", "HEAD") or not param:
+        sp = urlsplit(url)
+        q = dict(parse_qsl(sp.query, keep_blank_values=True))
+        if param:
+            q[param] = value
+        return urlunsplit(sp._replace(query=urlencode(q))), None
+    return url, urlencode({param: value}).encode()
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Server-Side Template Injection** probe. Injects benign arithmetic markers
+    for each major engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor,
+    Handlebars) into `param` and checks whether the result (``7331*7=51317``)
+    renders — i.e. the expression was *evaluated*, not reflected. Differential vs a
+    control. Reports which engine fired. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    burl, bbody = _with_param(url, param, "moonc0nfirm", m)
+    b = await ctx.http.fetch(burl, method=m, body=bbody, follow_redirects=False, scope_check=_scope_check())
+    tested: list[tuple[str, str, str]] = []
+    for engine, payload in probesmod.SSTI_PAYLOADS:
+        tu, tb = _with_param(url, param, payload, m)
+        r = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
+        tested.append((engine, payload, r.text(200_000)))
+    findings = probesmod.ssti_findings(b.text(200_000), tested)
+    verdict = confirmmod.evaluate(reflected=bool(findings),
+                                  injection_hits=[f"ssti/{f['engine']}" for f in findings])
+    return {"target": url, "param": param, **verdict, "engines": findings}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def sqli_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**SQL injection** probe — non-destructive: a single-quote **error** trigger
+    (matched against MoonMCP's SQL error signatures) plus a **boolean** pair
+    (`'1'='1'` vs `'1'='2'`) whose differing responses indicate boolean-based SQLi.
+    No UNION/stacked/time-based data extraction. Reports the DBMS if a signature
+    fires. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    eu, eb = _with_param(url, param, probesmod.SQLI_ERROR, m)
+    er = await ctx.http.fetch(eu, method=m, body=eb, follow_redirects=False, scope_check=_scope_check())
+    hits = injmod.match_signatures(er.text(200_000), class_id="sqli")
+    tu, tb = _with_param(url, param, probesmod.SQLI_TRUE, m)
+    tr = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
+    fu, fb = _with_param(url, param, probesmod.SQLI_FALSE, m)
+    fr = await ctx.http.fetch(fu, method=m, body=fb, follow_redirects=False, scope_check=_scope_check())
+    bool_diff = (len(tr.body) != len(fr.body)) or (tr.status != fr.status)
+    verdict = confirmmod.evaluate(injection_hits=[f"{h['class']}/{h['technology']}" for h in hits],
+                                  status_changed=(tr.status != fr.status),
+                                  length_delta=len(tr.body) - len(fr.body))
+    return {"target": url, "param": param, **verdict, "error_signatures": hits[:10],
+            "boolean_differential": bool_diff,
+            "true_status": tr.status, "true_len": len(tr.body),
+            "false_status": fr.status, "false_len": len(fr.body)}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssrf_probe(target: str, param: str, method: str = "GET",
+                     oast_token: str | None = None, wait: float = 2.0) -> dict:
+    """**Blind SSRF** probe. Plants an **OAST canary** URL in `param`, sends the
+    request, waits briefly, then checks whether the target called back — a landed
+    callback is strong proof of blind SSRF. Start `oast_selfhost` (or
+    `oast_configure`) first, or pass an existing `oast_token` from `oast_generate`.
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return {"error": "oast_unconfigured",
+                    "detail": "start oast_selfhost or oast_configure before probing for blind SSRF"}
+        cb = ctx.oast.generate(label="ssrf_probe")
+    m = method.upper()
+    tu, tb = _with_param(url, param, cb.http_url, m)
+    await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
+    await asyncio.sleep(max(0.0, min(wait, 5.0)))
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(cb.token)
+    else:
+        poll = ctx.oast.poll_target(cb.token)
+        hits = []
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, follow_redirects=True)
+                hits = oastmod.parse_interactions(r.text())
+            except Exception:
+                hits = []
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "param": param, "canary": cb.http_url, "token": cb.token,
+           **verdict, "interactions": hits[:20]}
+    if not hits:
+        out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def cache_probe(target: str) -> dict:
+    """**Web cache poisoning** probe. Sends the request with common **unkeyed**
+    headers (`X-Forwarded-Host`, `X-Forwarded-Scheme`, …) carrying a canary and
+    checks whether the value is **reflected** while the response looks
+    **cacheable** — the combination that lets an unkeyed input poison the cache.
+    Detection-only (one canary per header). Intrusive; in scope only.
+    """
+
+    import secrets
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    canary = "moonpc" + secrets.token_hex(4)
+    b = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+    base_body = b.text(200_000)
+    reflected: list[dict] = []
+    for h in probesmod.CACHE_HEADERS:
+        r = await ctx.http.fetch(url, headers={h: f"{canary}.evil.example"},
+                                 follow_redirects=False, scope_check=_scope_check())
+        if canary in r.text(200_000) and canary not in base_body:
+            reflected.append({"header": h, "reflected_canary": canary})
+    is_cacheable, reasons = probesmod.cacheable(b.headers_map())
+    if reflected and is_cacheable:
+        verdict = "likely"
+    elif reflected:
+        verdict = "inconclusive"
+    else:
+        verdict = "unconfirmed"
+    return {"target": url, "verdict": verdict, "unkeyed_reflection": reflected,
+            "cacheable": is_cacheable, "cache_signals": reasons}
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,56 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/ssti"):
+            # DELIBERATELY VULNERABLE (eval target): "renders" a Jinja2-style
+            # {{7331*7}} expression by echoing the evaluated result.
+            from urllib.parse import parse_qs, urlparse
+            name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+            out = name.replace("{{7331*7}}", "51317") if "{{" in name else name
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>hello " + out.encode("utf-8", "replace") + b"</html>")
+            return
+        if self.path.startswith("/sqli"):
+            # DELIBERATELY VULNERABLE: a single quote yields a MySQL error; the
+            # boolean pair yields different-length bodies.
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            if "'" in q and "'1'='1" not in q and "'1'='2" not in q:
+                body = b"Database error: You have an error in your SQL syntax; check the MySQL manual"
+            elif "'1'='1" in q:
+                body = b"<html>results: alice bob carol dave erin frank grace</html>"
+            else:
+                body = b"<html>results:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/ssrf"):
+            # DELIBERATELY VULNERABLE: fetches the ?url= param server-side.
+            from urllib.parse import parse_qs, urlparse
+            url = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
+            if url.startswith("http://") or url.startswith("https://"):
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(url, timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>fetched</html>")
+            return
+        if self.path.startswith("/cache"):
+            # DELIBERATELY VULNERABLE: reflects the unkeyed X-Forwarded-Host header
+            # and marks the response cacheable.
+            xfh = self.headers.get("X-Forwarded-Host", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Cache-Control", "public, max-age=60")
+            self.end_headers()
+            self.wfile.write(b"<html><link href='//" + xfh.encode("utf-8", "replace")
+                             + b"/style.css'></html>")
+            return
         if self.path == "/spa":
             body = (b"<html><head><script src=\"/static/app.js\"></script></head>"
                     b"<body><script>fetch('/api/v2/users');var u='/api/v2/orders';"
