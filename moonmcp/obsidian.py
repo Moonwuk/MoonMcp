@@ -73,6 +73,73 @@ def _canvas(nodes: list[dict], edges: list[dict]) -> str:
     return json.dumps({"nodes": nodes, "edges": edges}, indent=2)
 
 
+def _build_graph(findings, injections, vulns, root_causes, techniques):
+    """Entity-relation graph (nodes + typed, provenance-tagged edges), à la Graphify."""
+
+    nodes: dict[str, dict] = {}
+    links: list[dict] = []
+
+    def node(nid, ntype, label, note=None):
+        nodes.setdefault(nid, {"id": nid, "type": ntype, "label": label, "note": note})
+
+    def link(src, dst, relation, provenance):
+        if src in nodes and dst in nodes:
+            links.append({"source": src, "target": dst, "relation": relation,
+                          "provenance": provenance})
+
+    inj_ids = {i["id"] for i in (injections or [])}
+    vuln_ids = {v["id"] for v in (vulns or [])}
+    tech_ids = {t["id"] for t in (techniques or [])}
+    for rc in (root_causes or []):
+        node(f"rootcause:{rc['id']}", "root-cause", rc.get("name", rc["id"]))
+    for v in (vulns or []):
+        node(f"vuln:{v['id']}", "vuln", v.get("name", v["id"]))
+        rc = v.get("root_cause")
+        if rc:
+            node(f"rootcause:{rc}", "root-cause", rc)
+            link(f"vuln:{v['id']}", f"rootcause:{rc}", "derives_from", "EXTRACTED")
+    for i in (injections or []):
+        node(f"injection:{i['id']}", "injection", i.get("name", i["id"]))
+    for t in (techniques or []):
+        node(f"technique:{t['id']}", "technique", t.get("name", t["id"]))
+
+    for f in findings:
+        host = _host_of(f.get("target", ""))
+        fid = f"finding:{f.get('id', '')}"
+        node(f"asset:{host}", "asset", host)
+        node(fid, "finding", f.get("title") or f.get("type") or "finding")
+        link(f"asset:{host}", fid, "hosts", "EXTRACTED")
+        ftype = str(f.get("type", "")).strip().lower()
+        if ftype in inj_ids:
+            link(fid, f"injection:{ftype}", "instance_of", "EXTRACTED")
+        elif ftype in vuln_ids:
+            link(fid, f"vuln:{ftype}", "instance_of", "EXTRACTED")
+        elif ftype in tech_ids:
+            link(fid, f"technique:{ftype}", "instance_of", "EXTRACTED")
+    return list(nodes.values()), links
+
+
+def _graph_report(nodes: list[dict], links: list[dict]) -> str:
+    deg: dict[str, int] = {}
+    for e in links:
+        deg[e["source"]] = deg.get(e["source"], 0) + 1
+        deg[e["target"]] = deg.get(e["target"], 0) + 1
+    label = {n["id"]: n["label"] for n in nodes}
+    ntype = {n["id"]: n["type"] for n in nodes}
+    top = sorted(deg.items(), key=lambda kv: -kv[1])[:15]
+    by_type: dict[str, int] = {}
+    for n in nodes:
+        by_type[n["type"]] = by_type.get(n["type"], 0) + 1
+    lines = ["# MoonMCP graph report", "",
+             f"**{len(nodes)} nodes · {len(links)} edges.**", "",
+             "## Nodes by type",
+             *[f"- {t}: {c}" for t, c in sorted(by_type.items())],
+             "", "## God nodes (most connected)"]
+    lines += [f"- **{label.get(nid, nid)}** ({ntype.get(nid, '?')}) — {d} links"
+              for nid, d in top] or ["- (none yet)"]
+    return "\n".join(lines)
+
+
 def _host_of(target: str) -> str:
     t = str(target).strip()
     if "://" in t:
@@ -91,6 +158,7 @@ def build_vault(
     root_causes: list[dict] | None = None,
     techniques: list[dict] | None = None,
     want_canvas: bool = True,
+    want_graph_json: bool = True,
 ) -> dict:
     """Render an Obsidian vault at *root*; return a manifest of what was written."""
 
@@ -221,6 +289,16 @@ def build_vault(
             y += max(200, 120 * (len(fnotes[:8]) + 1))
         vault.write("MoonMCP.canvas", _canvas(nodes, edges))
 
+    # --- Graphify-style machine-readable graph (NetworkX node-link) --------
+    graph_stats = {}
+    if want_graph_json:
+        g_nodes, g_links = _build_graph(findings, injections, vulns, root_causes, techniques)
+        vault.write("graph.json", json.dumps(
+            {"directed": True, "multigraph": False, "graph": {"generator": "moonmcp"},
+             "nodes": g_nodes, "links": g_links}, indent=2))
+        vault.write("GRAPH_REPORT.md", _graph_report(g_nodes, g_links))
+        graph_stats = {"graph_nodes": len(g_nodes), "graph_edges": len(g_links)}
+
     return {"root": root, "files_written": len(vault.written),
-            "assets": len(assets), "findings": len(findings),
+            "assets": len(assets), "findings": len(findings), **graph_stats,
             "manifest": vault.written[:500]}

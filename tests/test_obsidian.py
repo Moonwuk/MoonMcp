@@ -49,6 +49,14 @@ def test_build_vault_graph(tmp_path):
     assert canvas["nodes"] and canvas["edges"]
     assert all("id" in n and "type" in n for n in canvas["nodes"])
     assert all({"fromNode", "toNode"} <= set(e) for e in canvas["edges"])
+    # Graphify-style graph.json (NetworkX node-link) with provenance-tagged edges
+    assert "graph.json" in files and "GRAPH_REPORT.md" in files
+    graph = json.loads((tmp_path / "graph.json").read_text())
+    assert graph["directed"] is True and graph["nodes"]
+    assert any(n["type"] == "vuln" for n in graph["nodes"])
+    assert any(e["relation"] == "derives_from" and e["provenance"] == "EXTRACTED"
+               for e in graph["links"])
+    assert man["graph_edges"] >= 1
 
 
 @pytest.mark.asyncio

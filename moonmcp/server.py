@@ -1621,9 +1621,10 @@ async def export_obsidian(out_dir: str | None = None, include_kb: bool = True,
     graph: a Home MOC, one note per asset and finding (cross-linked, tagged by
     severity), and — with `include_kb` — the knowledge bases as a linked web
     (each vulnerability `[[wikilinks]]` to its **root cause**), plus an Obsidian
-    **Canvas** (`.canvas`) graph. Open the folder as a vault and use the graph
-    view. Writes to `out_dir` (or MOONMCP_VAULT_DIR, else ./moonmcp-vault); pure
-    file generation, no network.
+    **Canvas** (`.canvas`) graph. Also emits a Graphify-style `graph.json`
+    (NetworkX node-link, provenance-tagged edges) and a `GRAPH_REPORT.md`
+    ("god nodes"). Open the folder as a vault and use the graph view. Writes to
+    `out_dir` (or MOONMCP_VAULT_DIR, else ./moonmcp-vault); pure files, no network.
     """
 
     import os
