@@ -113,6 +113,8 @@ def safe_tool(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[An
             return {"error": "disabled", "detail": str(exc)}
         except ValueError as exc:
             return {"error": "invalid_input", "detail": str(exc)}
+        except Exception as exc:  # never surface an opaque crash to the MCP client
+            return {"error": "internal_error", "detail": f"{type(exc).__name__}: {exc}"}
     return wrapper
 
 
@@ -174,6 +176,32 @@ _NON_TLD = {
 }
 
 
+# Flags that make a scanner read or write a filesystem path — refused via
+# run_scanner so it can't be turned into an arbitrary file read/write that sails
+# past the host scope check (which only vets host/URL/IP tokens).
+_SCANNER_PATH_FLAGS = {
+    "-o", "-oa", "-on", "-ox", "-og", "-os", "-oj", "--output", "-output", "-output-file",
+    "-w", "--write", "-config", "--config", "-input-file", "-l", "-list", "-resume",
+    "-store-resp", "-srd", "-sr", "-or", "-data-dir", "--stats-file", "-je", "-jle",
+    "-sf", "-store-response-dir",
+}
+
+
+def _reject_dangerous_scanner_args(args: list[str]) -> str | None:
+    """Return a reason if *args* try to read/write a filesystem path, else None."""
+
+    for tok in args:
+        t = tok.strip()
+        base = t.split("=", 1)[0].lower()
+        if base in _SCANNER_PATH_FLAGS:
+            return f"flag '{t}' performs file I/O and is not allowed via run_scanner"
+        if "://" in t:
+            continue  # a URL, not a path
+        if t.startswith(("/", "~", "\\\\")) or ".." in t or (len(t) > 2 and t[1] == ":"):
+            return f"path-like argument '{t}' is not allowed via run_scanner"
+    return None
+
+
 def _host_like_tokens(args: list[str]) -> list[str]:
     """Extract host/URL/IP-looking tokens from a CLI arg list (for scope checks).
 
@@ -209,6 +237,7 @@ def _host_like_tokens(args: list[str]) -> list[str]:
 # meta / scope
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@safe_tool
 async def server_status() -> dict:
     """Report MoonMCP's configuration and capabilities.
 
@@ -242,6 +271,7 @@ async def server_status() -> dict:
 
 
 @mcp.tool()
+@safe_tool
 async def scope_list() -> dict:
     """List the current in-scope and out-of-scope entries."""
 
@@ -250,6 +280,7 @@ async def scope_list() -> dict:
 
 
 @mcp.tool()
+@safe_tool
 async def scope_add(target: str) -> dict:
     """Authorize a target for active testing.
 
@@ -265,6 +296,7 @@ async def scope_add(target: str) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 async def scope_exclude(target: str) -> dict:
     """Mark a target as out-of-scope. Exclusions always override the allowlist."""
 
@@ -274,6 +306,7 @@ async def scope_exclude(target: str) -> dict:
 
 
 @mcp.tool()
+@safe_tool
 async def scope_remove(target: str) -> dict:
     """Remove a previously added scope entry (from allow or deny lists)."""
 
@@ -833,11 +866,13 @@ async def email_security(domain: str) -> dict:
 async def jwt_analyze(token: str) -> dict:
     """Decode a JWT (no signature verification) and flag weaknesses: alg=none,
     brute-forceable HS* secrets, missing expiry, jku/x5u/kid key-injection surface,
-    and expired/not-yet-valid tokens. Pure parsing — sends no traffic, no scope
-    needed. Useful for triaging a token you already captured.
+    and expired/not-yet-valid tokens (checked against the current time). Pure
+    parsing — sends no traffic, no scope needed. Triage a token you captured.
     """
 
-    result = jwtmod.analyze_jwt(token)
+    import time
+
+    result = jwtmod.analyze_jwt(token, now_epoch=int(time.time()))
     return to_dict(result)
 
 
@@ -1490,6 +1525,7 @@ async def report(domain: str) -> dict:
 # external CLI integration
 # ---------------------------------------------------------------------------
 @mcp.tool()
+@safe_tool
 async def external_tools() -> dict:
     """List the external security CLIs MoonMCP knows about and whether each is
     installed on PATH, plus the native MoonMCP fallback for each. Use before
@@ -1515,6 +1551,12 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
     if tool not in cli.KNOWN_TOOLS:
         return {"error": "unknown_tool", "detail": f"{tool} is not a known scanner",
                 "known": list(cli.KNOWN_TOOLS)}
+    # Refuse file-I/O flags/paths: run_scanner is a network-recon passthrough, not
+    # a way to read/write arbitrary files past the host scope check.
+    bad = _reject_dangerous_scanner_args(args)
+    if bad is not None:
+        return {"error": "unsafe_args", "detail": bad,
+                "hint": "run_scanner is for network recon only; file input/output flags are blocked."}
     # Scope-check the declared target AND every host/URL/IP in args — the real
     # scan target usually lives inside args (e.g. `-u https://host`).
     to_check = ([target] if target else []) + _host_like_tokens(args)

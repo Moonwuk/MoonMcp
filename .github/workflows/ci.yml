@@ -30,8 +30,8 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
-      - name: Test (pytest)
-        run: pytest -q
+      - name: Test (pytest + coverage gate)
+        run: pytest -q --cov=moonmcp --cov-report=term-missing --cov-fail-under=70
 
   smoke:
     runs-on: ubuntu-latest
