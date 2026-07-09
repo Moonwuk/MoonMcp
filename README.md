@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **96 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **97 tools**, **10 resources** and **8 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -135,6 +135,7 @@ MoonMCP exposes **96 tools**, **10 resources** and **8 operator prompts**, group
 | `recon_target` | One-shot passive+light sweep (subdomains → DNS → TLS → HTTP → headers → fingerprint → email security). |
 | `report` | Full safe sweep → a severity-ranked **Markdown** report (surface, posture grades, findings). |
 | `add_finding` / `list_findings` / `clear_findings` | Record / read / clear findings in the session store (also on the `findings://` resource). |
+| `triage_findings` | **Dedupe + prioritise** findings before reporting: collapse exact duplicates, rank by severity × frequency, and surface **systemic** issues (same finding across many targets). Dry-run or `apply=true`. |
 | `export_findings` | Export findings as **SARIF 2.1.0** (GitHub code-scanning / DAST pipelines) or JSON. |
 | `export_obsidian` | "Graphify" the session into an **Obsidian vault** — linked notes (asset ↔ finding, vuln ↔ root cause) + tags + an Obsidian **Canvas** graph. Open the folder and use the graph view. |
 | `surface_diff` / `surface_snapshots` | Track how the attack surface **changes over time** — baseline a set (subdomains/endpoints/…) and surface only what's **new** since last run (persists via `MOONMCP_STATE_DIR`). |
@@ -361,7 +362,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 96 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 97 tools, 10 resources, 8 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── intercept.py     # Burp-style repeater / intruder / passive scan + request-response history
 ├── programs.py      # bug-bounty engagement profiles (per-program scope + header + UA)

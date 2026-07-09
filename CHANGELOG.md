@@ -6,6 +6,9 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Finding triage** (`triage_findings`): dedupe exact duplicates, rank unique
+  findings by severity × frequency, and surface *systemic* issues (the same
+  finding across many targets). Dry-run, or `apply=true` to collapse in place.
 - **Burp-style interception (native).** `http_repeater` (send one raw/structured
   request → full response + passive scan), `intruder` (payload-marker sweep with
   status/length/reflection diffing, intrusive-gated), `passive_scan` (all passive

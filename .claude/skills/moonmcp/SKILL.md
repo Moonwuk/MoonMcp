@@ -82,7 +82,8 @@ Two ways, pick based on the user's situation:
 4. **Batch:** feed `enumerate_subdomains` output to `probe_batch` for liveness.
 5. **Intrusive (with consent):** `port_scan`, `content_discovery`, `vuln_scan`
    (needs nuclei), `waf_efficacy`, `http_methods`, `desync_probe`.
-6. **Record & report:** `add_finding` as you go, then `report`,
+6. **Record & report:** `add_finding` as you go; `triage_findings` to dedupe and
+   prioritise (and spot systemic issues across targets); then `report`,
    `export_findings` (SARIF/JSON), or `export_obsidian` (linked vault + graph).
 
 ## Burp-style interception (native, no external proxy)

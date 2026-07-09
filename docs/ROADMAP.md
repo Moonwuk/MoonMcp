@@ -95,13 +95,15 @@ reinventing nmap/nuclei/ffuf, just driving them behind the scope guard.
 
 ## Phase 5 — Reporting, triage & self-hosting (proposals)
 
+- ✅ **Finding dedup & triage** (`triage_findings`): collapse exact duplicates,
+  rank unique findings by severity × frequency, and surface *systemic* issues
+  (the same finding across many targets) — feeds `report` / `export_findings` /
+  `export_obsidian`.
 - Per-program **report templates** (a program's preferred disclosure format).
 - **OAST self-host** helper (stand up / point at your own interactsh) so blind
   callbacks don't depend on a third party.
 - **nuclei template management** (list/select/update template sets safely).
 - **OAuth / session capture** via the browser tools to feed `auth_set`.
-- **Finding dedup & triage** with linkage into the existing Obsidian / graph
-  export, so repeat findings collapse and the graph stays clean.
 
 ---
 

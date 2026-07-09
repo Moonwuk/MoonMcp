@@ -1770,6 +1770,28 @@ async def clear_findings(target: str | None = None) -> dict:
 
 @mcp.tool()
 @safe_tool
+async def triage_findings(apply: bool = False) -> dict:
+    """**Deduplicate and prioritise** the session findings — the triage step before
+    you write a report.
+
+    Collapses exact-duplicate findings (same type + target + title), ranks the
+    unique ones by severity then frequency, and surfaces **systemic** issues (the
+    same finding across multiple targets — usually the highest-value report). Returns
+    a triage view without changing anything; pass `apply=true` to actually collapse
+    the duplicates in the store (evidence/sources are merged into the survivor).
+    Feed the result to `report` / `export_findings` / `export_obsidian`.
+    """
+
+    ctx = get_context()
+    out: dict[str, Any] = {"triage": ctx.findings.triage()}
+    if apply:
+        out["deduped"] = ctx.findings.dedupe()
+        out["triage"] = ctx.findings.triage()
+    return out
+
+
+@mcp.tool()
+@safe_tool
 async def audit_log(limit: int = 100, event: str | None = None) -> dict:
     """Read the session **audit trail** — one record per scope decision (allow /
     deny / SSRF-block / intrusive-block) and external command. Optionally filter by

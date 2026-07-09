@@ -25,7 +25,7 @@ PASSIVE = {
     # interception history (reads the in-memory log; no traffic)
     "http_history",
     # findings / reporting / monitoring
-    "add_finding", "list_findings", "clear_findings", "audit_log",
+    "add_finding", "list_findings", "clear_findings", "triage_findings", "audit_log",
     "export_obsidian", "surface_diff", "surface_snapshots", "export_findings",
     # offline knowledge bases
     "injection_info", "injection_search", "match_injection_signatures",
