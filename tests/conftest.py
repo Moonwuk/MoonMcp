@@ -9,6 +9,9 @@ from moonmcp.context import build_context
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    _lb = 0   # /lb backend rotation counter
+    _rl = 0   # /rl rate-limit counter
+
     def log_message(self, *args):  # silence
         pass
 
@@ -37,6 +40,112 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path.startswith("/ssti"):
+            # DELIBERATELY VULNERABLE (eval target): "renders" a Jinja2-style
+            # {{7331*7}} expression by echoing the evaluated result.
+            from urllib.parse import parse_qs, urlparse
+            name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+            out = name.replace("{{7331*7}}", "51317") if "{{" in name else name
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>hello " + out.encode("utf-8", "replace") + b"</html>")
+            return
+        if self.path.startswith("/sqli"):
+            # DELIBERATELY VULNERABLE: a single quote yields a MySQL error; the
+            # boolean pair yields different-length bodies.
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            if "'" in q and "'1'='1" not in q and "'1'='2" not in q:
+                body = b"Database error: You have an error in your SQL syntax; check the MySQL manual"
+            elif "'1'='1" in q:
+                body = b"<html>results: alice bob carol dave erin frank grace</html>"
+            else:
+                body = b"<html>results:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/ssrf"):
+            # DELIBERATELY VULNERABLE: fetches the ?url= param server-side.
+            from urllib.parse import parse_qs, urlparse
+            url = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
+            if url.startswith("http://") or url.startswith("https://"):
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(url, timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>fetched</html>")
+            return
+        if self.path.startswith("/cache"):
+            # DELIBERATELY VULNERABLE: reflects the unkeyed X-Forwarded-Host header
+            # and marks the response cacheable.
+            xfh = self.headers.get("X-Forwarded-Host", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Cache-Control", "public, max-age=60")
+            self.end_headers()
+            self.wfile.write(b"<html><link href='//" + xfh.encode("utf-8", "replace")
+                             + b"/style.css'></html>")
+            return
+        if self.path.startswith("/lb"):
+            # Two backends behind an LB with a Server-version mismatch (patch drift).
+            type(self)._lb += 1
+            if type(self)._lb % 2 == 0:
+                server_hdr, backend = "nginx/1.24.0", "node-a"
+            else:
+                server_hdr, backend = "nginx/1.25.1", "node-b"
+            # send_response_only avoids the handler's default Server header so our
+            # injected version is the authoritative one.
+            self.send_response_only(200)
+            self.send_header("Server", server_hdr)
+            self.send_header("X-Backend-Server", backend)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/vhost"):
+            # Serves the same app for any Host AND reflects it into a link.
+            host = self.headers.get("Host", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><a href='//" + host.encode("utf-8", "replace")
+                             + b"/next'>go</a></html>")
+            return
+        if self.path.startswith("/edge"):
+            # Looks like it sits behind Cloudflare with a cache layer.
+            self.send_response_only(200)
+            self.send_header("Server", "cloudflare")
+            self.send_header("CF-RAY", "8a1b2c3d4e5f-FRA")
+            self.send_header("CF-Cache-Status", "HIT")
+            self.send_header("Via", "1.1 varnish, 1.1 cloudflare")
+            self.send_header("Age", "42")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/rl"):
+            # Rate limit that keys on the (spoofable) X-Forwarded-For header.
+            if self.headers.get("X-Forwarded-For"):
+                type(self)._rl = 0  # per-IP bypass
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            type(self)._rl += 1
+            if type(self)._rl > 5:
+                self.send_response(429)
+                self.send_header("Retry-After", "30")
+                self.end_headers()
+                self.wfile.write(b"slow down")
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
             return
         if self.path == "/spa":
             body = (b"<html><head><script src=\"/static/app.js\"></script></head>"

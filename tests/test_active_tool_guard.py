@@ -18,7 +18,7 @@ PASSIVE = {
     "scope_list", "scope_add", "scope_exclude", "scope_remove",
     "program_add", "program_use", "program_list", "program_remove",
     "auth_set", "auth_clear",
-    "oast_configure", "oast_generate", "oast_poll", "oast_list",
+    "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
     # keyless OSINT (queries a third party, never the target)
     "web_search", "search_dorks", "cve_lookup", "cve_search",
     "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze",

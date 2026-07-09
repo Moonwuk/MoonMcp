@@ -42,6 +42,7 @@ from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
 from .intel import oast as oastmod
+from .intel import oast_server as oastsrvmod
 from .intel import search as searchmod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
@@ -61,6 +62,7 @@ from .recon import crawl as crawlmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
+from .recon import infra as inframod
 from .recon import jsendpoints as jsmod
 from .recon import openapi as openapimod
 from .recon import origin as originmod
@@ -68,7 +70,7 @@ from .recon import secrets as secretsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
-from .scope import ScopeError, normalize_target
+from .scope import ScopeError, canonical_ip, normalize_target
 from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cors as corsmod
@@ -78,6 +80,7 @@ from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
 from .web import params as paramsmod
+from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
 from .web import takeover as takeovermod
@@ -602,6 +605,49 @@ async def oast_configure(interaction_domain: str | None = None,
 
 @mcp.tool()
 @safe_tool
+async def oast_selfhost(action: str = "start", port: int = 0, host: str = "0.0.0.0",
+                        advertise_host: str | None = None) -> dict:
+    """Start a **built-in OAST callback catcher** so blind-vuln confirmation does
+    not depend on a third party (interactsh/Collaborator).
+
+    `action`: `start` (launch a threaded HTTP listener; `port=0` picks a free
+    port), `stop`, or `status`. Canaries then become `http://<host:port>/<token>`
+    and `oast_poll` reads the catcher directly. **The target must be able to reach
+    this listener** — run MoonMCP on a reachable host (public IP or authorised
+    internal network), or tunnel the port; pass `advertise_host` to put your
+    reachable address in the canary URLs. For unreachable external targets, use a
+    public interactsh via `oast_configure` instead.
+    """
+
+    ctx = get_context()
+    act = action.strip().lower()
+    if act == "stop":
+        if ctx.oast_server is not None:
+            ctx.oast_server.stop()
+            ctx.oast_server = None
+        ctx.oast.self_host_base = ""
+        return {"running": False, "stopped": True}
+    if act == "status":
+        running = ctx.oast_server is not None and ctx.oast_server.running
+        return {"running": running,
+                "base": ctx.oast_server.base() if running else None,
+                "self_host_base": ctx.oast.self_host_base}
+    # start
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        return {"running": True, "base": ctx.oast_server.base(),
+                "note": "already running — stop first to rebind"}
+    server = oastsrvmod.CallbackServer(host=host, port=port, advertise_host=advertise_host)
+    server.start()
+    ctx.oast_server = server
+    ctx.oast.self_host_base = server.base()
+    ctx.audit.record("oast_selfhost", tool="oast_selfhost", target=server.base(), decision="start")
+    return {"running": True, "base": server.base(), "port": server.port,
+            "example_canary": f"http://{server.base()}/<token>",
+            "note": "target must be able to reach this address; set advertise_host for a public IP."}
+
+
+@mcp.tool()
+@safe_tool
 async def oast_generate(label: str = "") -> dict:
     """Mint a unique **callback canary** to embed in a payload for blind-vuln
     detection (blind SSRF/XXE/RCE/SQLi, blind XSS). Returns the canary hostname
@@ -628,10 +674,16 @@ async def oast_poll(token: str | None = None) -> dict:
     """
 
     ctx = get_context()
+    # Self-host catcher: read interactions straight from the built-in listener.
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(token)
+        return {"source": "self_host", "token": token, "interaction_count": len(hits),
+                "interactions": hits[:200]}
     target = ctx.oast.poll_target(token)
     if target is None:
         return {"configured": ctx.oast.configured,
-                "note": "No poll_url configured — set one with oast_configure.",
+                "note": "No poll_url configured — set one with oast_configure, or start the "
+                        "built-in catcher with oast_selfhost.",
                 "canaries": [to_dict(c) for c in ctx.oast.list()]}
     try:
         r = await ctx.http.fetch(target, method="GET", follow_redirects=True)
@@ -2707,13 +2759,18 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 
     interactions: list[dict] = []
     if oast_token:
-        poll = ctx.oast.poll_target(oast_token)
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
-                interactions = oastmod.parse_interactions(r.text())
-            except Exception:
-                interactions = []
+        # The built-in self-host catcher (oast_selfhost) records callbacks locally
+        # and sets no poll_url — read it directly, like ssrf_probe / oast_poll do.
+        if ctx.oast_server is not None and ctx.oast_server.running:
+            interactions = ctx.oast_server.interactions(oast_token)
+        else:
+            poll = ctx.oast.poll_target(oast_token)
+            if poll:
+                try:
+                    r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
+                    interactions = oastmod.parse_interactions(r.text())
+                except Exception:
+                    interactions = []
 
     verdict = confirmmod.evaluate(
         reflected=reflected, status_changed=status_changed, length_delta=length_delta,
@@ -2739,6 +2796,482 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
                        trust="curated", provenance="manual", tags="finding,confirmed", created_at=ts)
         out["recorded_finding_id"] = f.id
     return out
+
+
+# ---------------------------------------------------------------------------
+# active detectors (differential probes for top-payout classes)
+# ---------------------------------------------------------------------------
+def _with_param(url: str, param: str | None, value: str, method: str) -> tuple[str, bytes | None]:
+    """Return ``(request_url, request_body)`` with *value* placed in *param* — the
+    query for GET, a form body for POST-ish methods."""
+
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    if method.upper() in ("GET", "HEAD") or not param:
+        sp = urlsplit(url)
+        q = dict(parse_qsl(sp.query, keep_blank_values=True))
+        if param:
+            q[param] = value
+        return urlunsplit(sp._replace(query=urlencode(q))), None
+    return url, urlencode({param: value}).encode()
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Server-Side Template Injection** probe. Injects benign arithmetic markers
+    for each major engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor,
+    Handlebars) into `param` and checks whether the result (``7331*7=51317``)
+    renders — i.e. the expression was *evaluated*, not reflected. Differential vs a
+    control. Reports which engine fired. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    burl, bbody = _with_param(url, param, "moonc0nfirm", m)
+    b = await ctx.http.fetch(burl, method=m, body=bbody, follow_redirects=False, scope_check=_scope_check())
+    tested: list[tuple[str, str, str]] = []
+    for engine, payload in probesmod.SSTI_PAYLOADS:
+        tu, tb = _with_param(url, param, payload, m)
+        r = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
+        tested.append((engine, payload, r.text(200_000)))
+    findings = probesmod.ssti_findings(b.text(200_000), tested)
+    # A single engine evaluating is a real signal; more than one "engine" rendering
+    # 51317 at once is contradictory (a page emitting the digits by coincidence) —
+    # downgrade rather than assert a confirmed multi-engine SSTI.
+    contradictory = len(findings) > 1
+    verdict = confirmmod.evaluate(
+        reflected=bool(findings) and not contradictory,
+        injection_hits=[f"ssti/{f['engine']}" for f in findings] if not contradictory else [])
+    out = {"target": url, "param": param, **verdict, "engines": findings}
+    if contradictory:
+        out["verdict"] = "inconclusive"
+        out["note"] = ("multiple template engines appear to evaluate the same arithmetic — likely "
+                       "a coincidental digit match on the page, not SSTI; verify manually")
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def sqli_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**SQL injection** probe — non-destructive: a single-quote **error** trigger
+    (matched against MoonMCP's SQL error signatures) plus a **boolean** pair
+    (`'1'='1'` vs `'1'='2'`) whose differing responses indicate boolean-based SQLi.
+    No UNION/stacked/time-based data extraction. Reports the DBMS if a signature
+    fires. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    async def _get(value: str):
+        u, b = _with_param(url, param, value, m)
+        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=_scope_check())
+
+    er = await _get(probesmod.SQLI_ERROR)
+    hits = injmod.match_signatures(er.text(200_000), class_id="sqli")
+    # Send each of TRUE/FALSE twice: a real boolean-based SQLi is REPRODUCIBLE
+    # (true==true, false==false, true!=false), which rejects inter-request noise.
+    t1, t2 = await _get(probesmod.SQLI_TRUE), await _get(probesmod.SQLI_TRUE)
+    f1, f2 = await _get(probesmod.SQLI_FALSE), await _get(probesmod.SQLI_FALSE)
+    true_stable = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
+    false_stable = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
+    differs = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
+    bool_diff = bool(true_stable and false_stable and differs)
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"{h['class']}/{h['technology']}" for h in hits],
+        status_changed=bool_diff and (t1.status != f1.status),
+        length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0)
+    return {"target": url, "param": param, **verdict, "error_signatures": hits[:10],
+            "boolean_differential": bool_diff, "reproducible": bool(true_stable and false_stable),
+            "true_status": t1.status, "true_len": len(t1.body),
+            "false_status": f1.status, "false_len": len(f1.body)}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssrf_probe(target: str, param: str, method: str = "GET",
+                     oast_token: str | None = None, wait: float = 2.0) -> dict:
+    """**Blind SSRF** probe. Plants an **OAST canary** URL in `param`, sends the
+    request, waits briefly, then checks whether the target called back — a landed
+    callback is strong proof of blind SSRF. Start `oast_selfhost` (or
+    `oast_configure`) first, or pass an existing `oast_token` from `oast_generate`.
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return {"error": "oast_unconfigured",
+                    "detail": "start oast_selfhost or oast_configure before probing for blind SSRF"}
+        cb = ctx.oast.generate(label="ssrf_probe")
+    m = method.upper()
+    tu, tb = _with_param(url, param, cb.http_url, m)
+    await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
+    await asyncio.sleep(max(0.0, min(wait, 5.0)))
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(cb.token)
+    else:
+        poll = ctx.oast.poll_target(cb.token)
+        hits = []
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, follow_redirects=True)
+                hits = oastmod.parse_interactions(r.text())
+            except Exception:
+                hits = []
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "param": param, "canary": cb.http_url, "token": cb.token,
+           **verdict, "interactions": hits[:20]}
+    if not hits:
+        out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def cache_probe(target: str) -> dict:
+    """**Web cache poisoning** probe. Sends the request with common **unkeyed**
+    headers (`X-Forwarded-Host`, `X-Forwarded-Scheme`, …) carrying a canary and
+    checks whether the value is **reflected** while the response looks
+    **cacheable** — the combination that lets an unkeyed input poison the cache.
+    Detection-only (one canary per header). Intrusive; in scope only.
+    """
+
+    import secrets
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    canary = "moonpc" + secrets.token_hex(4)
+    b = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+    base_body = b.text(200_000)
+    reflected: list[dict] = []
+    for h in probesmod.CACHE_HEADERS:
+        r = await ctx.http.fetch(url, headers={h: f"{canary}.evil.example"},
+                                 follow_redirects=False, scope_check=_scope_check())
+        if canary in r.text(200_000) and canary not in base_body:
+            reflected.append({"header": h, "reflected_canary": canary})
+    is_cacheable, reasons = probesmod.cacheable(b.headers_map())
+    if reflected and is_cacheable:
+        verdict = "likely"
+    elif reflected:
+        verdict = "inconclusive"
+    else:
+        verdict = "unconfirmed"
+    return {"target": url, "verdict": verdict, "unkeyed_reflection": reflected,
+            "cacheable": is_cacheable, "cache_signals": reasons}
+
+
+# ---------------------------------------------------------------------------
+# behavioural infrastructure detectors
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@active_tool()
+async def backend_probe(target: str, samples: int = 12) -> dict:
+    """**Infer the backend fleet behind a load balancer** from response variance.
+    Sends N benign requests and clusters them by their discriminators (Server,
+    X-Powered-By, Via, backend-id headers, Set-Cookie names) to count distinct
+    backends, and flags **patch drift** (nodes reporting different Server versions
+    — a lagging node may be individually vulnerable) and **clock skew** between
+    nodes. The load-balancing/consistency picture a single request can't show.
+    In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    n = max(3, min(samples, 30))
+    out: list[dict] = []
+    for _ in range(n):
+        r = await ctx.http.fetch(url, method="GET", follow_redirects=False, scope_check=_scope_check())
+        out.append({
+            "server": r.header("Server"),
+            "powered_by": r.header("X-Powered-By"),
+            "via": r.header("Via"),
+            # X-Served-By is a CDN cache-node id (unique per edge PoP) → excluded so
+            # it doesn't inflate the backend count; prefer origin-identifying headers.
+            "backend": r.header("X-Backend-Server") or r.header("X-Server"),
+            "cookies": [c.split("=", 1)[0].strip() for c in r.get_all("set-cookie")],
+            "date_epoch": inframod.parse_http_date(r.header("Date")),
+            "elapsed_ms": r.elapsed_ms,
+        })
+    return {"target": url, "samples": n, **inframod.cluster_backends(out)}
+
+
+@mcp.tool()
+@active_tool()
+async def dns_behavior(domain: str) -> dict:
+    """**Behavioural DNS / zone profiling.** Detects **wildcard DNS** (so subdomain
+    enumeration isn't fooled by catch-all resolution), whether the zone is
+    **DNS-load-balanced** (multiple/rotating A records), IPv6 presence, and the
+    CNAME target (dangling-CNAME → takeover surface). Passive DNS; in scope only.
+    """
+
+    host = normalize_target(domain)
+    ctx = get_context()
+    # An IP literal resolves to itself — no DNS/DoH round-trip, no wildcard/CNAME.
+    ip = canonical_ip(host)
+    if ip is not None:
+        is6 = ip.version == 6
+        return {"host": host, "wildcard_dns": False,
+                "a_records": [] if is6 else [host], "aaaa_records": [host] if is6 else [],
+                "ipv6": is6, "dns_load_balanced": False, "cname": None,
+                "nameservers": [], "mx": [], "concerns": []}
+    import secrets
+    rand = f"moonwild{secrets.token_hex(6)}.{host}"
+    wild = await dnsmod.resolve(rand, http_client=ctx.http)
+    wildcard = bool(wild.a or wild.aaaa)
+
+    a_sets: list[tuple[str, ...]] = []
+    base = None
+    for _ in range(3):
+        rr = await dnsmod.resolve(host, http_client=ctx.http)
+        base = base or rr
+        a_sets.append(tuple(sorted(rr.a)))
+    assert base is not None
+    dns_lb = len({s for s in a_sets if s}) > 1 or len(base.a) > 1
+    records = base.records or {}
+    concerns: list[str] = []
+    if wildcard:
+        concerns.append("wildcard DNS is enabled — verify enumerated subdomains actually resolve "
+                        "distinctly (catch-all inflates false positives)")
+    if base.canonical_name:
+        concerns.append(f"apex/host is a CNAME to {base.canonical_name} — check it is not a "
+                        "dangling pointer to an unclaimed service (takeover)")
+    return {
+        "host": host,
+        "wildcard_dns": wildcard,
+        "a_records": base.a,
+        "aaaa_records": base.aaaa,
+        "ipv6": bool(base.aaaa),
+        "dns_load_balanced": dns_lb,
+        "cname": base.canonical_name,
+        "nameservers": records.get("NS", []),
+        "mx": records.get("MX", []),
+        "concerns": concerns,
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def vhost_probe(target: str) -> dict:
+    """**Host-header routing behaviour.** Compares the normal response with one sent
+    under a **bogus Host** header to reveal how the edge routes: does it **validate
+    the Host** (routes/errors) or serve the same app regardless (host-header
+    attacks — cache poisoning, password-reset poisoning, routing to internal
+    vhosts)? Also checks whether the bogus host is **reflected** (host-header
+    injection) directly or via `X-Forwarded-Host`. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    bogus = "moonvhost-notreal.example"
+    # Two identical baseline requests first → measure the page's natural jitter so
+    # a dynamic page (timestamps, CSRF tokens) isn't mistaken for host validation.
+    base = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+    base2 = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+    bh = await ctx.http.fetch(url, headers={"Host": bogus}, follow_redirects=False, scope_check=_scope_check())
+    xfh = await ctx.http.fetch(url, headers={"X-Forwarded-Host": bogus}, follow_redirects=False,
+                               scope_check=_scope_check())
+
+    base_body = base.text(200_000)
+    jitter = abs(len(base.body) - len(base2.body))
+    host_validated = (bh.status != base.status) or (abs(len(bh.body) - len(base.body)) > jitter + 256)
+
+    def _reflects(r) -> bool:
+        # Reflected in the body OR echoed into a routing/redirect header.
+        if bogus in r.text(200_000) and bogus not in base_body:
+            return True
+        for h in ("Location", "Refresh", "Content-Location", "Link"):
+            if bogus in (r.header(h) or ""):
+                return True
+        return False
+
+    reflected_host = _reflects(bh)
+    reflected_xfh = _reflects(xfh)
+    concerns: list[str] = []
+    if not host_validated:
+        concerns.append("the edge serves the same app for an arbitrary Host — host-header not "
+                        "validated (routing / cache-poisoning / reset-poisoning surface)")
+    if reflected_host or reflected_xfh:
+        via = "Host" if reflected_host else "X-Forwarded-Host"
+        concerns.append(f"bogus host reflected via {via} — host-header injection "
+                        "(open-redirect / cache-poisoning / password-reset poisoning)")
+    return {
+        "target": url,
+        "host_validated": host_validated,
+        "host_header_reflected": reflected_host,
+        "x_forwarded_host_reflected": reflected_xfh,
+        "baseline": {"status": base.status, "length": len(base.body)},
+        "bogus_host": {"status": bh.status, "length": len(bh.body)},
+        "concerns": concerns,
+    }
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ratelimit_probe(target: str, burst: int = 20) -> dict:
+    """**Rate-limit / throttling behaviour profile.** Sends a bounded burst
+    (rate-limiter-respecting) and reports whether the endpoint throttles, at which
+    request it first blocks (429/403/503), any `Retry-After`, and — crucially —
+    whether spoofing `X-Forwarded-For` **resets** the counter (the limiter keys on
+    a client-controlled IP header → per-IP bypass). A missing limit on a sensitive
+    endpoint is a brute-force / enumeration / resource-exhaustion finding.
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    n = max(5, min(burst, 40))
+    statuses: list[int | None] = []
+    first_block: int | None = None
+    retry_after: str | None = None
+    for i in range(n):
+        r = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
+        statuses.append(r.status)
+        if r.status in (429, 403, 503):
+            if first_block is None:
+                first_block = i + 1
+                retry_after = r.header("Retry-After")
+    bypass_reset: bool | None = None
+    if first_block is not None:
+        import secrets
+        spoof = f"10.{secrets.randbelow(255)}.{secrets.randbelow(255)}.{secrets.randbelow(255)}"
+        r = await ctx.http.fetch(url, headers={"X-Forwarded-For": spoof}, follow_redirects=False,
+                                 scope_check=_scope_check())
+        bypass_reset = r.status not in (429, 403, 503)
+    return {"target": url,
+            **inframod.ratelimit_summary(statuses, first_block=first_block,
+                                         retry_after=retry_after, bypass_reset=bypass_reset)}
+
+
+@mcp.tool()
+@active_tool()
+async def tls_behavior(target: str, port: int = 443) -> dict:
+    """**Behavioural TLS profiling.** Compares the certificate served for the real
+    host vs a **bogus SNI** — if a valid cert for another domain comes back, the
+    edge is SNI-routing/shared-hosting (a default-backend / origin-exposure hint);
+    if identical, the host doesn't route on SNI. Also reports supported TLS
+    versions (flagging weak TLS 1.0/1.1), the negotiated cipher, and HTTP/2 (ALPN).
+    In scope only.
+    """
+
+    host, tls_port = _split_host_port(target, port)
+    ctx = get_context()
+    real = await tlsmod.inspect_certificate(host, tls_port, timeout=ctx.settings.timeout,
+                                            server_name=host)
+    bogus = await tlsmod.inspect_certificate(host, tls_port, timeout=ctx.settings.timeout,
+                                             server_name="moontls-notreal.example")
+    profile = await tlsmod.probe_tls_profile(host, tls_port, timeout=ctx.settings.timeout)
+    if not real.connected:
+        return {"target": host, "port": tls_port, "error": "tls_handshake_failed",
+                "detail": real.error}
+    real_serial = real.serial_number
+    bogus_serial = bogus.serial_number if bogus.connected else None
+    sni_routing = bool(bogus_serial) and bogus_serial != real_serial
+    concerns: list[str] = []
+    if profile.weak_versions:
+        concerns.append(f"weak TLS versions accepted: {', '.join(profile.weak_versions)}")
+    if sni_routing:
+        concerns.append("a different certificate is served for an unknown SNI — SNI-based routing "
+                        "/ shared hosting; the default cert may expose another tenant or the origin")
+    if real.expired:
+        concerns.append("the certificate is expired")
+    return {
+        "target": host, "port": tls_port,
+        "certificate": {"subject": real.subject.get("commonName"), "issuer": real.issuer.get("organizationName"),
+                        "san": real.subject_alt_names[:20], "serial": real_serial,
+                        "not_after": real.not_after, "days_until_expiry": real.days_until_expiry},
+        "sni_routing": sni_routing,
+        "default_cert_subject": bogus.subject.get("commonName") if bogus.connected else None,
+        "supported_versions": profile.supported_versions,
+        "weak_versions": profile.weak_versions,
+        "http2": profile.http2,
+        "negotiated_cipher": real.cipher,
+        "concerns": concerns,
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def edge_map(target: str) -> dict:
+    """**Map the edge topology** in front of the origin: which CDN/WAF/cache
+    vendors (Cloudflare, CloudFront, Fastly, Akamai, Sucuri, Imperva, …), the proxy
+    chain (`Via`), and whether a cache layer is present — from the response
+    headers. Tells you whether you're hitting an edge (and should hunt the origin)
+    or the origin directly. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    r = await ctx.http.fetch(url, follow_redirects=True, max_redirects=ctx.settings.max_redirects,
+                             scope_check=_scope_check())
+    if r.status is None:
+        return {"error": "unreachable", "detail": r.error, "url": url}
+    layers = inframod.edge_layers(r.headers_map())
+    return {"target": url, "status": r.status, "server": r.header("Server"), **layers}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def http_behavior(target: str) -> dict:
+    """**Raw HTTP/1.x behaviour fingerprint.** Sends a handful of complete
+    edge-case requests on fresh connections — HTTP/1.0, an unknown method, an
+    oversized header, and **bare-LF** line endings — and reports how the stack
+    reacts. Bare-LF acceptance and inconsistent framing point at **lenient parsing
+    / a proxy-origin mismatch** (request-smuggling surface). Detection-only (no
+    partial requests, nothing left to poison a connection). Intrusive; in scope only.
+    """
+
+    from urllib.parse import urlsplit
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sp = urlsplit(url)
+    host = sp.hostname or ""
+    tls = sp.scheme == "https"
+    hport = sp.port or (443 if tls else 80)
+    path = sp.path or "/"
+    ctx = get_context()
+    t = ctx.settings.timeout
+
+    async def _raw(data: bytes) -> bytes | None:
+        return await desyncmod._raw_request(host, hport, tls, data, t)
+
+    ua = "User-Agent: MoonMCP\r\n"
+    base = await _raw(f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}Connection: close\r\n\r\n".encode("latin-1"))
+    http10 = await _raw(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n{ua}\r\n".encode("latin-1"))
+    badm = await _raw(f"MOONX {path} HTTP/1.1\r\nHost: {host}\r\n{ua}Connection: close\r\n\r\n".encode("latin-1"))
+    big = await _raw((f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}X-Big: "
+                      + "A" * 16384 + "\r\nConnection: close\r\n\r\n").encode("latin-1"))
+    # Bare-LF (no CR) line endings — lenient parsers accept this.
+    lf = await _raw(f"GET {path} HTTP/1.1\nHost: {host}\n{ua.replace(chr(13), '')}Connection: close\n\n".encode("latin-1"))
+
+    base_status, base_server = desyncmod._status_of(base) if base else (None, None)
+    conn = None
+    if base:
+        for hl in base.split(b"\r\n"):
+            if hl.lower().startswith(b"connection:"):
+                conn = hl.split(b":", 1)[1].strip().decode("latin-1", "replace")
+                break
+    summary = inframod.summarize_http_behavior(
+        baseline_status=base_status, connection=conn,
+        http10_status=desyncmod._status_of(http10)[0] if http10 else None,
+        invalid_method_status=desyncmod._status_of(badm)[0] if badm else None,
+        oversized_status=desyncmod._status_of(big)[0] if big else None,
+        bare_lf_status=desyncmod._status_of(lf)[0] if lf else None,
+    )
+    return {"target": url, "server": base_server, **summary}
 
 
 # ---------------------------------------------------------------------------

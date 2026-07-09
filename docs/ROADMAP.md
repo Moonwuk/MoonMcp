@@ -140,7 +140,16 @@ with a working PoC. This is the composable answer to Strix's monolithic
   (baseline vs test) + injection-signature + out-of-band (OAST) confirmation →
   `confirmed`/`likely`/`inconclusive`/`unconfirmed`, plus a CVSS 3.1 base score —
   so cheap confirmation happens in MoonMCP before paying for a Strix run.
-- ⏭️ Next: local embeddings + a librarian-loop over the memory hub (deferred).
+- ✅ **Active detectors + self-host OAST + eval harness.** Differential probes for
+  top-payout classes — `ssti_probe` (multi-engine), `sqli_probe` (error+boolean),
+  `ssrf_probe` (OAST callback), `cache_probe` (unkeyed reflection × cacheability),
+  all intrusive-gated and feeding `confirm_finding`. `oast_selfhost` is a built-in
+  stdlib callback catcher (no third party). A detection **eval harness** runs each
+  probe against a deliberately-vulnerable endpoint (measurable recall + regression
+  guard).
+- ⏭️ Next: more detectors (prototype pollution, GraphQL depth, race/TOCTOU),
+  per-program report templates, PyPI release; local embeddings + a librarian-loop
+  over the memory hub (deferred).
 
 ---
 

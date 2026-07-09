@@ -42,6 +42,9 @@ class OastStore:
 
     interaction_domain: str = ""
     poll_url: str = ""
+    # When the built-in self-host catcher is running, canaries are path-based
+    # (``http://<host:port>/<token>``) since a bare IP:port has no sub-domains.
+    self_host_base: str = ""
     _callbacks: list[Callback] = field(default_factory=list)
 
     @classmethod
@@ -59,11 +62,16 @@ class OastStore:
 
     @property
     def configured(self) -> bool:
-        return bool(self.interaction_domain or self.poll_url)
+        return bool(self.interaction_domain or self.poll_url or self.self_host_base)
 
     def generate(self, label: str = "") -> Callback:
         tok = _token()
-        if self.interaction_domain:
+        if self.self_host_base:
+            base = self.self_host_base
+            cb = Callback(token=tok, label=label, canary_host=base,
+                          http_url=f"http://{base}/{tok}", https_url=f"https://{base}/{tok}",
+                          dns=None)
+        elif self.interaction_domain:
             host = f"{tok}.{self.interaction_domain}"
             cb = Callback(token=tok, label=label, canary_host=host,
                           http_url=f"http://{host}/", https_url=f"https://{host}/", dns=host)
