@@ -29,7 +29,16 @@ duplicate work). Every item is backed by a CVE or a public PoC / primary write-u
 
 ## Theme 1 — Modern desync & cache (global; adapted 🇯🇵)
 
-### 1.1 Modern request smuggling: 0.CL / TE.0 / Expect / chunk-extension ❌
+### 1.1 Modern request smuggling: 0.CL / TE.0 / Expect / chunk-extension ✅ (SHIPPED)
+Implemented in `moonmcp/web/desync.py` (`probe_modern_desync` + pure `interpret_modern`)
++ the `desync_modern_probe` tool (intrusive): the **timeout-differential** technique —
+each probe runs on its own fresh `Connection: close` socket that is closed immediately
+(no second/victim request shares it, so nothing is smuggled). Infers which length
+header the server honours from whether it waits for the promised body: TE.0 (chunked
+with no terminator answered anyway), CL.0 (short-body answered anyway), 0.CL (malformed
+`Expect: y 100-continue` twin diverges — CVE-2025-32094), chunk-extension divergence
+(CVE-2025-55315). A probe only signals when the ambiguous framing was *accepted* with a
+non-error status; a fast 4xx (rejection) or a read timeout (honoured framing) is no signal.
 Kettle's 2025 "HTTP/1.1 Must Die." `CL.0`, `0.CL` (broken `Expect: 100-continue`),
 `TE.0`, and chunk-extension / bare-CR parsing. Researchers earned $200k+ in weeks.
 - CVEs: CVE-2025-32094 (Akamai `Expect: y 100-continue` 0.CL), CVE-2025-55315 (Kestrel chunk-ext, CVSS 9.9), Netty GHSA-fghv-69vj-qj49.

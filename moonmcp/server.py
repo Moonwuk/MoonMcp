@@ -2144,6 +2144,25 @@ async def desync_probe(target: str) -> dict:
     return to_dict(result)
 
 
+@mcp.tool()
+@active_tool(intrusive=True)
+async def desync_modern_probe(target: str) -> dict:
+    """Detection-only probe for **modern (2025 "HTTP/1.1 Must Die") desync**: 0.CL,
+    TE.0, `Expect: 100-continue` mishandling and chunk-extension parsing. Uses the
+    **timeout-differential** technique — each probe runs on its own fresh
+    `Connection: close` socket that is closed immediately, so no second request ever
+    shares the connection and **nothing is smuggled to a victim**; it infers which
+    length header the server honours from whether it waits for the body it was
+    promised. Reports timing indicators only — NOT a confirmed finding (verify with a
+    dedicated tool). Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and the host in scope.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await desyncmod.probe_modern_desync(url, timeout=max(6.0, get_context().settings.timeout / 2))
+    return to_dict(result)
+
+
 # ---------------------------------------------------------------------------
 # findings store
 # ---------------------------------------------------------------------------
