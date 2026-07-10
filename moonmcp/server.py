@@ -87,6 +87,7 @@ from .web import logic as logicmod
 from .web import methods as methodsmod
 from .web import oauth as oauthmod
 from .web import params as paramsmod
+from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
@@ -1885,6 +1886,30 @@ async def reset_poison_probe(target: str, canary: str | None = None, method: str
         out["oast_token"] = cb.token
         out["oast_note"] = "poll with oast_poll — a callback means the server fetched the poisoned host"
     return out
+
+
+@mcp.tool()
+@active_tool()
+async def path_bypass_probe(target: str) -> dict:
+    """**403/401 path-normalization bypass**: point at a route that returns 401/403
+    and this replays normalization twins (`/admin/..;/`, `/%2e/admin`, matrix `;x`,
+    trailing `%2f`/`%2e`, double slash, `%`-encoded char) — a front proxy and the
+    backend disagreeing on normalization can skip the ACL while still resolving the
+    resource (CVE-2024-0204-class). Flags any twin that flips the status to 2xx
+    (verdict `review` — confirm the body is the real protected content). GET-only,
+    non-destructive. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await pathnormmod.probe_path_bypass(ctx.http, url, scope_check=_scope_check())
+    n = len(result.get("findings", []))
+    result["target"] = url
+    result["note"] = result.get("note") or (
+        f"{n} normalization twin(s) reached the protected route — verify the content"
+        if n else "no normalization twin bypassed the ACL")
+    return result
 
 
 @mcp.tool()
