@@ -233,11 +233,49 @@ Generate **valid** Módulo-11 CPFs/CNPJs → drive the IDOR/access-control diffe
 
 ---
 
-## 🌏 India / MENA / SEA — PARTIAL (agent hit a session limit; to finish)
-Surfaced before termination (verify + expand later):
-- **OTP / token / reset-link returned in the HTTP response body** — very common in Indian/SEA fintech; a cheap detector: request an OTP/password-reset flow, regex the JSON/body for a 4–8-digit code or a `token=`/`reset` value that should have been delivered out-of-band. High-yield, easily automatable.
-- **CRLF injection** (`%0d%0a` in params → response-splitting / header injection / open-redirect-via-Location) — differential on reflected `Set-Cookie`/`Location`.
-- TODO on resume: UPI/payment-flow logic, Indian gov (UIDAI) patterns, Arabic/MENA gov portals, Indonesian fintech, deeper WhiteHat.vn.
+## 🌏 India / MENA / SEA + cross-cutting "unusual but automatable" findings
 
-<!-- Round 2 India/MENA/SEA to be completed on a fresh session (agent session-limited). -->
+This region's bug-bounty community (Indian/SEA fintech especially) documents a set
+of high-yield **auth/logic** bugs that a scanner rarely automates but easily can —
+each is a small, safe differential/regex detector.
+
+### GLOBAL-1. Sensitive value returned in the HTTP response body ❌ (Indian/SEA fintech-heavy)
+OTP / 2FA code / password-reset token / verification link echoed in the JSON or body
+of the *request* response instead of being delivered out-of-band → instant account
+takeover. Extremely common in fintech APIs. Source: github.com/tuhin1729/Bug-Bounty-Methodology (PasswordReset/2FA), HackTricks reset-password.
+- **Mapping:** new `response_leak_probe` — drive the OTP / reset / email-verify flow, regex the response for a standalone 4–8-digit code, `otp`/`token`/`reset`/`verification` field, or a reset URL. Verdict `confirmed` = the out-of-band secret is in-band. Highest-yield, trivially safe.
+
+### GLOBAL-2. Password-reset poisoning (Host / X-Forwarded-Host) ❌
+The reset-link host is built from a user-controlled `Host` / `X-Forwarded-Host`; point
+it at a canary → the victim's reset token is delivered to the attacker. Full ATO, no
+session/exploit chain. Source: herish.me/blog/reset-password-poisoning-host-header, OWASP WSTG-INPV-17, PayloadsAllTheThings/Account-Takeover.
+- **Mapping:** `reset_poison_probe` — send the reset request with `Host`/`X-Forwarded-Host`/`X-Forwarded-Server: <canary>`; verdict when the canary is reflected in the response body/`Location`, or (best) an `oast_selfhost` hit arrives if the app server-side-fetches the host. Reuses OAST.
+
+### GLOBAL-3. CRLF injection → response splitting / header injection ❌
+`%0d%0a` (and `%0d`, `%23%0d%0a`, `%E5%98%8A%E5%98%8D` overlong) in a param (often
+`?lang=`, redirect params, subdomain routing) injects a real response header. Real
+bounties: X/xAI (HackerOne #446271), Twitter `?lang=`, Uber subdomain, PayPal.
+Source: hacktricks.wiki/en/pentesting-web/crlf-0d-0a.
+- **Mapping:** `crlf_probe` — inject `%0d%0aX-Moonmcp-Inj: 1` (and a `%0d%0aSet-Cookie:` twin) into reflected params; verdict when the injected header appears as a genuine response header (not body). Differential vs a benign control. Safe, non-destructive.
+
+### GLOBAL-4. OTP / 2FA brute-force surface (rate-limit absence) 🟡
+No lockout / no rate-limit on OTP submission → brute a 4–6-digit code. Reuse the
+existing rate-limit behaviour detector, but aimed at the OTP-verify endpoint; verdict
+= many attempts accepted without 429/lockout. Source: tuhin1729 2FA methodology.
+
+### GLOBAL-5. Race-condition limit bypass (single-packet) 🟡
+Parallel requests bypass non-atomic app-level limits (coupon reuse, refund double-spend,
+free-tier overrun, multi-vote). MoonMCP already has the single-packet-race *concept* in
+`confirm.py`; the gap is an **active** detector that fires N parallel requests at a
+limit/coupon/refund endpoint and flags >1 success. Source: portswigger.net/web-security/race-conditions, yeswehack.com race-condition guide.
+- **Mapping:** `race_probe(url, n=20)` reusing the concurrency path in `confirm.py`; verdict = success count > expected. Intrusive-gated.
+
+### Region-specific stacks (leads; verify version→CVE per target)
+- **MENA / gov student & citizen portals** — custom portals with unauth RCE, e.g. Uniclare Student Portal CVE-2024-57401 (RCE). Fingerprint→CVE via the same pack pattern as EU-B / LATAM-3.
+- **India** — UIDAI/UPI/payment-flow logic (OTP-in-response above is the dominant automatable slice); Indian gov portals often on legacy Java/PHP stacks the fingerprint pack already covers.
+- **SEA** — Indonesian fintech (OTP-in-response, race on wallet top-up), Vietnam disclosures aggregate on **WhiteHat.vn** (JWT/auth-bypass framing).
+
+> Note: GLOBAL-1..5 are technique/disclosure-documented (bug-bounty write-ups, OWASP,
+> PortSwigger), not single CVEs — gate them as heuristic detectors. They are among the
+> **highest ROI** here: tiny, safe, and they map onto flows every app has.
 
