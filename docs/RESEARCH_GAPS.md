@@ -126,6 +126,14 @@ CVE-2024-39895 (Directus alias DoS), Apollo GHSA-2p3c-p3qw-69r4.
 Highest-payout pre-auth RCE; English tools don't fingerprint these. Build as active
 differential/oracle detectors (reuse OAST + differential engine), **not** KB text.
 
+> **🟡 First `stack_probe` SHIPPED** — `moonmcp/web/stacks.py` + the `stack_probe`
+> tool (intrusive) do passive fingerprinting (Bitrix / ThinkPHP / Shiro / Nacos /
+> Druid / Weaver / Seeyon / Yonyou / ClickHouse) plus deterministic unauth checks:
+> **ThinkPHP** invokefunction RCE (benign md5 echo), **Nacos** UA auth bypass,
+> **Shiro** rememberMe tell, **Druid** monitor exposure, **1C-Bitrix** admin,
+> unauthenticated **ClickHouse** HTTP. Remaining below: Fastjson-OAST, the full OA
+> suite, Actuator `/env`+heapdump parse, CN WAF signatures, EHole corpus, ICP recon.
+
 ### 🇨🇳 China (FreeBuf / Seebug / AnQuanKe)
 - **Apache Shiro-550** (CVE-2016-4437) ❌ — `rememberMe=1` → `rememberMe=deleteMe` fingerprint; then a safe **key oracle** over a ~30-key default list (absence of `deleteMe` = key found). Report recovered key; hand exploitation to Strix.
 - **Fastjson/Jackson autoType** (CVE-2017-18349, CVE-2022-25845) ❌ — POST `{"@type":"java.net.Inet4Address","val":"<oast>"}` (+ evasion twins) → **OAST DNS callback**.

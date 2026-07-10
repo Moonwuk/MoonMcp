@@ -85,6 +85,7 @@ from .web import params as paramsmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
+from .web import stacks as stacksmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
@@ -1663,6 +1664,25 @@ async def cache_deception_probe(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     result = await cachedecmod.probe_cache_deception(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def stack_probe(target: str) -> dict:
+    """Fingerprint an in-scope host for high-payout CN/RU enterprise stacks and run
+    deterministic, non-destructive unauth checks: ThinkPHP invokefunction RCE
+    (benign `md5()` echo), Nacos `User-Agent` auth bypass, Apache Shiro
+    `rememberMe`, Alibaba Druid monitor exposure, 1C-Bitrix admin, and an
+    unauthenticated ClickHouse HTTP interface (point the target at `:8123`).
+    Confirmed hits are proofs, not exploits — weaponization goes to Strix.
+    Intrusive: it touches known exploit paths.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await stacksmod.probe_stack(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
