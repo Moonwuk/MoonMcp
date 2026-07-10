@@ -272,7 +272,11 @@ it at a canary → the victim's reset token is delivered to the attacker. Full A
 session/exploit chain. Source: herish.me/blog/reset-password-poisoning-host-header, OWASP WSTG-INPV-17, PayloadsAllTheThings/Account-Takeover.
 - **Mapping:** `reset_poison_probe` — send the reset request with `Host`/`X-Forwarded-Host`/`X-Forwarded-Server: <canary>`; verdict when the canary is reflected in the response body/`Location`, or (best) an `oast_selfhost` hit arrives if the app server-side-fetches the host. Reuses OAST.
 
-### GLOBAL-3. CRLF injection → response splitting / header injection ❌
+### GLOBAL-3. CRLF injection → response splitting / header injection ✅ (SHIPPED)
+Implemented in `moonmcp/web/crlf.py` + the `crlf_probe` tool: injects a benign
+`X-Moonmcp-Inj: 1` marker via CR/LF variants (bare-LF, fragment, unicode/overlong,
+double-encoded, Set-Cookie split) and confirms when it surfaces as a *real*
+response header/cookie.
 `%0d%0a` (and `%0d`, `%23%0d%0a`, `%E5%98%8A%E5%98%8D` overlong) in a param (often
 `?lang=`, redirect params, subdomain routing) injects a real response header. Real
 bounties: X/xAI (HackerOne #446271), Twitter `?lang=`, Uber subdomain, PayPal.

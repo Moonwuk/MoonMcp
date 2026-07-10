@@ -76,6 +76,7 @@ from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
+from .web import crlf as crlfmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
@@ -1744,6 +1745,27 @@ async def ssrf_metadata_probe(target: str, param: str, method: str = "GET") -> d
         "note": ("full-read SSRF to cloud metadata confirmed — rotate the exposed credentials"
                  if findings else "no metadata credential signatures reflected in the response"),
     }
+
+
+@mcp.tool()
+@active_tool()
+async def crlf_probe(target: str, param: str, method: str = "GET") -> dict:
+    """Test a parameter for **CRLF injection / HTTP response splitting**: injects a
+    benign marker header (`X-Moonmcp-Inj: 1`) through `param` via CR/LF variants
+    (bare-LF, fragment, unicode/overlong, double-encoded, Set-Cookie split) and
+    flags a vuln when the marker surfaces as a *real* response header/cookie (not
+    body reflection). Non-destructive; in scope only. Common on redirect/`lang`/
+    routing params.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    findings = await crlfmod.probe_crlf(ctx.http, url, param, method=method,
+                                        scope_check=_scope_check())
+    return {"target": url, "param": param, "vulnerable": bool(findings), "findings": findings,
+            "note": ("CRLF header injection confirmed" if findings
+                     else "no injected header surfaced — parameter appears CR/LF-safe")}
 
 
 @mcp.tool()
