@@ -82,6 +82,7 @@ from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
+from .web import logic as logicmod
 from .web import methods as methodsmod
 from .web import oauth as oauthmod
 from .web import params as paramsmod
@@ -1767,6 +1768,52 @@ async def crlf_probe(target: str, param: str, method: str = "GET") -> dict:
     return {"target": url, "param": param, "vulnerable": bool(findings), "findings": findings,
             "note": ("CRLF header injection confirmed" if findings
                      else "no injected header surfaced — parameter appears CR/LF-safe")}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def logic_probe(target: str, param: str | None = None, method: str = "GET") -> dict:
+    """Business-logic ABUSE sweep on an endpoint: **parameter tampering**
+    (negative/zero/overflow on money/quantity params — pass `param`, or the
+    money/quantity params in the URL query are auto-targeted) + a **mass-assignment**
+    check (POSTs privileged fields like role/is_admin/balance and flags reflected
+    ones). Returns LEADS (verdict=review) to confirm against the flow — drive it
+    with the `business_logic_hunt` prompt. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sc = _scope_check()
+    params = [param] if param else logicmod.numeric_params(logicmod.query_keys(url))
+    findings: list[dict] = []
+    for p in params:
+        findings.extend(await logicmod.probe_parameter_tampering(
+            ctx.http, url, p, method=method, scope_check=sc))
+    findings.extend(await logicmod.probe_mass_assignment(ctx.http, url, scope_check=sc))
+    return {
+        "target": url, "tested_params": params, "findings": findings,
+        "note": (f"{len(findings)} logic lead(s) — verify the real-world effect against the flow"
+                 if findings else "no automatable logic leads; drive the flow per business_logic_hunt"),
+    }
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def race_probe(target: str, method: str = "POST", n: int = 20) -> dict:
+    """**Race-condition / limit-bypass** probe: fire N identical requests in PARALLEL
+    at a state-changing endpoint (coupon apply, vote, withdrawal, invite, signup)
+    and report how many returned 2xx — a non-atomic per-user limit lets more than
+    one through. Confirm the side effect actually happened >1×. Set the session with
+    `auth_set` for authenticated actions. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await logicmod.probe_race(ctx.http, url, method=method, n=n,
+                                       scope_check=_scope_check())
+    return {"target": url, "method": method.upper(), **result}
 
 
 @mcp.tool()
@@ -3768,6 +3815,14 @@ def privesc_hunt(target: str = "the compromised host", platform: str = "") -> st
     """KB-backed privilege-escalation triage from an authorised foothold (enumerate → match → verify)."""
 
     return promptmod.privesc_hunt(target, platform)
+
+
+@mcp.prompt()
+def business_logic_hunt(target: str = "example.com", flow: str = "") -> str:
+    """Systematic business-logic flaw methodology (model the flow → enumerate abuses →
+    tamper/mass-assign/race → prove the real effect). Pairs with logic_probe/race_probe."""
+
+    return promptmod.business_logic_hunt(target, flow)
 
 
 def _apply_tool_profile() -> None:

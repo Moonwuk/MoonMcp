@@ -288,7 +288,11 @@ No lockout / no rate-limit on OTP submission → brute a 4–6-digit code. Reuse
 existing rate-limit behaviour detector, but aimed at the OTP-verify endpoint; verdict
 = many attempts accepted without 429/lockout. Source: tuhin1729 2FA methodology.
 
-### GLOBAL-5. Race-condition limit bypass (single-packet) 🟡
+### GLOBAL-5. Race-condition limit bypass (single-packet) ✅ (SHIPPED)
+Implemented in `moonmcp/web/logic.py` + the `race_probe` tool (fire N parallel
+requests, report 2xx-success count) — part of the business-logic toolkit
+(`logic_probe` for parameter-tampering + mass-assignment, and the
+`business_logic_hunt` methodology prompt).
 Parallel requests bypass non-atomic app-level limits (coupon reuse, refund double-spend,
 free-tier overrun, multi-vote). MoonMCP already has the single-packet-race *concept* in
 `confirm.py`; the gap is an **active** detector that fires N parallel requests at a
