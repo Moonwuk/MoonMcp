@@ -21,7 +21,7 @@ PASSIVE = {
     "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
     # keyless OSINT (queries a third party, never the target)
     "web_search", "search_dorks", "cve_lookup", "cve_search",
-    "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze",
+    "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze", "jwt_crack",
     # interception history (reads the in-memory log; no traffic)
     "http_history",
     # shared memory hub (local store; no traffic)

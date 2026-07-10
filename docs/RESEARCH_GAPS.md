@@ -76,14 +76,18 @@ one value, resolve/normalize to another.
 
 `web/jwt.py` is offline-parse only; there is no OAuth/OIDC, SAML, or WebSocket coverage.
 
-### 3.1 `oauth_probe` — OIDC discovery recon ❌
+### 3.1 `oauth_probe` — OIDC discovery recon ✅ (SHIPPED)
+Implemented in `moonmcp/web/oauth.py` + the `oauth_probe` tool: fetches both well-known docs, returns endpoints, and flags implicit grant / weak-or-missing PKCE / `none`+HS256 signing / http issuer / issuer↔jwks mix-up / public clients.
 GET `/.well-known/openid-configuration` (+ `/oauth-authorization-server`). Flags:
 implicit grant (`response_types` has `token`), no PKCE (`code_challenge_methods`
 absent/`plain`), `none`/`HS256` signing, `http` issuer, `jwks_uri` host ≠ issuer.
 - Source: OpenID Connect Discovery 1.0; OAuth BCP **RFC 9700**.
 - **Mapping:** one scope-gated GET; parse JSON → findings; auto-feed `jwks_uri` into the JWT tool, `authorization_endpoint` into 3.3.
 
-### 3.2 JWT active attacks ❌
+### 3.2 JWT active attacks 🟡 (offline crack + alg=none forge SHIPPED)
+Implemented in `moonmcp/web/jwt.py` + the `jwt_crack` tool: offline HS256/384/512
+secret crack against a weak-secret wordlist, and an `alg:none` forgery of the token.
+Remaining: live acceptance test (replay the none/forged token) and `jku`/`x5u`→OAST.
 - **HMAC secret crack (offline, 0 traffic)** — recompute HMAC over `header.payload` vs a weak-secret wordlist → key disclosure = critical. Source: TrustedSec "Keys to JWT Assessments"; hashcat `-m 16500`.
 - **`alg=none` acceptance** — replay a `none`/`None`/`NONE` token to an authed endpoint, diff status. CVE-2015-9235, CVE-2020-28042.
 - **`jku`/`x5u` SSRF** — set to a MoonMCP OAST canary, poll for callback. CVE-2018-0114.

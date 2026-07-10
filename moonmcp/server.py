@@ -79,6 +79,7 @@ from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
+from .web import oauth as oauthmod
 from .web import params as paramsmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
@@ -1604,6 +1605,44 @@ async def jwt_analyze(token: str) -> dict:
     import time
 
     result = jwtmod.analyze_jwt(token, now_epoch=int(time.time()))
+    return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def jwt_crack(token: str, wordlist: list[str] | None = None) -> dict:
+    """Offline-brute an HS256/384/512 JWT's signing secret against a weak-secret
+    wordlist — a recovered secret lets you forge ANY token (critical). Also returns
+    an `alg:none` forgery of the token so you can test whether the server accepts
+    unsigned tokens. Pure/offline — sends no traffic, no scope needed.
+    """
+
+    secret = jwtmod.crack_hmac_secret(token, wordlist)
+    return {
+        "hmac_secret_found": secret is not None,
+        "secret": secret,
+        "severity": "critical" if secret is not None else "info",
+        "alg_none_forgery": jwtmod.forge_alg_none(token),
+        "note": (f"signing key {secret!r} recovered — forge any token; confirm by replaying"
+                 if secret is not None
+                 else "no weak secret matched; try a larger wordlist or hashcat -m 16500"),
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def oauth_probe(target: str) -> dict:
+    """Fetch the OIDC/OAuth discovery document (`/.well-known/openid-configuration`
+    or `/.well-known/oauth-authorization-server`) for an in-scope target and flag
+    weak configuration: implicit grant enabled, missing/weak PKCE, `alg=none` /
+    HS256 signing, plaintext-http issuer, issuer↔jwks host mix-up, public clients.
+    One benign GET maps the whole auth surface (endpoints + posture).
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await oauthmod.probe_oidc(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
