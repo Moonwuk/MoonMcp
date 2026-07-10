@@ -72,6 +72,7 @@ from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
+from .web import authflow as authflowmod
 from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
@@ -1814,6 +1815,76 @@ async def race_probe(target: str, method: str = "POST", n: int = 20) -> dict:
     result = await logicmod.probe_race(ctx.http, url, method=method, n=n,
                                        scope_check=_scope_check())
     return {"target": url, "method": method.upper(), **result}
+
+
+@mcp.tool()
+@active_tool()
+async def response_leak_probe(target: str, method: str = "GET", data: str | None = None,
+                              content_type: str = "application/json") -> dict:
+    """Drive an OTP / password-reset / email-verification endpoint and check whether
+    the **out-of-band secret leaks in-band**: an OTP, 2FA code, reset token or
+    verification link returned in the response body instead of by email/SMS (whoever
+    triggers the flow reads it → instant account takeover — a top fintech-API bug).
+    Pass `data` (e.g. `{"email":"me@acme.test"}`) to trigger the flow. Secrets are
+    **redacted** in the output. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    body = data.encode() if data else None
+    headers = {"Content-Type": content_type} if data else None
+    findings = await authflowmod.probe_response_leak(
+        ctx.http, url, method=method, body=body, headers=headers, scope_check=_scope_check())
+    return {
+        "target": url, "vulnerable": bool(findings), "findings": findings,
+        "note": (f"{len(findings)} in-band secret leak(s) — the OTP/reset secret should be "
+                 "delivered out-of-band; confirm it's the real one" if findings
+                 else "no in-band OTP/reset secret found in the response body"),
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def reset_poison_probe(target: str, canary: str | None = None, method: str = "POST",
+                             data: str | None = None,
+                             content_type: str = "application/json") -> dict:
+    """**Password-reset poisoning**: send the reset request with the host-routing
+    headers (`Host`, `X-Forwarded-Host`, `Forwarded`, …) set to an attacker host and
+    flag any reflected back in the response body / `Location` — a signal the reset
+    link is built from a user-controlled host, so the victim's reset token is
+    delivered to the attacker (full ATO). Pass `data` (e.g. `{"email":"victim@acme.test"}`);
+    omit `canary` to auto-use an OAST host (start `oast_selfhost`/`oast_configure`)
+    which also catches a server-side host fetch. The connection stays on the in-scope
+    host — only the header is poisoned. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    cb = None
+    host = (canary or "").strip()
+    if not host:
+        if ctx.oast.configured:
+            cb = ctx.oast.generate(label="reset_poison")
+            host = cb.canary_host or ""
+        if not host:
+            host = "moonmcp-poison.example"
+    body = data.encode() if data else None
+    headers = {"Content-Type": content_type} if data else None
+    findings = await authflowmod.probe_reset_poison(
+        ctx.http, url, host, method=method, body=body, headers=headers,
+        scope_check=_scope_check())
+    out: dict = {
+        "target": url, "canary": host, "reflected": bool(findings), "findings": findings,
+        "note": (f"host reflected via {len(findings)} header(s) — verify the reset email's link "
+                 "points at the canary" if findings
+                 else "no poisoning header was reflected — reset host looks server-fixed"),
+    }
+    if cb is not None:
+        out["oast_token"] = cb.token
+        out["oast_note"] = "poll with oast_poll — a callback means the server fetched the poisoned host"
+    return out
 
 
 @mcp.tool()

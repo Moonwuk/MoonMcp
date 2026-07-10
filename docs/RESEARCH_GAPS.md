@@ -260,13 +260,24 @@ This region's bug-bounty community (Indian/SEA fintech especially) documents a s
 of high-yield **auth/logic** bugs that a scanner rarely automates but easily can —
 each is a small, safe differential/regex detector.
 
-### GLOBAL-1. Sensitive value returned in the HTTP response body ❌ (Indian/SEA fintech-heavy)
+### GLOBAL-1. Sensitive value returned in the HTTP response body ✅ (SHIPPED)
+Implemented in `moonmcp/web/authflow.py` + the `response_leak_probe` tool: drives
+the OTP/reset/verify endpoint and scans the response body for out-of-band secrets
+returned in-band — named `otp`/`reset_token`/`verification_code`/reset-link fields
+(`confirmed`) and, only in an OTP-context body, bare 4–8-digit codes (`review`).
+Deliberately ignores `csrf`/OAuth `access_token` (legitimately in-band); secrets are
+**redacted** in output.
 OTP / 2FA code / password-reset token / verification link echoed in the JSON or body
 of the *request* response instead of being delivered out-of-band → instant account
 takeover. Extremely common in fintech APIs. Source: github.com/tuhin1729/Bug-Bounty-Methodology (PasswordReset/2FA), HackTricks reset-password.
 - **Mapping:** new `response_leak_probe` — drive the OTP / reset / email-verify flow, regex the response for a standalone 4–8-digit code, `otp`/`token`/`reset`/`verification` field, or a reset URL. Verdict `confirmed` = the out-of-band secret is in-band. Highest-yield, trivially safe.
 
-### GLOBAL-2. Password-reset poisoning (Host / X-Forwarded-Host) ❌
+### GLOBAL-2. Password-reset poisoning (Host / X-Forwarded-Host) ✅ (SHIPPED)
+Implemented in `moonmcp/web/authflow.py` + the `reset_poison_probe` tool: replays the
+reset request once per host-routing header (`Host`, `X-Forwarded-Host`, `Forwarded`,
+`X-Host`, `X-Original-Host`, …) set to a canary and flags any reflected in the body /
+`Location`. Omit the canary to auto-mint an OAST host, which also catches a server-side
+host fetch (poll with `oast_poll`). The connection stays on the in-scope host.
 The reset-link host is built from a user-controlled `Host` / `X-Forwarded-Host`; point
 it at a canary → the victim's reset token is delivered to the attacker. Full ATO, no
 session/exploit chain. Source: herish.me/blog/reset-password-poisoning-host-header, OWASP WSTG-INPV-17, PayloadsAllTheThings/Account-Takeover.
