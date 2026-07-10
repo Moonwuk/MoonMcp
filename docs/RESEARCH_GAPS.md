@@ -209,7 +209,13 @@ Version-match only (never send the exploit; hand that to Strix). EU orgs run the
 - **Palo Alto GlobalProtect** CVE-2024-3400 + CVE-2024-9474 (`X-PAN-AuthCheck`). sekurak.pl.
 - **Mapping:** one `{product: {version_range: CVE}}` table on `fingerprint.py`.
 
-### EU-C. Framework debug/console exposure ❌ (extends `exposure.py`; feeds EU-A)
+### EU-C. Framework debug/console exposure ✅ (SHIPPED)
+Implemented in `moonmcp/web/debugpanel.py` + the `debug_exposure` tool: a curated
+path → distinctive content-signature map covering Laravel Ignition, Symfony profiler /
+`app_dev.php`, Telescope/Horizon, Spring Boot Actuator `/env`, Django debug toolbar,
+the Werkzeug/Flask interactive debugger, Adminer, phpMyAdmin and Rails dev info —
+confirmed by signature (no soft-404 FPs). Panels that leak the signing secret point
+the operator at `analyze_config` for the forge chain (feeds EU-A).
 Laravel **Ignition** (`GET /_ignition/health-check` = exposed; CVE-2021-3129 RCE), Symfony **profiler** (`/_profiler`, `/_wdt`, `/app_dev.php`), **Telescope/Horizon** (`/telescope`, `/horizon`), **Whoops**/Adminer/phpMyAdmin. Path+content-signature, same engine as `.git`/`.env`.
 
 ### EU-D. Path-normalization ACL bypass family ✅ (SHIPPED)

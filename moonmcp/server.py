@@ -78,6 +78,7 @@ from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
 from .web import crlf as crlfmod
+from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
@@ -1910,6 +1911,30 @@ async def path_bypass_probe(target: str) -> dict:
         f"{n} normalization twin(s) reached the protected route — verify the content"
         if n else "no normalization twin bypassed the ACL")
     return result
+
+
+@mcp.tool()
+@active_tool()
+async def debug_exposure(target: str) -> dict:
+    """Detect **exposed framework debug pages / consoles** left on in production:
+    Laravel Ignition (`/_ignition`), Symfony profiler (`/_profiler`, `/app_dev.php`),
+    Laravel Telescope/Horizon, Spring Boot Actuator (`/actuator/env`), Django debug
+    toolbar, the Werkzeug/Flask interactive debugger (`/console`), Adminer,
+    phpMyAdmin, Rails dev info. Confirms each by a distinctive content signature (no
+    soft-404 FPs). Several leak the framework signing secret → feed `analyze_config`
+    to classify the forge-to-RCE chain; a couple are direct RCE. GET-only. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    findings = await debugpanelmod.probe_debug_panels(ctx.http, url, scope_check=_scope_check())
+    return {
+        "target": url, "exposed": bool(findings), "findings": findings,
+        "note": (f"{len(findings)} debug panel(s) exposed — pull any leaked APP_KEY/APP_SECRET into "
+                 "analyze_config for the forge chain" if findings
+                 else "no known framework debug panel exposed"),
+    }
 
 
 @mcp.tool()
