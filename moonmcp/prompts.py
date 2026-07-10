@@ -283,6 +283,49 @@ def privesc_hunt(target: str = "the compromised host", platform: str = "") -> st
     )
 
 
+def business_logic_hunt(target: str = "example.com", flow: str = "") -> str:
+    """Systematic methodology for finding business-logic flaws — the class scanners
+    miss because it needs intent, not signatures."""
+
+    focus = f" Focus flow: {flow}." if flow else ""
+    return (
+        f"You are hunting BUSINESS-LOGIC flaws on `{target}` — abuse of the intended "
+        f"workflow, not a signature bug.{focus} These pay well and no scanner finds them; "
+        "YOU are the intelligence, the tools drive the mechanical parts.\n\n"
+        f"{RULES_OF_ENGAGEMENT}\n"
+        "STEP 1 — MODEL THE FLOW. Map the multi-step process end to end (e.g. cart → "
+        "checkout → pay → fulfil; or request-reset → email → set-password). For each step "
+        "note: inputs the client controls, the invariant the server must enforce, and the "
+        "value at risk (money, access, identity, quota).\n\n"
+        "STEP 2 — ENUMERATE ABUSES per category, then test:\n"
+        "  • Parameter tampering — negative/zero/huge/decimal amount, quantity, price, "
+        "discount, currency; run `logic_probe` on the money/quantity params, then VERIFY the "
+        "order total / balance server-side (the probe only flags a lead).\n"
+        "  • Mass assignment — send privileged fields (role, admin, verified, balance, "
+        "status, price=0) on create/update; `logic_probe` flags reflected ones — confirm they "
+        "PERSIST by re-reading the object.\n"
+        "  • Race conditions — is any action meant to happen once (coupon, vote, withdrawal, "
+        "invite, signup, like)? Run `race_probe` and confirm the side effect happened >1×.\n"
+        "  • Workflow / step-skipping — jump straight to a later step (POST /checkout/complete "
+        "without paying); replay a step; reorder steps; reuse a one-time token.\n"
+        "  • IDOR / authorization — swap an object id / user id (also `access_control_check`); "
+        "do it for READ and WRITE and for every role.\n"
+        "  • Quantity/limit bypass — exceed a free-tier / rate / spend cap; negative to refund.\n"
+        "  • Reset/OTP/2FA logic — password-reset host poisoning, OTP/token returned in the "
+        "response body, no rate-limit on OTP, 2FA response-flag flip; see `crlf_probe` for "
+        "header injection on reset links.\n"
+        "  • Currency / rounding / coupon stacking — mix currencies, sub-cent rounding, stack "
+        "discounts, apply a coupon after price lock.\n\n"
+        "STEP 3 — DECIDE with the differential mindset: a flaw exists when the server accepts a "
+        "state the business rules forbid. A `review` lead from a tool is NOT a finding until you "
+        "reproduce the real-world effect (money moved, access gained, quota exceeded).\n\n"
+        f"{_FALSE_POSITIVE_RULE}\n"
+        "STEP 4 — PROVE minimally and record with `add_finding` (steps to reproduce + concrete "
+        "impact), then triage & report. Never actually take money, destroy data, or affect "
+        "other users — demonstrate on your own test accounts with the least-intrusive proof."
+    )
+
+
 #: registry consumed by the server + tests + docs
 PROMPTS = {
     "bug_bounty_operator": bug_bounty_operator,
@@ -292,4 +335,5 @@ PROMPTS = {
     "triage_and_report": triage_and_report,
     "safe_recon": safe_recon,
     "privesc_hunt": privesc_hunt,
+    "business_logic_hunt": business_logic_hunt,
 }

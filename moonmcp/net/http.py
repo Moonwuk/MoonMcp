@@ -249,9 +249,10 @@ class HttpClient:
         hops = max_redirects if follow_redirects else 0
         for _ in range(hops + 1):
             # SSRF connect-guard: resolve+check this hop's host before we touch it.
+            # The guard does a blocking getaddrinfo, so keep it off the event loop.
             if self._connect_guard is not None:
                 host = urlsplit(current).hostname or current
-                reason = self._connect_guard(host)
+                reason = await asyncio.to_thread(self._connect_guard, host)
                 if reason is not None:
                     if result is None:  # the very first hop is blocked
                         return HttpResult(

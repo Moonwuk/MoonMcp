@@ -35,6 +35,7 @@ class OriginCandidate:
     cloud: str | None = None
     asn: str | None = None
     is_cdn: bool = False
+    enriched: bool = False  # True once ip_intel actually ran (cloud/asn are trustworthy)
 
 
 @dataclass
@@ -49,7 +50,7 @@ class OriginResult:
 
 
 async def discover_origin(
-    client: HttpClient, host: str, *, scope_check=None, max_lookups: int = 12
+    client: HttpClient, host: str, *, max_lookups: int = 12
 ) -> OriginResult:
     result = OriginResult(host=host)
     apex = host
@@ -95,13 +96,18 @@ async def discover_origin(
                 cand.cloud = intel.cloud
                 cand.asn = intel.asn
                 cand.is_cdn = intel.cloud in _CDN_CLOUDS
+                cand.enriched = True
                 lookups += 1
             seen_ips[ip] = cand
 
     result.candidates = list(seen_ips.values())
-    # Likely origins: IPs that are NOT on the same CDN as the front.
-    result.likely_origins = sorted({
-        c.ip for c in result.candidates
-        if not c.is_cdn and (c.cloud != result.front_cloud or result.front_cloud is None)
-    })
+    # Likely origins only make sense when the front is actually CDN-fronted, and
+    # only for candidates we ENRICHED and confirmed sit off that CDN. Without this
+    # gate, a rate-limited front lookup (front_cloud=None) or an un-enriched
+    # candidate (past max_lookups, cloud=None) would be reported as a bogus origin.
+    if result.behind_cdn:
+        result.likely_origins = sorted({
+            c.ip for c in result.candidates
+            if c.enriched and not c.is_cdn and c.cloud != result.front_cloud
+        })
     return result

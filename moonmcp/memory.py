@@ -51,9 +51,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
 CREATE INDEX IF NOT EXISTS idx_memory_trust ON memory(trust);
 """
 
-_COLS = ("id", "kind", "target", "title", "body", "severity", "source",
-         "trust", "provenance", "tags", "session", "created_at")
-
 
 def _norm_trust(v: str | None) -> str:
     v = (v or "untrusted").strip().lower()
@@ -144,7 +141,8 @@ class MemoryStore:
 
     # -- querying ----------------------------------------------------------
     def get(self, item_id: int) -> dict | None:
-        row = self._db.execute("SELECT * FROM memory WHERE id=?", (item_id,)).fetchone()
+        with self._lock:  # the shared connection is used under the lock everywhere else
+            row = self._db.execute("SELECT * FROM memory WHERE id=?", (item_id,)).fetchone()
         return dict(row) if row else None
 
     def _filtered(self, rows: list, *, kind: str | None, trust: str | None,

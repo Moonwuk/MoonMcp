@@ -8,6 +8,7 @@ prefix/suffix bypasses — especially when credentials are also allowed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -45,10 +46,14 @@ def _probe_origins(host: str) -> dict[str, str]:
     }
 
 
-async def audit_cors(client: HttpClient, url: str) -> CorsResult:
+async def audit_cors(client: HttpClient, url: str, *,
+                     scope_check: Callable[[str], bool] | None = None) -> CorsResult:
     host = urlsplit(url).hostname or url
     result = CorsResult(url=url)
-    baseline = await client.fetch(url, follow_redirects=True, timeout=12.0)
+    # The baseline follows redirects — keep them in scope so engagement auth
+    # headers can't be leaked to a third party via an open redirect.
+    baseline = await client.fetch(url, follow_redirects=True, timeout=12.0,
+                                  scope_check=scope_check)
     if baseline.status is None:
         result.error = baseline.error or "unreachable"
         return result

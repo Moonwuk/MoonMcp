@@ -70,8 +70,14 @@ def cluster_backends(samples: list[dict]) -> dict:
     # nodes. Also drop bare Server names that are a prefix of a more specific one
     # ("nginx" vs "nginx/1.25.1" is the same product, not two versions).
     raw_versions = sorted({b["server"] for b in backends if b["server"]})
-    server_versions = [s for s in raw_versions
-                       if not any(o != s and o.startswith(s) for o in raw_versions)]
+    # Drop only a BARE product name ("nginx") that is a prefix of a versioned form
+    # ("nginx/1.25.1"). A token that already carries a version is never collapsed —
+    # otherwise "nginx/1.2" would be swallowed by "nginx/1.25.1" and real drift lost.
+    server_versions = [
+        s for s in raw_versions
+        if any(ch.isdigit() for ch in s)
+        or not any(o != s and o.startswith(s + "/") for o in raw_versions)
+    ]
     patch_drift = load_balanced and len(server_versions) > 1
 
     skew = 0.0

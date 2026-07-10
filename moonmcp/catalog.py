@@ -1,6 +1,6 @@
 """A self-describing map of MoonMCP's own tools.
 
-An agent lands on MoonMCP with ~90 tools and no idea where to start. This module
+An agent lands on MoonMCP with 120+ tools and no idea where to start. This module
 groups every tool into a family, records how much each one touches the target
 (scope-gated? intrusive?), and lays out the recommended recon → report order —
 so `tool_catalog` (and the packaged skill) can hand the model a compact,
@@ -39,7 +39,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "enumerate_subdomains", "wayback_urls",
             "cve_lookup", "cve_search",
             "host_intel", "ip_intel", "reverse_ip",
-            "cloud_buckets", "email_security",
+            "cloud_buckets", "email_security", "dependency_confusion",
         ],
     )),
     ("light_active", (
@@ -53,9 +53,11 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "crawl", "analyze_js", "parse_openapi", "extract_secrets",
             "cors_audit", "access_control_check", "graphql_check",
             "discover_parameters", "waf_detect", "takeover_check",
-            "open_redirect", "trace_redirects", "vcs_exposure",
+            "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
+            "response_leak_probe", "reset_poison_probe",
             "screenshot", "browser_open", "browser_eval", "browser_interact",
-            "analyze_binary", "analyze_config", "jwt_analyze",
+            "analyze_binary", "analyze_config", "jwt_analyze", "jwt_crack",
+            "oauth_probe",
         ],
     )),
     ("intrusive", (
@@ -64,7 +66,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "MOONMCP_ALLOW_INTRUSIVE — get consent first.",
         [
             "port_scan", "content_discovery", "http_methods",
-            "waf_efficacy", "desync_probe", "vuln_scan",
+            "waf_efficacy", "desync_probe", "vuln_scan", "cache_deception_probe",
+            "stack_probe", "ssrf_metadata_probe", "logic_probe", "race_probe",
         ],
     )),
     ("orchestration", (

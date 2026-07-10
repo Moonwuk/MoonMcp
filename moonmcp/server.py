@@ -59,6 +59,7 @@ from .recon import buckets as bucketsmod
 from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
+from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
@@ -71,18 +72,26 @@ from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
+from .web import authflow as authflowmod
 from .web import behavior as behaviormod
 from .web import browser as browsermod
+from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
+from .web import crlf as crlfmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
+from .web import inject as injectmod
 from .web import jwt as jwtmod
+from .web import logic as logicmod
 from .web import methods as methodsmod
+from .web import oauth as oauthmod
 from .web import params as paramsmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
+from .web import ssrf_meta as ssrfmetamod
+from .web import stacks as stacksmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
@@ -147,7 +156,7 @@ def _caller_tool() -> str:
         return "?"
 
 
-def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = None) -> str:
+async def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = None) -> str:
     ctx = get_context()
     tool = tool or _caller_tool()
     if intrusive and not ctx.settings.allow_intrusive:
@@ -164,7 +173,8 @@ def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = N
     # Resolve-then-check SSRF guard — covers raw-socket tools (port_scan,
     # tls_inspect, jarm, desync) as well as an in-scope hostname that points at a
     # private/internal/cloud-metadata IP. No-op when block_private is disabled.
-    reason = ctx.scope.blocked_connect_reason(target)
+    # The resolve is a blocking getaddrinfo, so run it off the event loop.
+    reason = await asyncio.to_thread(ctx.scope.blocked_connect_reason, target)
     if reason is not None:
         ctx.audit.record("ssrf_blocked", tool=tool, target=str(target),
                          decision="deny", reason=reason)
@@ -215,7 +225,7 @@ def active_tool(
                 raw = bound.arguments.get(tname)
                 if raw is None or (isinstance(raw, str) and not raw.strip()):
                     raise ValueError(f"'{tname}' is required")
-                _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
+                await _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
             return await func(*args, **kwargs)
 
         gated = safe_tool(wrapper)
@@ -313,8 +323,17 @@ def _host_like_tokens(args: list[str]) -> list[str]:
         if "://" in t:
             found.append(t)
             continue
-        if "/" in t or "," in t or " " in t:
-            continue  # path / list / not a bare host
+        if "," in t or " " in t:
+            continue  # list / not a single bare host
+        if "/" in t:
+            # A CIDR block is itself a scan target; a host/path (example.com/api)
+            # must still have its host scope-checked — don't skip either.
+            try:
+                ipaddress.ip_network(t, strict=False)
+                found.append(t)
+                continue
+            except ValueError:
+                t = t.split("/", 1)[0]
         try:
             ipaddress.ip_address(t.split(":", 1)[0])
             found.append(t)
@@ -1066,7 +1085,7 @@ async def parse_openapi(target: str | None = None, content: str | None = None) -
     if target:
         raw = target.strip()
         url = raw if "://" in raw else f"https://{raw}"
-        _require_scope(url, tool="parse_openapi")
+        await _require_scope(url, tool="parse_openapi")
         return await openapimod.fetch_and_parse(get_context().http, url, scope_check=_scope_check())
     return {"error": "invalid_input", "detail": "pass a 'target' URL or inline 'content'"}
 
@@ -1104,7 +1123,7 @@ async def cors_audit(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
-    result = await corsmod.audit_cors(ctx.http, url)
+    result = await corsmod.audit_cors(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 
@@ -1552,7 +1571,7 @@ async def analyze_config(content: str | None = None, target: str | None = None,
     if content is None:
         raw = target.strip()
         url = raw if "://" in raw else f"https://{raw}"
-        _require_scope(url, tool="analyze_config")
+        await _require_scope(url, tool="analyze_config")
         ctx = get_context()
         r = await ctx.http.fetch(url, follow_redirects=True, timeout=15.0,
                                  max_body=2 * 1024 * 1024, scope_check=_scope_check())
@@ -1566,6 +1585,39 @@ async def analyze_config(content: str | None = None, target: str | None = None,
             filename = urlsplit(url).path.rsplit("/", 1)[-1] or None
     audit = configmod.analyze_config(content, filename=filename)
     return to_dict(audit)
+
+
+@mcp.tool()
+@safe_tool
+async def dependency_confusion(content: str, ecosystem: str = "auto",
+                               filename: str | None = None) -> dict:
+    """Detect **dependency confusion**: parse a manifest (package.json /
+    composer.json / requirements.txt / Pipfile / Gemfile) and existence-check each
+    dependency against its PUBLIC registry — a 404 means the name is unclaimed, so
+    an attacker could publish a higher-version package your build would pull
+    (supply-chain RCE, the Microsoft/Apple pattern). Queries the registry, never
+    the target, so no scope is needed. Feed `content` from `vcs_exposure` /
+    `analyze_js`; `ecosystem` (npm/pypi/composer/rubygems) auto-detects.
+    """
+
+    eco = ecosystem if ecosystem != "auto" else depconfmod.detect_ecosystem(content, filename)
+    if eco is None:
+        return {"error": "unknown_ecosystem",
+                "detail": "could not detect the ecosystem; pass ecosystem=npm|pypi|composer|rubygems"}
+    names = depconfmod.parse_dependencies(content, eco)
+    if not names:
+        return {"ecosystem": eco, "dependencies": 0, "results": [],
+                "note": "no dependencies parsed from the manifest"}
+    ctx = get_context()
+    results = await depconfmod.check_dependencies(ctx.http, names, eco)
+    claimable = [r for r in results if r["verdict"] == "claimable"]
+    return {
+        "ecosystem": eco, "dependencies": len(names), "claimable_count": len(claimable),
+        "results": results,
+        "note": (f"{len(claimable)} hijack candidate(s) absent on the public registry — "
+                 "verify ownership before reporting" if claimable
+                 else "all parsed dependencies exist on the public registry"),
+    }
 
 
 @mcp.tool()
@@ -1595,6 +1647,244 @@ async def jwt_analyze(token: str) -> dict:
 
     result = jwtmod.analyze_jwt(token, now_epoch=int(time.time()))
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def jwt_crack(token: str, wordlist: list[str] | None = None) -> dict:
+    """Offline-brute an HS256/384/512 JWT's signing secret against a weak-secret
+    wordlist — a recovered secret lets you forge ANY token (critical). Also returns
+    an `alg:none` forgery of the token so you can test whether the server accepts
+    unsigned tokens. Pure/offline — sends no traffic, no scope needed.
+    """
+
+    secret = jwtmod.crack_hmac_secret(token, wordlist)
+    return {
+        "hmac_secret_found": secret is not None,
+        "secret": secret,
+        "severity": "critical" if secret is not None else "info",
+        "alg_none_forgery": jwtmod.forge_alg_none(token),
+        "note": (f"signing key {secret!r} recovered — forge any token; confirm by replaying"
+                 if secret is not None
+                 else "no weak secret matched; try a larger wordlist or hashcat -m 16500"),
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def oauth_probe(target: str) -> dict:
+    """Fetch the OIDC/OAuth discovery document (`/.well-known/openid-configuration`
+    or `/.well-known/oauth-authorization-server`) for an in-scope target and flag
+    weak configuration: implicit grant enabled, missing/weak PKCE, `alg=none` /
+    HS256 signing, plaintext-http issuer, issuer↔jwks host mix-up, public clients.
+    One benign GET maps the whole auth surface (endpoints + posture).
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await oauthmod.probe_oidc(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def cache_deception_probe(target: str) -> dict:
+    """Test an authenticated page for **web cache deception** — the cache storing
+    your private response under an attacker-readable key via a path-confusion
+    variant (`/x.css`, `;x.css`, encoded traversal). Pass the URL of a page that
+    requires login (set the session with `auth_set` first); it fetches the private
+    page authed vs anonymously, then re-reads each crafted variant cookieless and
+    flags a leak (confirmed when the cookieless variant also carries a cache-HIT
+    header). Intrusive: it primes the cache with your own private page.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await cachedecmod.probe_cache_deception(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def stack_probe(target: str) -> dict:
+    """Fingerprint an in-scope host for high-payout CN/RU enterprise stacks and run
+    deterministic, non-destructive unauth checks: ThinkPHP invokefunction RCE
+    (benign `md5()` echo), Nacos `User-Agent` auth bypass, Apache Shiro
+    `rememberMe`, Alibaba Druid monitor exposure, 1C-Bitrix admin, and an
+    unauthenticated ClickHouse HTTP interface (point the target at `:8123`).
+    Confirmed hits are proofs, not exploits — weaponization goes to Strix.
+    Intrusive: it touches known exploit paths.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await stacksmod.probe_stack(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssrf_metadata_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Response-based** SSRF → cloud-metadata credential theft (the Capital One
+    pattern). Injects each provider's instance-metadata URL (AWS / GCP / Azure /
+    Alibaba / Yandex / Oracle / DigitalOcean) into `param` and scans the response
+    for that provider's credential signature — proving a full-read SSRF that reaches
+    the metadata service. Complements the blind `ssrf_probe`. Intrusive; in scope
+    only. Header-gated providers (GCP/Azure/Oracle) only leak if the vulnerable
+    server forwards our request header.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    findings = await ssrfmetamod.probe_ssrf_metadata(
+        ctx.http, url, param, method=method, scope_check=_scope_check())
+    return {
+        "target": url, "param": param,
+        "vulnerable": bool(findings), "findings": findings,
+        "note": ("full-read SSRF to cloud metadata confirmed — rotate the exposed credentials"
+                 if findings else "no metadata credential signatures reflected in the response"),
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def crlf_probe(target: str, param: str, method: str = "GET") -> dict:
+    """Test a parameter for **CRLF injection / HTTP response splitting**: injects a
+    benign marker header (`X-Moonmcp-Inj: 1`) through `param` via CR/LF variants
+    (bare-LF, fragment, unicode/overlong, double-encoded, Set-Cookie split) and
+    flags a vuln when the marker surfaces as a *real* response header/cookie (not
+    body reflection). Non-destructive; in scope only. Common on redirect/`lang`/
+    routing params.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    findings = await crlfmod.probe_crlf(ctx.http, url, param, method=method,
+                                        scope_check=_scope_check())
+    return {"target": url, "param": param, "vulnerable": bool(findings), "findings": findings,
+            "note": ("CRLF header injection confirmed" if findings
+                     else "no injected header surfaced — parameter appears CR/LF-safe")}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def logic_probe(target: str, param: str | None = None, method: str = "GET") -> dict:
+    """Business-logic ABUSE sweep on an endpoint: **parameter tampering**
+    (negative/zero/overflow on money/quantity params — pass `param`, or the
+    money/quantity params in the URL query are auto-targeted) + a **mass-assignment**
+    check (POSTs privileged fields like role/is_admin/balance and flags reflected
+    ones). Returns LEADS (verdict=review) to confirm against the flow — drive it
+    with the `business_logic_hunt` prompt. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sc = _scope_check()
+    params = [param] if param else logicmod.numeric_params(logicmod.query_keys(url))
+    findings: list[dict] = []
+    for p in params:
+        findings.extend(await logicmod.probe_parameter_tampering(
+            ctx.http, url, p, method=method, scope_check=sc))
+    findings.extend(await logicmod.probe_mass_assignment(ctx.http, url, scope_check=sc))
+    return {
+        "target": url, "tested_params": params, "findings": findings,
+        "note": (f"{len(findings)} logic lead(s) — verify the real-world effect against the flow"
+                 if findings else "no automatable logic leads; drive the flow per business_logic_hunt"),
+    }
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def race_probe(target: str, method: str = "POST", n: int = 20) -> dict:
+    """**Race-condition / limit-bypass** probe: fire N identical requests in PARALLEL
+    at a state-changing endpoint (coupon apply, vote, withdrawal, invite, signup)
+    and report how many returned 2xx — a non-atomic per-user limit lets more than
+    one through. Confirm the side effect actually happened >1×. Set the session with
+    `auth_set` for authenticated actions. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await logicmod.probe_race(ctx.http, url, method=method, n=n,
+                                       scope_check=_scope_check())
+    return {"target": url, "method": method.upper(), **result}
+
+
+@mcp.tool()
+@active_tool()
+async def response_leak_probe(target: str, method: str = "GET", data: str | None = None,
+                              content_type: str = "application/json") -> dict:
+    """Drive an OTP / password-reset / email-verification endpoint and check whether
+    the **out-of-band secret leaks in-band**: an OTP, 2FA code, reset token or
+    verification link returned in the response body instead of by email/SMS (whoever
+    triggers the flow reads it → instant account takeover — a top fintech-API bug).
+    Pass `data` (e.g. `{"email":"me@acme.test"}`) to trigger the flow. Secrets are
+    **redacted** in the output. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    body = data.encode() if data else None
+    headers = {"Content-Type": content_type} if data else None
+    findings = await authflowmod.probe_response_leak(
+        ctx.http, url, method=method, body=body, headers=headers, scope_check=_scope_check())
+    return {
+        "target": url, "vulnerable": bool(findings), "findings": findings,
+        "note": (f"{len(findings)} in-band secret leak(s) — the OTP/reset secret should be "
+                 "delivered out-of-band; confirm it's the real one" if findings
+                 else "no in-band OTP/reset secret found in the response body"),
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def reset_poison_probe(target: str, canary: str | None = None, method: str = "POST",
+                             data: str | None = None,
+                             content_type: str = "application/json") -> dict:
+    """**Password-reset poisoning**: send the reset request with the host-routing
+    headers (`Host`, `X-Forwarded-Host`, `Forwarded`, …) set to an attacker host and
+    flag any reflected back in the response body / `Location` — a signal the reset
+    link is built from a user-controlled host, so the victim's reset token is
+    delivered to the attacker (full ATO). Pass `data` (e.g. `{"email":"victim@acme.test"}`);
+    omit `canary` to auto-use an OAST host (start `oast_selfhost`/`oast_configure`)
+    which also catches a server-side host fetch. The connection stays on the in-scope
+    host — only the header is poisoned. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    cb = None
+    host = (canary or "").strip()
+    if not host:
+        if ctx.oast.configured:
+            cb = ctx.oast.generate(label="reset_poison")
+            host = cb.canary_host or ""
+        if not host:
+            host = "moonmcp-poison.example"
+    body = data.encode() if data else None
+    headers = {"Content-Type": content_type} if data else None
+    findings = await authflowmod.probe_reset_poison(
+        ctx.http, url, host, method=method, body=body, headers=headers,
+        scope_check=_scope_check())
+    out: dict = {
+        "target": url, "canary": host, "reflected": bool(findings), "findings": findings,
+        "note": (f"host reflected via {len(findings)} header(s) — verify the reset email's link "
+                 "points at the canary" if findings
+                 else "no poisoning header was reflected — reset host looks server-fixed"),
+    }
+    if cb is not None:
+        out["oast_token"] = cb.token
+        out["oast_note"] = "poll with oast_poll — a callback means the server fetched the poisoned host"
+    return out
 
 
 @mcp.tool()
@@ -1655,7 +1945,7 @@ async def origin_discovery(domain: str) -> dict:
 
     host = normalize_target(domain)
     ctx = get_context()
-    result = await originmod.discover_origin(ctx.http, host, scope_check=_scope_check())
+    result = await originmod.discover_origin(ctx.http, host)
     return to_dict(result)
 
 
@@ -2333,7 +2623,7 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
         raw = t.strip()
         url = raw if "://" in raw else f"https://{raw}"
         try:
-            host = _require_scope(url, tool="probe_batch")
+            host = await _require_scope(url, tool="probe_batch")
         except ScopeError as exc:
             return {"target": raw, "skipped": "out_of_scope", "detail": str(exc)}
         ctx = get_context()
@@ -2359,7 +2649,15 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
                 entry["tech"] = techs
         return entry
 
-    results = await asyncio.gather(*[_one(t) for t in seen])
+    # Bound concurrency so a 300-host batch doesn't launch 300 simultaneous
+    # scope-resolve threads / sockets at once.
+    sem = asyncio.Semaphore(20)
+
+    async def _guarded(t: str) -> dict:
+        async with sem:
+            return await _one(t)
+
+    results = await asyncio.gather(*[_guarded(t) for t in seen])
     live = [r for r in results if r.get("status")]
     return {
         "requested": len(seen),
@@ -2471,7 +2769,7 @@ async def report(domain: str) -> dict:
         sev = "medium" if ("+all" in issue or "No SPF" in issue or "No DMARC" in issue) else "low"
         findings.append({"severity": sev, "title": "Email posture", "detail": issue})
 
-    cors = await corsmod.audit_cors(ctx.http, apex_url)
+    cors = await corsmod.audit_cors(ctx.http, apex_url, scope_check=_scope_check())
     for f in cors.findings:
         findings.append({"severity": f.severity, "title": f"CORS: {f.test}",
                          "detail": f.detail, "evidence": f"ACAO={f.acao} creds={f.acac}"})
@@ -2548,7 +2846,7 @@ async def http_repeater(url: str | None = None, method: str = "GET",
         merged_headers = headers or {}
         body_bytes = body.encode() if body else None
 
-    _require_scope(url, tool="http_repeater")
+    await _require_scope(url, tool="http_repeater")
     ctx = get_context()
     result = await ctx.http.fetch(
         url, method=method, headers=merged_headers or None, body=body_bytes,
@@ -2602,7 +2900,7 @@ async def intruder(template: str, payloads: list[str], marker: str = "§",
     raw_t = base_url.strip()
     base_url = raw_t if "://" in raw_t else f"https://{raw_t}"
     # Intruder is intrusive: this gates on MOONMCP_ALLOW_INTRUSIVE + scope.
-    _require_scope(template.replace(marker, ""), intrusive=True, tool="intruder")
+    await _require_scope(template.replace(marker, ""), intrusive=True, tool="intruder")
     ctx = get_context()
 
     async def _one(payload: str) -> dict:
@@ -2727,7 +3025,7 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    _require_scope(url, tool="confirm_finding")
+    await _require_scope(url, tool="confirm_finding")
     ctx = get_context()
     m = method.upper()
     canary = "moonc0nfirm42"
@@ -2801,19 +3099,8 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 # ---------------------------------------------------------------------------
 # active detectors (differential probes for top-payout classes)
 # ---------------------------------------------------------------------------
-def _with_param(url: str, param: str | None, value: str, method: str) -> tuple[str, bytes | None]:
-    """Return ``(request_url, request_body)`` with *value* placed in *param* — the
-    query for GET, a form body for POST-ish methods."""
-
-    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
-    if method.upper() in ("GET", "HEAD") or not param:
-        sp = urlsplit(url)
-        q = dict(parse_qsl(sp.query, keep_blank_values=True))
-        if param:
-            q[param] = value
-        return urlunsplit(sp._replace(query=urlencode(q))), None
-    return url, urlencode({param: value}).encode()
+# The shared parameter-injection helper (query for GET/HEAD, form body otherwise).
+_with_param = injectmod.with_param
 
 
 @mcp.tool()
@@ -3347,7 +3634,7 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
                           "enforcement is on. Pass a 'target' that is in scope, or include the "
                           "host/URL in args."}
     for t in to_check:
-        _require_scope(t, tool="run_scanner")
+        await _require_scope(t, tool="run_scanner")
     ctx.audit.record("external_tool", tool=tool, target=(target or ",".join(to_check)),
                      decision="run", args=args[:20])
     result = await cli.run_tool(
@@ -3599,6 +3886,14 @@ def privesc_hunt(target: str = "the compromised host", platform: str = "") -> st
     """KB-backed privilege-escalation triage from an authorised foothold (enumerate → match → verify)."""
 
     return promptmod.privesc_hunt(target, platform)
+
+
+@mcp.prompt()
+def business_logic_hunt(target: str = "example.com", flow: str = "") -> str:
+    """Systematic business-logic flaw methodology (model the flow → enumerate abuses →
+    tamper/mass-assign/race → prove the real effect). Pairs with logic_probe/race_probe."""
+
+    return promptmod.business_logic_hunt(target, flow)
 
 
 def _apply_tool_profile() -> None:

@@ -53,6 +53,11 @@ async def fetch_wayback_urls(
     except json.JSONDecodeError:
         result.error = "unparseable response"
         return result
+    if not isinstance(rows, list):
+        # The CDX API normally returns a list-of-rows; a JSON object (e.g. an
+        # error envelope) would make `rows[1:]` raise — guard the shape.
+        result.error = "unexpected response shape"
+        return result
     # First row is the header when fl=original is used.
     urls = [row[0] for row in rows[1:] if row]
     seen: set[str] = set()

@@ -93,6 +93,12 @@ async def fetch_favicon_hash(client: HttpClient, base_url: str, *, scope_check=N
             if href:
                 favicon_url = urljoin(page.final_url or base_url, href.group(1))
 
+    # The <link rel="icon"> href can be an ABSOLUTE URL to any host — refuse to
+    # fetch (with engagement auth attached) a favicon that left the scope.
+    if scope_check is not None and not scope_check(favicon_url):
+        result.error = "favicon URL is out of scope"
+        return result
+
     r = await client.fetch(favicon_url, follow_redirects=True, timeout=12.0,
                            max_body=512 * 1024, scope_check=scope_check)
     if r.status != 200 or not r.body:

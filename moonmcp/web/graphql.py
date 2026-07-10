@@ -54,11 +54,12 @@ async def _test_endpoint(client: HttpClient, url: str, scope_check) -> GraphQLEn
         return None
     body = r.text(limit=20_000)
     ctype = (r.header("Content-Type") or "").lower()
+    # Require a STRUCTURAL signal — a bare "GraphQL" substring matches any page
+    # that merely mentions the word in prose (docs, error text, marketing).
     looks_graphql = (
         '"__typename"' in body
         or '"data"' in body and '"errors"' in body
         or "Must provide query string" in body
-        or "GraphQL" in body
         or ("json" in ctype and ('"data"' in body or '"errors"' in body))
     )
     if not looks_graphql:
