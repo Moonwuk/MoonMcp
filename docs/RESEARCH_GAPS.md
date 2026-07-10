@@ -212,7 +212,13 @@ Version-match only (never send the exploit; hand that to Strix). EU orgs run the
 ### EU-C. Framework debug/console exposure ❌ (extends `exposure.py`; feeds EU-A)
 Laravel **Ignition** (`GET /_ignition/health-check` = exposed; CVE-2021-3129 RCE), Symfony **profiler** (`/_profiler`, `/_wdt`, `/app_dev.php`), **Telescope/Horizon** (`/telescope`, `/horizon`), **Whoops**/Adminer/phpMyAdmin. Path+content-signature, same engine as `.git`/`.env`.
 
-### EU-D. Path-normalization ACL bypass family ❌ (differential; distinct from cache-deception)
+### EU-D. Path-normalization ACL bypass family ✅ (SHIPPED)
+Implemented in `moonmcp/web/pathnorm.py` + the `path_bypass_probe` tool: confirms the
+plain path is protected (401/403), then replays a deduped normalization twin-set
+(`/admin/..;/`, `/%2e/admin`, matrix `;x`, trailing `%2f`/`%2e`/`;`, double internal
+slash, `%`-encoded first char, dot-dot reinjection) and flags any that flip to 2xx.
+GET-only, non-destructive; findings are `review` leads (confirm the 2xx body is the
+real protected content).
 `/..;/`, `/%2e%2e;/`, matrix `admin;x`, trailing dot, double-encoding — front proxy vs backend disagree → reach protected routes. CVE-2024-0204 (Fortra GoAnywhere `/..;/` → admin creation). Source: sekurak.pl · vaadata.com. **Mapping:** for any `401/403` path, replay a fixed twin-set; `200` + protected body on a twin = bypass. Reuses `confirm.py` differential + `web/methods.py`.
 
 ### EU-E. DOMPurify version → mXSS bypass matrix ❌ (🇩🇪 Cure53; client-side recon)
