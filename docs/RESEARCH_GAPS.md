@@ -163,4 +163,81 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 Exploitation is never automated — every probe above is a **detection/indicator**;
 weaponization is handed to Strix under human confirmation. No pirated tooling.
 
-<!-- ROUND 2 (EU / LATAM / India·MENA·SEA / unusual findings) appended below on completion. -->
+---
+---
+
+# ROUND 2 — additional national segments
+
+## 🇪🇺 Western & Central/Eastern Europe (Synacktiv 🇫🇷 · Cure53/SySS/heise 🇩🇪 · sekurak 🇵🇱 · Vaadata/SSTIC 🇫🇷 · Computest 🇳🇱)
+
+### EU-A. Leaked framework signing-secret → forge signed blob → deserialization RCE — the EU meta-gap ❌
+`config_audit.py` already *extracts* secrets and `exposure.py` confirms a leaked `.env`, but MoonMCP never **classifies a secret as a forge-capable signing key**. Build one offline, zero-traffic `SIGNING_SECRETS` classifier mapping key → framework → primitive:
+- **Laravel `APP_KEY`** → forge `laravel_session` cookie → auto-`unserialize()` (if `SESSION_DRIVER=cookie`) → phpggc RCE. 600+ apps mass-exploited 2025 (`laravel-crypto-killer`). CVE-2024-48987 (Snipe-IT), CVE-2024-55555 (Invoice Ninja). Source: synacktiv.com/publications/laravel-appkey-leakage-analysis · blog.gitguardian.com/exploiting-public-app_key-leaks. **Confirm offline** by validating the key decrypts one captured cookie (zero extra traffic).
+- **TYPO3 `encryptionKey`** → forge `__trustedProperties` (HMAC-SHA1) → deser + arbitrary file read. Dominant in DE/AT/CH gov. CVE-2019-12747. Source: synacktiv.com/publications/typo3-leak-to-remote-code-execution.
+- **Symfony `APP_SECRET`** → forge `/_fragment` signed URI → RCE; secret harvested from exposed `/_profiler`. CVE-2019-18889; ambionics/symfony-exploits.
+- **ASP.NET `machineKey`** → forge `__VIEWSTATE` (ysoserial.net). CVE-2025-30406 (CentreStack static key). Passive signal: `__VIEWSTATE` present + no `__VIEWSTATEENCRYPTED` = forgeable.
+- **Rails `secret_key_base`** → cookie `Marshal.load`; **Flask/Django `SECRET_KEY`** → session forge.
+- **Mapping:** one `SIGNING_SECRETS` table in `config_audit.py`; each leaked secret auto-classified, the specific forge-chain surfaced, weaponization → Strix. **Single highest-confidence net-new gap** (offline/safe, unlocks 5 pre-auth-RCE chains).
+
+### EU-B. `appliance_cve_probe` — EU enterprise-appliance fingerprint → version → CVE oracle ❌
+Version-match only (never send the exploit; hand that to Strix). EU orgs run these at scale:
+- **Citrix NetScaler** CitrixBleed CVE-2023-4966 / CVE-2025-5777 (session-token overread) — build from `/vpn/index.html` + `NSC_` cookies. Source: assetnote.io/resources/research/citrix-bleed…
+- **Ivanti Connect Secure / EPMM** CVE-2025-0282, CVE-2023-46805+CVE-2024-21887 chain, **CVE-2025-4427 (auth bypass = omit the `Cookie` header** on `/rs/api/v2/featureusage` — clean differential probe). Version-scrape via admin-immutable `/dana-na/setup/psaldownload.cgi`. Source: Synacktiv PDF · sekurak.pl.
+- **Fortinet FortiOS** CVE-2024-55591 (websocket auth bypass). watchtowr.
+- **SonicWall SSLVPN** CVE-2024-53704 (null-byte session cookie). Bishop Fox + SySS.
+- **Palo Alto GlobalProtect** CVE-2024-3400 + CVE-2024-9474 (`X-PAN-AuthCheck`). sekurak.pl.
+- **Mapping:** one `{product: {version_range: CVE}}` table on `fingerprint.py`.
+
+### EU-C. Framework debug/console exposure ❌ (extends `exposure.py`; feeds EU-A)
+Laravel **Ignition** (`GET /_ignition/health-check` = exposed; CVE-2021-3129 RCE), Symfony **profiler** (`/_profiler`, `/_wdt`, `/app_dev.php`), **Telescope/Horizon** (`/telescope`, `/horizon`), **Whoops**/Adminer/phpMyAdmin. Path+content-signature, same engine as `.git`/`.env`.
+
+### EU-D. Path-normalization ACL bypass family ❌ (differential; distinct from cache-deception)
+`/..;/`, `/%2e%2e;/`, matrix `admin;x`, trailing dot, double-encoding — front proxy vs backend disagree → reach protected routes. CVE-2024-0204 (Fortra GoAnywhere `/..;/` → admin creation). Source: sekurak.pl · vaadata.com. **Mapping:** for any `401/403` path, replay a fixed twin-set; `200` + protected body on a twin = bypass. Reuses `confirm.py` differential + `web/methods.py`.
+
+### EU-E. DOMPurify version → mXSS bypass matrix ❌ (🇩🇪 Cure53; client-side recon)
+Detect DOMPurify in JS bundles, extract `VERSION`, map to known bypass class (≤2.0.17 rawtext, ≤2.2.2 namespace confusion, ≤3.1.2 mutation, CVE-2024-45801). Source: github.com/cure53/DOMPurify · mizu.re/post/exploring-the-dompurify-library-bypasses. **Mapping:** regex in `jsendpoints.py`/`secrets.py`; fingerprint-only, mXSS → `web/browser.py`/Strix.
+
+### EU-F. EU webmail/groupware fingerprint → CVE ❌ (self-hosted heavy)
+Zimbra (CVE-2019-9670 XXE→SSRF chain, CVE-2022-27924 memcached-injection, CVE-2024-45519 RCE), Roundcube (CVE-2024-37383, CVE-2025-49113), EGroupware (SYSS-2024-047 SQLi). **Mapping:** fingerprint each → version→CVE; Zimbra ProxyServlet SSRF confirmable via existing OAST canary.
+
+### EU — also-worth-noting
+NetScaler `ns.conf` LDAP passwords use **hardcoded keys common to all appliances** → auto-decrypt when a `ns.conf` is ingested (`config_audit.py`). Source: dozer.nz/posts/citrix-decrypt.
+
+---
+
+## 🌎 Latin America & Iberia (DragonJAR/ElevenPaths 🇪🇸 · Conviso/H2HC/Tempest 🇧🇷)
+
+### LATAM-1. FOCA-style public-document metadata OSINT ❌ (biggest clean recon gap)
+Harvest a target's public PDF/DOCX/XLSX → extract authors, internal usernames, local/UNC paths, printer/host names, software versions, internal IPs. Chema Alonso's FOCA tradition; still under-automated. Source: es.wikipedia.org/wiki/FOCA_Tool · dragonjar.org · elladodelmal.com. **Mapping:** new passive `doc_metadata_osint` — reuse `wayback` + `filetype:` dorks → parse via stdlib (`zipfile` for OOXML `docProps/core.xml`, PDF `/Author`/`/Producer`, EXIF) → usernames → `memory_add` (untrusted), versions → CVE mapper.
+
+### LATAM-2. ExifTool image-upload blind RCE ❌ (active, OAST) — CVE-2021-22204 / GitLab CVE-2021-22205
+Upload endpoints that run ExifTool server-side are RCE-able via a DjVu ANT annotation reaching Perl `eval`. Source: convisoappsec.com (BR) · devcraft.io. **Mapping:** new intrusive `upload_probe` — discover multipart endpoints (`crawl`/`openapi`), send a benign JPEG whose embedded payload is an OS callback to `oast_selfhost` → OAST hit = `confirmed` (callback-only, no shell). Also passive `ExifTool`/`Perl` error strings. **No file-upload detector exists today.**
+
+### LATAM-3. "LATAM stack" fingerprint→CVE pack ❌ (extends `fingerprint.py`+`vulns_data.py`)
+MoonMCP offloads all of these to nuclei with no native fingerprint→CVE mapping:
+- **Liferay** JSONWS unauth deser CVE-2020-7961 (LATAM gov/edu; JavaDeserH2HC/JexBoss is Brazilian). `/api/jsonws` exposed → OAST deser probe.
+- **WSO2** file-upload RCE CVE-2022-29464 (`/fileupload`; identity layer). Orange Tsai.
+- **GLPI** htmLawed RCE CVE-2022-35914 (`/vendor/htmlawed/.../htmLawedTest.php`; math-eval differential).
+- **Moodle** CVE-2024-43425 (calculated-question eval), CVE-2025-26529 (SSRF→XSS→admin) — every LATAM university.
+- **Oracle Forms/Reports** `rwservlet` file-read→RCE CVE-2012-3152 (legacy banking/telecom).
+- **TOTVS Fluig** path traversal CVE-2020-29134 + **Protheus** AppServer default-cert JARM fingerprint — *the* dominant Brazilian ERP.
+- **Mapping:** one fingerprint pack (favicon/header/cookie/JARM) → version→CVE; file-read CVEs confirmable via `confirm.py` differential.
+
+### LATAM-4. PIX BR Code SSRF + payment-race ❌ (region-specific payment logic)
+Dynamic PIX QR carries a **payload URL the PSP fetches** → SSRF primitive; static-QR amount/beneficiary tamper with recomputed CRC-16; refund (*estorno*) race. Source: BCB Manual do BR Code · tabnews.com.br. **Mapping:** `pix_brcode` TLV helper (valid CRC-16) → point dynamic-QR URL at `oast_selfhost` (OAST hit from a bank ASN = SSRF); drive existing single-packet race on estorno. *(Technique/standard-level, not a single CVE — gate as heuristic.)*
+
+### LATAM-5. CPF/CNPJ check-digit-aware IDOR + enumeration ❌ (active differential)
+Generate **valid** Módulo-11 CPFs/CNPJs → drive the IDOR/access-control differential swapping the document; second signal = absence of rate-limit across a small valid-CPF sweep. Behind the recurring gov.br-scale PII dumps (LGPD → top severity). **Mapping:** `cpf_cnpj` generator + existing two-identity differential. *(Incident-documented, not a CVE.)*
+
+### LATAM-6. Boleto `linha digitável` value-tamper ❌ — Módulo-10/11 DV recompute; submit amount-mutated-but-DV-valid boleto vs baseline. *(Fraud-documented; lowest rank, needs authed flow.)*
+
+---
+
+## 🌏 India / MENA / SEA — PARTIAL (agent hit a session limit; to finish)
+Surfaced before termination (verify + expand later):
+- **OTP / token / reset-link returned in the HTTP response body** — very common in Indian/SEA fintech; a cheap detector: request an OTP/password-reset flow, regex the JSON/body for a 4–8-digit code or a `token=`/`reset` value that should have been delivered out-of-band. High-yield, easily automatable.
+- **CRLF injection** (`%0d%0a` in params → response-splitting / header injection / open-redirect-via-Location) — differential on reflected `Set-Cookie`/`Location`.
+- TODO on resume: UPI/payment-flow logic, Indian gov (UIDAI) patterns, Arabic/MENA gov portals, Indonesian fintech, deeper WhiteHat.vn.
+
+<!-- Round 2 India/MENA/SEA to be completed on a fresh session (agent session-limited). -->
+
