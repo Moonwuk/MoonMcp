@@ -164,7 +164,7 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 
 - **`ja4_fingerprint`** (JA4/JA4S/JA4H/JA4X/JA4T) ❌ — successor to JARM/JA3; sorting defeats Chrome extension-randomization; server/CDN/cert attribution. Reuse `net/jarm.py` ClientHello + `net/tls.py`. Source: github.com/FoxIO-LLC/ja4 (JA4 client is BSD; JA4S/H/X/T under FoxIO License 1.1).
 - **`recover_sourcemaps`** 🟡 — we *detect* `.js.map` (`jsendpoints.py`) but never download; parse `sourcesContent[]` → original source + run through `recon/secrets.py`. Source: pulsesecurity.co.nz/articles/javascript-from-sourcemaps.
-- **`dependency_confusion`** ❌ — from `package.json`/`composer.json`/`requirements`/`pom`, existence-check the public registry (404 = claimable). Source: blog.gitguardian.com/dependency-confusion-attacks.
+- **`dependency_confusion`** ✅ (SHIPPED) — `moonmcp/recon/depconf.py` + the `dependency_confusion` tool (passive OSINT): parses package.json / composer.json / requirements.txt / Pipfile / Gemfile and existence-checks each dep against its public registry (npm/PyPI/RubyGems/Packagist) — 404 = claimable (scoped 404 = high). Source: blog.gitguardian.com/dependency-confusion-attacks.
 - **Cloud bucket takeover + Alibaba OSS / DO Spaces** 🟡 — `recon/buckets.py` treats `404/NoSuchBucket` as absent; surface "absent-but-referenced" as claimable, add OSS/Spaces providers.
 - **`.well-known` expansion** 🟡 — add `openid-configuration`, `oauth-authorization-server`, `assetlinks.json`, `apple-app-site-association`, `mta-sts.txt` to `recon/content.py`.
 - **CT** ✅ — crt.sh already a source in `enumerate_subdomains`; optional add certspotter as a 2nd key-less source.

@@ -39,7 +39,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "enumerate_subdomains", "wayback_urls",
             "cve_lookup", "cve_search",
             "host_intel", "ip_intel", "reverse_ip",
-            "cloud_buckets", "email_security",
+            "cloud_buckets", "email_security", "dependency_confusion",
         ],
     )),
     ("light_active", (

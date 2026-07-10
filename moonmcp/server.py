@@ -59,6 +59,7 @@ from .recon import buckets as bucketsmod
 from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
+from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import headers as headersmod
@@ -1580,6 +1581,39 @@ async def analyze_config(content: str | None = None, target: str | None = None,
             filename = urlsplit(url).path.rsplit("/", 1)[-1] or None
     audit = configmod.analyze_config(content, filename=filename)
     return to_dict(audit)
+
+
+@mcp.tool()
+@safe_tool
+async def dependency_confusion(content: str, ecosystem: str = "auto",
+                               filename: str | None = None) -> dict:
+    """Detect **dependency confusion**: parse a manifest (package.json /
+    composer.json / requirements.txt / Pipfile / Gemfile) and existence-check each
+    dependency against its PUBLIC registry — a 404 means the name is unclaimed, so
+    an attacker could publish a higher-version package your build would pull
+    (supply-chain RCE, the Microsoft/Apple pattern). Queries the registry, never
+    the target, so no scope is needed. Feed `content` from `vcs_exposure` /
+    `analyze_js`; `ecosystem` (npm/pypi/composer/rubygems) auto-detects.
+    """
+
+    eco = ecosystem if ecosystem != "auto" else depconfmod.detect_ecosystem(content, filename)
+    if eco is None:
+        return {"error": "unknown_ecosystem",
+                "detail": "could not detect the ecosystem; pass ecosystem=npm|pypi|composer|rubygems"}
+    names = depconfmod.parse_dependencies(content, eco)
+    if not names:
+        return {"ecosystem": eco, "dependencies": 0, "results": [],
+                "note": "no dependencies parsed from the manifest"}
+    ctx = get_context()
+    results = await depconfmod.check_dependencies(ctx.http, names, eco)
+    claimable = [r for r in results if r["verdict"] == "claimable"]
+    return {
+        "ecosystem": eco, "dependencies": len(names), "claimable_count": len(claimable),
+        "results": results,
+        "note": (f"{len(claimable)} hijack candidate(s) absent on the public registry — "
+                 "verify ownership before reporting" if claimable
+                 else "all parsed dependencies exist on the public registry"),
+    }
 
 
 @mcp.tool()
