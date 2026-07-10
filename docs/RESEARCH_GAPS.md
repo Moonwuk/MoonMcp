@@ -54,7 +54,11 @@ discrepancies (`;`, `%2f`, encoded dot-segments, IIS backslash, static-ext rules
 
 Today `ssrf_probe` only plants a blind OAST canary. Gap = response-based metadata theft.
 
-### 2.1 Multi-cloud metadata target list ❌
+### 2.1 Multi-cloud metadata target list ✅ (SHIPPED)
+Implemented in `moonmcp/web/ssrf_meta.py` + the `ssrf_metadata_probe` tool
+(intrusive): injects each provider's metadata URL into a param and scans the
+response for its credential signature. `CLOUD_METADATA_TARGETS` covers
+AWS/GCP/Azure/Alibaba/**Yandex (GCE-flavored)**/Oracle/DigitalOcean.
 Per-provider host + required header + credential path:
 | Provider | Host | Header | Path |
 |---|---|---|---|

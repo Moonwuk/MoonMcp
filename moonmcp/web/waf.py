@@ -30,6 +30,16 @@ _SIGNATURES: dict[str, list[tuple[str, str]]] = {
     "Reblaze": [("cookie", "rbzid"), ("server", "reblaze")],
     "Fastly": [("header:x-served-by", "cache-"), ("header:fastly-debug-digest", "")],
     "Azure Front Door": [("header:x-azure-ref", ""), ("server", "azure")],
+    # Chinese WAFs (signatures cross-checked with wafw00f).
+    "SafeDog (安全狗)": [("cookie", "safedog-flow-item"), ("server", "safedog"),
+                        ("body", "safedogsite")],
+    "Yunsuo (云锁)": [("cookie", "yunsuo_session"), ("body", "yunsuologo")],
+    "Jiasule/ChuangYu (加速乐)": [("server", "jiasule-waf"), ("cookie", "__jsluid"),
+                                ("cookie", "jsl_tracking"), ("body", "notice-jiasule")],
+    "Qihoo 360 (网站宝)": [("server", "qianxin-waf"), ("header:x-powered-by-360wzb", ""),
+                         ("body", "wzws-waf-cgi")],
+    "Baidu Yunjiasu": [("server", "yunjiasu-nginx")],
+    "BaoTa / aaPanel (宝塔)": [("body", "宝塔网站防火墙"), ("body", "waf.bt.cn")],
 }
 
 # Benign-but-suspicious payloads (URL-encoded when sent) to see if a WAF trips.

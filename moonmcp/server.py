@@ -85,6 +85,7 @@ from .web import params as paramsmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
+from .web import ssrf_meta as ssrfmetamod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
@@ -1684,6 +1685,31 @@ async def stack_probe(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     result = await stacksmod.probe_stack(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssrf_metadata_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Response-based** SSRF → cloud-metadata credential theft (the Capital One
+    pattern). Injects each provider's instance-metadata URL (AWS / GCP / Azure /
+    Alibaba / Yandex / Oracle / DigitalOcean) into `param` and scans the response
+    for that provider's credential signature — proving a full-read SSRF that reaches
+    the metadata service. Complements the blind `ssrf_probe`. Intrusive; in scope
+    only. Header-gated providers (GCP/Azure/Oracle) only leak if the vulnerable
+    server forwards our request header.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    findings = await ssrfmetamod.probe_ssrf_metadata(
+        ctx.http, url, param, method=method, scope_check=_scope_check())
+    return {
+        "target": url, "param": param,
+        "vulnerable": bool(findings), "findings": findings,
+        "note": ("full-read SSRF to cloud metadata confirmed — rotate the exposed credentials"
+                 if findings else "no metadata credential signatures reflected in the response"),
+    }
 
 
 @mcp.tool()
