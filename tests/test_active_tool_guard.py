@@ -36,8 +36,8 @@ PASSIVE = {
     "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
     "vuln_info", "vuln_search", "rootcause_info", "vuln_tools",
     "waf_info", "identify_waf",
-    # external-tool inventory (no traffic; run_scanner/vuln_scan do the work)
-    "external_tools",
+    # external-tool inventory + nuclei coverage map (no traffic; run_scanner/vuln_scan do the work)
+    "external_tools", "scan_coverage",
 }
 
 

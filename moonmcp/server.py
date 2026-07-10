@@ -38,6 +38,7 @@ from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
+from .external import nuclei as nucleimod
 from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
@@ -3737,25 +3738,42 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
 
 
 @mcp.tool()
-@active_tool(intrusive=True)
-async def vuln_scan(target: str, templates: str | None = None, severity: str | None = None) -> dict:
-    """Run a nuclei template-based vulnerability scan against an in-scope target.
+@safe_tool
+async def scan_coverage() -> dict:
+    """**What nuclei covers vs. what only MoonMCP does** — the honest, executable map.
 
-    Requires nuclei to be installed (there is no safe stdlib equivalent for
-    template-based scanning). ``templates`` maps to nuclei ``-t`` and ``severity``
-    to ``-severity`` (e.g. 'critical,high'). Intrusive: requires
-    MOONMCP_ALLOW_INTRUSIVE, MOONMCP_ALLOW_EXTERNAL_TOOLS and the host in scope.
+    nuclei is a stateless per-template matcher: because everyone mass-scans with it,
+    the bugs it can find are largely already reported. This returns the split so you
+    scan efficiently: `delegate_to_nuclei` (commodity — run `vuln_scan`, don't hand-
+    hunt it), `native_edge` (the stateful/differential/timing/logic probes nuclei
+    STRUCTURALLY can't express — higher hit-rate on already-scanned targets, always
+    run these), plus MoonMCP's architecture edge. Offline; no traffic.
+    """
+
+    return nucleimod.coverage_report()
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def vuln_scan(target: str, templates: str | None = None, severity: str | None = None,
+                    tags: str | None = None, dast: bool = False, record: bool = False) -> dict:
+    """Run a nuclei template-based vulnerability scan against an in-scope target — the
+    commodity pass (delegate what nuclei owns; see `scan_coverage`).
+
+    `tags` takes plain intents (cve, exposure, misconfig, takeover, panel, tech, sqli,
+    xss, ssrf, redirect, lfi, …) mapped to nuclei `-tags`; `templates` maps to `-t`;
+    `severity` to `-severity` (e.g. 'critical,high'); `dast=True` enables nuclei
+    fuzzing of discovered params; `record=True` files findings into the findings store.
+    The result includes `also_run_native` — the probes nuclei can't do that you should
+    run anyway. Requires nuclei installed. Intrusive: MOONMCP_ALLOW_INTRUSIVE +
+    MOONMCP_ALLOW_EXTERNAL_TOOLS + the host in scope.
     """
 
     host = normalize_target(target)
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{host}"
-    args = ["-u", url, "-jsonl", "-silent", "-duc"]
-    if templates:
-        args += ["-t", templates]
-    if severity:
-        args += ["-severity", severity]
+    args = nucleimod.build_args(url, tags=tags, templates=templates, severity=severity, dast=dast)
     result = await cli.run_tool(
         "nuclei", args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
     )
@@ -3765,12 +3783,24 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
             "detail": result.error,
             "suggestion": "Install nuclei, or use analyze_headers + well_known + "
                           "content_discovery + cve_search for a native first pass.",
+            "also_run_native": nucleimod.also_run_native(),
         }
-    findings = cli.parse_jsonl(result.stdout)
+    findings = [nucleimod.normalize_finding(r) for r in cli.parse_jsonl(result.stdout)]
+    recorded = 0
+    if record:
+        for f in findings:
+            ctx.findings.add(target=host, severity=f["severity"], title=f["name"],
+                             type="nuclei", detail=f.get("description", ""),
+                             evidence=f.get("matched_at", ""), source=f.get("template_id", ""))
+            recorded += 1
     return {
         "target": url,
         "findings": findings,
         "finding_count": len(findings),
+        "recorded": recorded,
+        "also_run_native": nucleimod.also_run_native(),
+        "note": ("nuclei is the commodity pass — now run the native-edge probes "
+                 "(see scan_coverage) for bugs that survive the nuclei crowd"),
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
         "stderr_tail": result.stderr[-500:] if result.stderr else "",

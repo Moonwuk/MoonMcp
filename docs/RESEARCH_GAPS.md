@@ -189,6 +189,23 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 
 ---
 
+## Tooling strategy — don't reinvent nuclei (`scan_coverage` + `vuln_scan`)
+nuclei is a **stateless per-template matcher**; because everyone mass-scans with it,
+the bugs it can find are largely already reported. So MoonMCP **delegates** the
+commodity detection nuclei owns (version→CVE, static exposures, takeovers, tech
+fingerprints, DAST fuzzing of reflected params) via `vuln_scan`, and spends its own
+effort on the **stateful / differential / timing / business-logic** probes nuclei
+structurally *cannot* express — those have a higher marginal hit-rate on already-
+scanned targets. The split is encoded (and testable) in `moonmcp/external/nuclei.py`
+(`NUCLEI_DELEGATE` vs `NATIVE_EDGE`) and surfaced live by the `scan_coverage` tool;
+`vuln_scan` returns `also_run_native` to steer the agent to the edge probes after the
+nuclei pass. **Native-edge (keep + sharpen):** access_control_check, logic_probe,
+race_probe, desync_probe/desync_modern_probe, path_bypass_probe, cache_deception_probe,
+response_leak_probe, reset_poison_probe, ssrf_metadata_probe, confirm_finding,
+surface_diff, the behavioural-infra probes, oauth_probe, the config_audit forge-chain
+classifier. **Delegate to nuclei:** cve_*, vcs_exposure, debug_exposure, extract_secrets,
+takeover_check, fingerprint/favicon/waf_detect, and reflected-param injection (`-dast`).
+
 ## Deliberately out of scope (safety)
 Exploitation is never automated — every probe above is a **detection/indicator**;
 weaponization is handed to Strix under human confirmation. No pirated tooling.

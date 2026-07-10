@@ -125,7 +125,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "External CLIs",
         "Detect and safely drive installed security CLIs (scope-checked, "
         "file-I/O flags refused). Gated by MOONMCP_ALLOW_EXTERNAL_TOOLS.",
-        ["external_tools", "run_scanner"],
+        ["external_tools", "run_scanner", "scan_coverage"],
     )),
 ])
 
