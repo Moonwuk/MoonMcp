@@ -68,6 +68,7 @@ from .recon import jsendpoints as jsmod
 from .recon import openapi as openapimod
 from .recon import origin as originmod
 from .recon import secrets as secretsmod
+from .recon import sourcemaps as sourcemapsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
@@ -1935,6 +1936,24 @@ async def debug_exposure(target: str) -> dict:
                  "analyze_config for the forge chain" if findings
                  else "no known framework debug panel exposed"),
     }
+
+
+@mcp.tool()
+@active_tool()
+async def recover_sourcemaps(target: str) -> dict:
+    """**Recover original source from a shipped `.js.map`.** Give a `.js` or `.js.map`
+    URL (or a page): fetches the source map, reconstructs every module's original
+    pre-minification source from `sourcesContent[]`, separates app source from vendor
+    (`node_modules`/webpack runtime), flags config/secret-looking files, and runs the
+    recovered app source through the secret scanner. A shipped source map discloses the
+    app's real source tree + hard-coded secrets. `analyze_js` detects the map; this
+    recovers it. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    return await sourcemapsmod.recover(ctx.http, url, scope_check=_scope_check())
 
 
 @mcp.tool()
