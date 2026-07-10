@@ -65,7 +65,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "MOONMCP_ALLOW_INTRUSIVE — get consent first.",
         [
             "port_scan", "content_discovery", "http_methods",
-            "waf_efficacy", "desync_probe", "vuln_scan",
+            "waf_efficacy", "desync_probe", "vuln_scan", "cache_deception_probe",
         ],
     )),
     ("orchestration", (

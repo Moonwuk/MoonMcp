@@ -73,6 +73,7 @@ from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
 from .web import behavior as behaviormod
 from .web import browser as browsermod
+from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
@@ -1643,6 +1644,25 @@ async def oauth_probe(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     result = await oauthmod.probe_oidc(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def cache_deception_probe(target: str) -> dict:
+    """Test an authenticated page for **web cache deception** — the cache storing
+    your private response under an attacker-readable key via a path-confusion
+    variant (`/x.css`, `;x.css`, encoded traversal). Pass the URL of a page that
+    requires login (set the session with `auth_set` first); it fetches the private
+    page authed vs anonymously, then re-reads each crafted variant cookieless and
+    flags a leak (confirmed when the cookieless variant also carries a cache-HIT
+    header). Intrusive: it primes the cache with your own private page.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await cachedecmod.probe_cache_deception(ctx.http, url, scope_check=_scope_check())
     return to_dict(result)
 
 

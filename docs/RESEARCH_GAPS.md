@@ -36,7 +36,12 @@ Kettle's 2025 "HTTP/1.1 Must Die." `CL.0`, `0.CL` (broken `Expect: 100-continue`
 - Source: https://portswigger.net/research/http1-must-die · https://portswigger.net/research/how-to-distinguish-http-pipelining-from-request-smuggling
 - **Mapping:** extend `web/desync.py` — `Content-Length > body` **timeout-delta** probe (CL.0 candidate), `Expect: 100-continue` + malformed twin (0.CL), TE-only (TE.0), chunk-extension + bare-LF twin. All on fresh closed sockets; verdict from status/timing divergence vs a correct-framing control.
 
-### 1.2 Web Cache Deception (delimiter/normalization variants) ❌
+### 1.2 Web Cache Deception (delimiter/normalization variants) ✅ (SHIPPED)
+Implemented in `moonmcp/web/cache_deception.py` + the `cache_deception_probe` tool
+(intrusive-gated): fetches the private page authed vs anonymously, primes each
+path-confusion variant (`/x.css`, `;x.css`, `%2f`, encoded traversal) and re-reads
+it cookieless — confirmed when the cookieless variant returns the private-sized body
+with a cache-HIT header. Reuses `probes.cacheable()`.
 BH-USA-2024 "Gotta cache 'em all." Trick the cache into storing a victim's
 *authenticated* response under an attacker-readable key via CDN↔origin URL-parser
 discrepancies (`;`, `%2f`, encoded dot-segments, IIS backslash, static-ext rules).
