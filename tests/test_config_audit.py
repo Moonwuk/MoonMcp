@@ -3,7 +3,11 @@
 import pytest
 
 from moonmcp import server as srv
-from moonmcp.recon.config_audit import analyze_config, detect_format
+from moonmcp.recon.config_audit import (
+    analyze_config,
+    classify_signing_secret,
+    detect_format,
+)
 
 
 def _issues(audit):
@@ -94,3 +98,39 @@ async def test_analyze_config_tool_requires_input():
 async def test_analyze_config_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "analyze_config" in tools
+
+
+# -- framework signing-secret → forge-chain classifier -----------------------
+def test_classify_signing_secret_maps_known_keys():
+    assert classify_signing_secret("APP_KEY", "base64:c2VjcmV0a2V5c2VjcmV0a2V5c2VjcmV0MDA=")[0] == "Laravel"
+    assert classify_signing_secret("system.web.machineKey@validationKey", "A1B2C3D4E5F6")[0] == "ASP.NET"
+    assert classify_signing_secret("secret_key_base", "0a1b2c3d4e5f6a7b8c9d")[0] == "Rails"
+    assert classify_signing_secret("APP_SECRET", "1f2e3d4c5b6a7988")[0] == "Symfony"
+
+
+def test_classify_signing_secret_ignores_placeholders_and_unknowns():
+    assert classify_signing_secret("APP_KEY", "") is None
+    assert classify_signing_secret("APP_KEY", "changeme") is None       # placeholder
+    assert classify_signing_secret("DB_PASSWORD", "hunter2secret") is None  # not a signing key
+    assert classify_signing_secret("client_secret_key", "abcd1234") is None  # basename ≠ secret_key
+
+
+def test_analyze_config_surfaces_laravel_forge_chain():
+    # A real Laravel APP_KEY — the generic secret rule misses it (no "key" alt);
+    # the classifier must flag it critical with a forge chain.
+    env = "APP_ENV=production\nAPP_KEY=base64:aGVsbG9oZWxsb2hlbGxvaGVsbG9oZWxsbzEyMw==\nSESSION_DRIVER=cookie\n"
+    a = analyze_config(env, filename=".env")
+    assert "forge-capable signing secret" in _issues(a)
+    chains = a.summary["forge_chains"]
+    assert len(chains) == 1 and chains[0]["framework"] == "Laravel"
+    assert chains[0]["severity"] == "critical"
+
+
+@pytest.mark.asyncio
+async def test_analyze_config_tool_reports_forge_chains():
+    res = await srv.analyze_config(
+        content="<configuration><system.web><machineKey validationKey='0123456789ABCDEF0123456789ABCDEF' "
+                "decryptionKey='FEDCBA98765432100123' /></system.web></configuration>",
+        filename="web.config")
+    chains = res["summary"]["forge_chains"]
+    assert any(c["framework"] == "ASP.NET" for c in chains)

@@ -170,8 +170,8 @@ weaponization is handed to Strix under human confirmation. No pirated tooling.
 
 ## 🇪🇺 Western & Central/Eastern Europe (Synacktiv 🇫🇷 · Cure53/SySS/heise 🇩🇪 · sekurak 🇵🇱 · Vaadata/SSTIC 🇫🇷 · Computest 🇳🇱)
 
-### EU-A. Leaked framework signing-secret → forge signed blob → deserialization RCE — the EU meta-gap ❌
-`config_audit.py` already *extracts* secrets and `exposure.py` confirms a leaked `.env`, but MoonMCP never **classifies a secret as a forge-capable signing key**. Build one offline, zero-traffic `SIGNING_SECRETS` classifier mapping key → framework → primitive:
+### EU-A. Leaked framework signing-secret → forge signed blob → deserialization RCE — the EU meta-gap 🟡 (classifier SHIPPED)
+**Implemented:** `config_audit.py` now carries a `SIGNING_SECRETS` table + `classify_signing_secret()` — every recognized key is flagged **critical** as a "forge-capable signing secret" with its forge primitive, and surfaced in `summary.forge_chains` (this also catches `APP_KEY`/`machineKey`, which the generic secret rule missed). Remaining future step: the *live* forge-validation (decrypt a captured cookie to confirm the key). Offline classifier mapping key → framework → primitive:
 - **Laravel `APP_KEY`** → forge `laravel_session` cookie → auto-`unserialize()` (if `SESSION_DRIVER=cookie`) → phpggc RCE. 600+ apps mass-exploited 2025 (`laravel-crypto-killer`). CVE-2024-48987 (Snipe-IT), CVE-2024-55555 (Invoice Ninja). Source: synacktiv.com/publications/laravel-appkey-leakage-analysis · blog.gitguardian.com/exploiting-public-app_key-leaks. **Confirm offline** by validating the key decrypts one captured cookie (zero extra traffic).
 - **TYPO3 `encryptionKey`** → forge `__trustedProperties` (HMAC-SHA1) → deser + arbitrary file read. Dominant in DE/AT/CH gov. CVE-2019-12747. Source: synacktiv.com/publications/typo3-leak-to-remote-code-execution.
 - **Symfony `APP_SECRET`** → forge `/_fragment` signed URI → RCE; secret harvested from exposed `/_profiler`. CVE-2019-18889; ambionics/symfony-exploits.

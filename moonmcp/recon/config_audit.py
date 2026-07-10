@@ -283,6 +283,40 @@ def _looks_placeholder(v: str) -> bool:
     return low in _PLACEHOLDER or any(low.startswith(p) or p in low for p in _PLACEHOLDER if len(p) > 2)
 
 
+# Framework signing secrets: a leaked value here is not merely "a secret" — it is the
+# key that lets an attacker FORGE a signed/encrypted blob the app trusts, turning a
+# config leak into pre-auth RCE / auth bypass. Keyed by the key's basename (lowercased,
+# after stripping any section/attribute prefix). Value = (framework, forge primitive,
+# severity). Sourced from Synacktiv / GitGuardian / Vaadata / SySS research.
+_SIGNING_SECRETS: dict[str, tuple[str, str, str]] = {
+    "app_key": ("Laravel", "forge the encrypted laravel_session cookie → auto-unserialize() "
+                "(when SESSION_DRIVER=cookie) → phpggc gadget RCE", "critical"),
+    "encryptionkey": ("TYPO3", "forge __trustedProperties (HMAC-SHA1) → Extbase deserialization "
+                      "/ arbitrary file read → RCE", "critical"),
+    "app_secret": ("Symfony", "forge the /_fragment signed URI → internal render() → RCE", "critical"),
+    "machinekey": ("ASP.NET", "forge __VIEWSTATE (ysoserial.net) → unauth RCE", "critical"),
+    "validationkey": ("ASP.NET", "machineKey validationKey → forge a signed __VIEWSTATE blob", "critical"),
+    "decryptionkey": ("ASP.NET", "machineKey decryptionKey → decrypt/forge an encrypted __VIEWSTATE", "critical"),
+    "secret_key_base": ("Rails", "forge the session cookie → Marshal.load gadget → RCE", "critical"),
+    "jwt_secret": ("JWT (HS*)", "sign arbitrary JWTs → forge any identity / escalate privilege", "critical"),
+    "jwtsecret": ("JWT (HS*)", "sign arbitrary JWTs → forge any identity / escalate privilege", "critical"),
+    "secret_key": ("Flask/Django", "sign/forge the session cookie → session tampering / auth bypass",
+                   "high"),
+}
+
+
+def classify_signing_secret(key: str, value: str) -> tuple[str, str, str] | None:
+    """If *key* names a known framework signing secret and *value* is a real key
+    (not a placeholder), return ``(framework, forge_primitive, severity)`` — else None."""
+
+    v = (value or "").strip()
+    if not v or _looks_placeholder(v):
+        return None
+    parts = [p for p in re.split(r"[.\[\]@]", key.lower()) if p]
+    base = parts[-1] if parts else key.lower()
+    return _SIGNING_SECRETS.get(base)
+
+
 def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
     k, v = key.lower(), (value or "").strip()
     vlow = v.lower()
@@ -358,11 +392,23 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
 
     audit = ConfigAudit(format=fmt, setting_count=len(pairs))
     findings: list[ConfigFinding] = []
+    forge_chains: list[dict] = []
     for key, value in pairs:
         cat = _categorize(key)
         rule_hits = _rule_checks(key, value)
-        sensitive = cat == "secret" or any(f.issue in ("exposed credential", "credentials in connection string")
-                                           for f in rule_hits)
+        # A framework signing secret isn't just an exposed credential — it's a
+        # forge-to-RCE / auth-bypass primitive. Flag it explicitly (and it catches
+        # APP_KEY / machineKey, which the generic secret rule misses entirely).
+        forge = classify_signing_secret(key, value)
+        if forge is not None:
+            framework, primitive, severity = forge
+            rule_hits.append(ConfigFinding(
+                severity, key, "forge-capable signing secret",
+                f"{framework}: {primitive}"))
+            forge_chains.append({"key": key, "framework": framework,
+                                 "primitive": primitive, "severity": severity})
+        sensitive = cat == "secret" or forge is not None or any(
+            f.issue in ("exposed credential", "credentials in connection string") for f in rule_hits)
         shown = _redact(value) if sensitive and value else value
         audit.settings.append(Setting(key=key, value=shown[:200], category=cat, sensitive=sensitive))
         findings.extend(rule_hits)
@@ -376,5 +422,6 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
     for s in audit.settings:
         by_cat[s.category] = by_cat.get(s.category, 0) + 1
     audit.summary = {"by_severity": by_sev, "by_category": by_cat,
-                     "sensitive_settings": sum(1 for s in audit.settings if s.sensitive)}
+                     "sensitive_settings": sum(1 for s in audit.settings if s.sensitive),
+                     "forge_chains": forge_chains}
     return audit
