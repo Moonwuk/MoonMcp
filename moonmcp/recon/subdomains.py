@@ -170,7 +170,3 @@ async def enumerate_subdomains(
         merged |= found
     result.subdomains = sorted(merged)
     return result
-
-
-def available_sources() -> list[str]:
-    return list(_SOURCES)

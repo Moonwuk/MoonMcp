@@ -17,10 +17,8 @@ with no automatable interface), this brings the *useful* part to MCP:
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ..net.http import HttpClient
 from .secrets import scan_text
 
 _ASCII_RE = re.compile(rb"[\x20-\x7e]{5,}")
@@ -128,21 +126,3 @@ def analyze_bytes(data: bytes, url: str = "") -> BinaryAnalysis:
             break
     result.interesting_strings = list(seen)
     return result
-
-
-async def analyze_binary(
-    client: HttpClient,
-    url: str,
-    *,
-    scope_check: Callable[[str], bool] | None = None,
-    max_bytes: int = _MAX_BYTES,
-) -> BinaryAnalysis:
-    r = await client.fetch(url, follow_redirects=True, timeout=30.0, max_body=max_bytes,
-                           scope_check=scope_check)
-    if r.status is None:
-        return BinaryAnalysis(url=url, error=r.error or "unreachable")
-    if not r.body:
-        return BinaryAnalysis(url=url, error=f"empty body (HTTP {r.status})")
-    analysis = analyze_bytes(r.body, url=r.final_url or url)
-    analysis.truncated = r.truncated
-    return analysis

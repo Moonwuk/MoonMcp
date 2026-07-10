@@ -160,10 +160,6 @@ class ProgramStore:
         self._save()
         return self._programs[name]
 
-    def deactivate(self) -> None:
-        self._active = None
-        self._save()
-
     # -- querying ----------------------------------------------------------
     def get(self, name: str) -> Program | None:
         return self._programs.get(name)

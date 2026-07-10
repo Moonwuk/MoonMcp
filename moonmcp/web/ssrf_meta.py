@@ -16,9 +16,9 @@ Alibaba, DigitalOcean) work purely response-based.
 from __future__ import annotations
 
 from collections.abc import Callable
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..net.http import HttpClient
+from .inject import with_param as inject_param
 
 # provider, metadata URL, (header, value) or None, credential signatures to match.
 CLOUD_METADATA_TARGETS: list[dict] = [
@@ -48,18 +48,6 @@ CLOUD_METADATA_TARGETS: list[dict] = [
      "url": "http://169.254.169.254/metadata/v1.json",
      "signatures": ["droplet_id", "interfaces", "region"]},
 ]
-
-
-def inject_param(url: str, param: str, value: str, method: str = "GET") -> tuple[str, bytes | None]:
-    """Return ``(url, body)`` with *param*=*value* injected — query for GET/DELETE,
-    a form body for POST/PUT/PATCH."""
-
-    if method.upper() in ("POST", "PUT", "PATCH"):
-        return url, urlencode({param: value}).encode()
-    s = urlsplit(url)
-    q = dict(parse_qsl(s.query, keep_blank_values=True))
-    q[param] = value
-    return urlunsplit((s.scheme, s.netloc, s.path, urlencode(q), s.fragment)), None
 
 
 def scan_metadata_leak(target: dict, body: str) -> list[str]:

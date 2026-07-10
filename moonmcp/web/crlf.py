@@ -14,9 +14,9 @@ inject a dangerous header — only ``X-Moonmcp-Inj: 1`` / a benign marker cookie
 from __future__ import annotations
 
 from collections.abc import Callable
-from urllib.parse import urlsplit
 
 from ..net.http import HttpClient
+from .inject import inject_raw
 
 _MARKER_HEADER = "x-moonmcp-inj"
 _MARKER_VALUE = "1"
@@ -34,14 +34,6 @@ CRLF_PAYLOADS = [
     "moon%250d%250aX-Moonmcp-Inj:1",
     "moon%0d%0aSet-Cookie:moonmcpcrlf=1",
 ]
-
-
-def inject_raw(url: str, param: str, payload: str) -> str:
-    """Append ``param=payload`` to *url* WITHOUT re-encoding (the payload already
-    carries its own percent-encoded CR/LF)."""
-
-    sep = "&" if urlsplit(url).query else "?"
-    return f"{url}{sep}{param}={payload}"
 
 
 def assess(headers: dict[str, str], set_cookies: list[str]) -> bool:

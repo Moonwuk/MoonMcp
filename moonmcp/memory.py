@@ -51,9 +51,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
 CREATE INDEX IF NOT EXISTS idx_memory_trust ON memory(trust);
 """
 
-_COLS = ("id", "kind", "target", "title", "body", "severity", "source",
-         "trust", "provenance", "tags", "session", "created_at")
-
 
 def _norm_trust(v: str | None) -> str:
     v = (v or "untrusted").strip().lower()

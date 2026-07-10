@@ -1,6 +1,6 @@
 """A self-describing map of MoonMCP's own tools.
 
-An agent lands on MoonMCP with ~90 tools and no idea where to start. This module
+An agent lands on MoonMCP with 120+ tools and no idea where to start. This module
 groups every tool into a family, records how much each one touches the target
 (scope-gated? intrusive?), and lays out the recommended recon → report order —
 so `tool_catalog` (and the packaged skill) can hand the model a compact,

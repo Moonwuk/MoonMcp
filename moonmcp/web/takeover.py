@@ -158,7 +158,3 @@ async def check_takeover(client: HttpClient, host: str, *, scope_check=None) -> 
                              "CNAME — unconfirmed lead, verify DNS/ownership manually")
             return result
     return result
-
-
-def fingerprint_count() -> int:
-    return len(_FINGERPRINTS)

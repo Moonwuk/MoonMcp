@@ -80,6 +80,7 @@ from .web import crlf as crlfmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
+from .web import inject as injectmod
 from .web import jwt as jwtmod
 from .web import methods as methodsmod
 from .web import oauth as oauthmod
@@ -2980,19 +2981,8 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 # ---------------------------------------------------------------------------
 # active detectors (differential probes for top-payout classes)
 # ---------------------------------------------------------------------------
-def _with_param(url: str, param: str | None, value: str, method: str) -> tuple[str, bytes | None]:
-    """Return ``(request_url, request_body)`` with *value* placed in *param* — the
-    query for GET, a form body for POST-ish methods."""
-
-    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
-    if method.upper() in ("GET", "HEAD") or not param:
-        sp = urlsplit(url)
-        q = dict(parse_qsl(sp.query, keep_blank_values=True))
-        if param:
-            q[param] = value
-        return urlunsplit(sp._replace(query=urlencode(q))), None
-    return url, urlencode({param: value}).encode()
+# The shared parameter-injection helper (query for GET/HEAD, form body otherwise).
+_with_param = injectmod.with_param
 
 
 @mcp.tool()
