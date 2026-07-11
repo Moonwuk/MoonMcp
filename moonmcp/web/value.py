@@ -74,6 +74,11 @@ async def probe_value_tampering(client, url: str, field: str, *, method: str = "
     if base.status is None:
         return []
     blen = len(base.body)
+    # Negative control: if a garbage value is accepted like the baseline, the field
+    # isn't validated → every value flag would be a false positive → bail.
+    ctrl = await _baseline(client, url, field, "moonmcp_zzz_invalid", m, scope_check)
+    if assess_tamper(base.status, blen, ctrl.status, len(ctrl.body)):
+        return []
     findings: list[dict] = []
     for category, payloads in VALUE_PAYLOADS.items():
         for val in payloads:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..net.http import HttpClient
 
@@ -22,7 +22,10 @@ REDIRECT_PARAMS = [
 ]
 
 _CANARY = "moonmcp-open-redirect.example"
-_PAYLOADS = [f"https://{_CANARY}/", f"//{_CANARY}/", f"https:/{_CANARY}"]
+_PAYLOADS = [
+    f"https://{_CANARY}/", f"//{_CANARY}/", f"https:/{_CANARY}",
+    f"/\\{_CANARY}/", f"https:\\\\{_CANARY}",   # backslash-confusion (browsers treat \\ as /)
+]
 
 # Match a refresh <meta> tag and capture its url= regardless of attribute order
 # (a lookahead asserts http-equiv=refresh; url= may come before OR after it).
@@ -50,11 +53,15 @@ class OpenRedirectResult:
 
 
 def _with_param(url: str, param: str, value: str) -> str:
+    """Set *param* to *value*, OVERWRITING any existing occurrence. Appending (the old
+    behaviour) left `?next=/x` as `?next=/x&next=payload`, and most frameworks read the
+    FIRST value — so the already-present redirect param (the most exploitable one) was
+    never actually tested."""
+
     parts = urlsplit(url)
-    query = parts.query
-    extra = urlencode({param: value})
-    new_query = f"{query}&{extra}" if query else extra
-    return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", new_query, parts.fragment))
+    pairs = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != param]
+    pairs.append((param, value))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", urlencode(pairs), parts.fragment))
 
 
 def _points_to_canary(value: str) -> bool:

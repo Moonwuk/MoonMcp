@@ -54,16 +54,25 @@ class _Client:
 
 @pytest.mark.asyncio
 async def test_parameter_tampering_flags_accepted_invalid_values():
-    # baseline 200/500 and every tampered value also 200/500 → all flagged
-    client = _SeqClient([_R(200, "x" * 500)] * 20)
+    # baseline 200/500, garbage CONTROL rejected (400), every tampered value 200/500 → flagged
+    client = _SeqClient([_R(200, "x" * 500), _R(400, "bad")] + [_R(200, "x" * 500)] * 10)
     res = await logic.probe_parameter_tampering(client, "https://x.test/buy?qty=1", "qty")
     assert res and all(f["verdict"] == "review" and f["kind"] == "parameter_tampering" for f in res)
 
 
 @pytest.mark.asyncio
 async def test_parameter_tampering_no_flag_when_rejected():
-    # baseline 200, every tampered value 400 → nothing flagged
+    # baseline 200, control 400 (field validates), every tampered value 400 → nothing flagged
     client = _SeqClient([_R(200, "x" * 500)] + [_R(400, "bad")] * 12)
+    res = await logic.probe_parameter_tampering(client, "https://x.test/buy?qty=1", "qty")
+    assert res == []
+
+
+@pytest.mark.asyncio
+async def test_parameter_tampering_suppressed_when_field_not_validated():
+    # baseline AND the garbage control are both accepted-like-baseline → field ignores
+    # input, so accepting -1 is meaningless → no false positives
+    client = _SeqClient([_R(200, "x" * 500)] * 20)
     res = await logic.probe_parameter_tampering(client, "https://x.test/buy?qty=1", "qty")
     assert res == []
 

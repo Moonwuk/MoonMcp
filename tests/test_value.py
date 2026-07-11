@@ -35,10 +35,23 @@ class _Seq:
         return self._baseline if self._i == 1 else self._rest
 
 
+class _SeqList:
+    """Responses in call order (last repeats)."""
+
+    def __init__(self, responses):
+        self._r = list(responses)
+        self._i = 0
+
+    async def fetch(self, url, **kwargs):
+        r = self._r[min(self._i, len(self._r) - 1)]
+        self._i += 1
+        return r
+
+
 @pytest.mark.asyncio
 async def test_value_tampering_flags_accepted_categories():
-    # baseline 200/500 and every manipulation also 200/500 → each category flagged once
-    client = _Seq(_R(200, "x" * 500), _R(200, "x" * 500))
+    # baseline, garbage CONTROL rejected (400), then every manipulation accepted (200/500)
+    client = _SeqList([_R(200, "x" * 500), _R(400, "bad")] + [_R(200, "x" * 500)] * 30)
     res = await v.probe_value_tampering(client, "https://x.test/pay?amount=1", "amount")
     cats = {f["category"] for f in res}
     assert {"negative", "zero", "overflow", "precision", "over_100_percent"} <= cats
@@ -48,6 +61,14 @@ async def test_value_tampering_flags_accepted_categories():
 @pytest.mark.asyncio
 async def test_value_tampering_no_flag_when_rejected():
     client = _Seq(_R(200, "x" * 500), _R(400, "bad"))
+    res = await v.probe_value_tampering(client, "https://x.test/pay?amount=1", "amount")
+    assert res == []
+
+
+@pytest.mark.asyncio
+async def test_value_tampering_suppressed_when_field_not_validated():
+    # baseline AND garbage control both accepted-like-baseline → field ignores input → no FPs
+    client = _Seq(_R(200, "x" * 500), _R(200, "x" * 500))
     res = await v.probe_value_tampering(client, "https://x.test/pay?amount=1", "amount")
     assert res == []
 

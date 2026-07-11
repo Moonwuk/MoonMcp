@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from ..net.http import HttpClient
+from .waf_bypass import _BLOCK_SIGNS  # shared block-page body signatures
 
 # name -> list of (where, needle) signatures. where ∈ {header:<h>, cookie, server, body}
 _SIGNATURES: dict[str, list[tuple[str, str]]] = {
@@ -100,7 +101,13 @@ async def detect_waf(client: HttpClient, url: str, *, scope_check=None, active: 
             probe_url = f"{url}{sep}moon={quote(payload)}"
             pr = await client.fetch(probe_url, follow_redirects=False,
                                     timeout=10.0, scope_check=scope_check)
-            if pr.status in (403, 406, 429, 501, 999):
+            # Many WAFs (Cloudflare challenge, Akamai, custom pages) block with a 200/503
+            # body, not a 4xx status — so also match the block page's body signature.
+            blocked = pr.status in (403, 406, 429, 501, 503, 999)
+            if not blocked and pr.status is not None and pr.body:
+                low = pr.text(limit=20_000).lower()
+                blocked = any(s in low for s in _BLOCK_SIGNS)
+            if blocked:
                 result.blocked_probe = True
                 result.block_status = pr.status
                 # A block that we didn't otherwise fingerprint still signals *a* WAF.
