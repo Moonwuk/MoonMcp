@@ -55,8 +55,9 @@ def test_catalog_family_filter():
     assert fam["family"] == "intrusive"
     assert {t["name"] for t in fam["tools"]} == {
         "port_scan", "content_discovery", "http_methods",
-        "waf_efficacy", "desync_probe", "vuln_scan", "cache_deception_probe",
-        "stack_probe", "ssrf_metadata_probe", "logic_probe", "race_probe",
+        "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
+        "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
+        "logic_probe", "race_probe", "workflow_probe", "value_probe",
     }
     assert all(t["intrusive"] for t in fam["tools"])
 

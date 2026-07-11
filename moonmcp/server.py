@@ -38,6 +38,7 @@ from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
+from .external import nuclei as nucleimod
 from .intel import asn as asnmod
 from .intel import cve, shodan
 from .intel import email as emailmod
@@ -68,16 +69,19 @@ from .recon import jsendpoints as jsmod
 from .recon import openapi as openapimod
 from .recon import origin as originmod
 from .recon import secrets as secretsmod
+from .recon import sourcemaps as sourcemapsmod
 from .recon import subdomains as submod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
 from .web import authflow as authflowmod
+from .web import authz as authzmod
 from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
 from .web import crlf as crlfmod
+from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import graphql as graphqlmod
@@ -87,14 +91,17 @@ from .web import logic as logicmod
 from .web import methods as methodsmod
 from .web import oauth as oauthmod
 from .web import params as paramsmod
+from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
+from .web import value as valuemod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
+from .web import workflow as workflowmod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware bug-bounty & reconnaissance server.
@@ -1210,6 +1217,34 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
 
 @mcp.tool()
 @active_tool()
+async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
+                      max_refs: int = 8) -> dict:
+    """**Multi-step BOLA / IDOR chain** — the object-level authorization test a
+    stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
+    `second_headers` (a lower-priv user B); this runs three GET-only signals:
+    (1) **direct** — B/anon get the *same* object from the same URL; (2) **sibling
+    sweep** — walk the id space (id±1, low ids) as B/anon and flag any object they
+    read; (3) **multi-step chain** — extract the object ids the owner's response
+    exposes, then fetch each as B/anon (owner response → cross-identity access).
+    Read-only (never mutates — state change → Strix). Findings are `review` leads.
+    In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
+                                       max_refs=max_refs, scope_check=_scope_check())
+    result["hint"] = (None if ctx.auth.is_set()
+                      else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
+    n = len(result.get("findings", []))
+    result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
+                      "object" if n else "no cross-identity object access observed")
+    return result
+
+
+@mcp.tool()
+@active_tool()
 async def graphql_check(target: str) -> dict:
     """Probe an in-scope host for GraphQL endpoints across common paths and test
     whether schema introspection is enabled (which leaks the full API surface).
@@ -1818,6 +1853,66 @@ async def race_probe(target: str, method: str = "POST", n: int = 20) -> dict:
 
 
 @mcp.tool()
+@active_tool(intrusive=True)
+async def workflow_probe(steps: list[dict]) -> dict:
+    """**Workflow / step-skipping** abuse on a multi-step flow. Pass the flow as an
+    ORDERED list of steps — each a dict `{"url", "method"?, "body"?, "success"?}`
+    (or a bare URL string) — e.g. cart→address→payment→confirm, or register→verify→
+    access. It fetches every step *after the first* cold (without completing the
+    prior steps): a flow that enforces its order redirects back / errors, a broken one
+    serves the step (order confirmed without payment, account activated without email
+    verification). `success` is an optional marker string that positively identifies a
+    step's completed content. Returns `review` leads (confirm the business effect).
+    Intrusive; in scope only — the steps' hosts are scope-checked.
+    """
+
+    ctx = get_context()
+    result = await workflowmod.probe_workflow_skip(ctx.http, steps, scope_check=_scope_check())
+    n = len(result.get("findings", []))
+    result["note"] = (f"{n} step-skipping lead(s) — confirm the business effect of reaching the step "
+                      "without its prerequisites" if n
+                      else "no step served cold — the flow appears to enforce its sequence")
+    return result
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def value_probe(target: str, param: str | None = None, coupon_code: str | None = None,
+                      method: str = "GET") -> dict:
+    """**Value / financial-logic** manipulation on money fields. Auto-targets value
+    params in the URL (amount/price/balance/discount/coupon/points/currency…) — or
+    pass `param` — and sends the manipulations a correct server must reject: **negative**
+    amounts, **zero**, integer **overflow**, sub-cent **precision**, **>100 % discount**,
+    and **currency swap/downgrade**. If `coupon_code` is given, also tests single-use
+    **coupon/gift-card reuse** (apply the same code repeatedly). Accepted-like-baseline =
+    a value-logic lead (verdict `review`; confirm the charged/credited amount). Intrusive;
+    in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sc = _scope_check()
+    keys = logicmod.query_keys(url)
+    money = [param] if param else valuemod.money_fields(keys)
+    findings: list[dict] = []
+    for f in money:
+        findings.extend(await valuemod.probe_value_tampering(ctx.http, url, f, method=method, scope_check=sc))
+    for f in valuemod.currency_fields(keys):
+        findings.extend(await valuemod.probe_currency_swap(ctx.http, url, f, method=method, scope_check=sc))
+    out: dict = {"target": url, "tested_fields": money, "findings": findings}
+    if coupon_code:
+        cfields = valuemod.coupon_fields(keys)
+        field = cfields[0] if cfields else (param or "coupon")
+        out["coupon_reuse"] = await valuemod.probe_coupon_reuse(
+            ctx.http, url, field, coupon_code, method=(method if method != "GET" else "POST"), scope_check=sc)
+    n = len(findings) + (1 if out.get("coupon_reuse", {}).get("verdict") == "review" else 0)
+    out["note"] = (f"{n} value-logic lead(s) — confirm the real charged/credited amount"
+                   if n else "no value manipulation accepted; drive the money flow per business_logic_hunt")
+    return out
+
+
+@mcp.tool()
 @active_tool()
 async def response_leak_probe(target: str, method: str = "GET", data: str | None = None,
                               content_type: str = "application/json") -> dict:
@@ -1885,6 +1980,72 @@ async def reset_poison_probe(target: str, canary: str | None = None, method: str
         out["oast_token"] = cb.token
         out["oast_note"] = "poll with oast_poll — a callback means the server fetched the poisoned host"
     return out
+
+
+@mcp.tool()
+@active_tool()
+async def path_bypass_probe(target: str) -> dict:
+    """**403/401 path-normalization bypass**: point at a route that returns 401/403
+    and this replays normalization twins (`/admin/..;/`, `/%2e/admin`, matrix `;x`,
+    trailing `%2f`/`%2e`, double slash, `%`-encoded char) — a front proxy and the
+    backend disagreeing on normalization can skip the ACL while still resolving the
+    resource (CVE-2024-0204-class). Flags any twin that flips the status to 2xx
+    (verdict `review` — confirm the body is the real protected content). GET-only,
+    non-destructive. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await pathnormmod.probe_path_bypass(ctx.http, url, scope_check=_scope_check())
+    n = len(result.get("findings", []))
+    result["target"] = url
+    result["note"] = result.get("note") or (
+        f"{n} normalization twin(s) reached the protected route — verify the content"
+        if n else "no normalization twin bypassed the ACL")
+    return result
+
+
+@mcp.tool()
+@active_tool()
+async def debug_exposure(target: str) -> dict:
+    """Detect **exposed framework debug pages / consoles** left on in production:
+    Laravel Ignition (`/_ignition`), Symfony profiler (`/_profiler`, `/app_dev.php`),
+    Laravel Telescope/Horizon, Spring Boot Actuator (`/actuator/env`), Django debug
+    toolbar, the Werkzeug/Flask interactive debugger (`/console`), Adminer,
+    phpMyAdmin, Rails dev info. Confirms each by a distinctive content signature (no
+    soft-404 FPs). Several leak the framework signing secret → feed `analyze_config`
+    to classify the forge-to-RCE chain; a couple are direct RCE. GET-only. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    findings = await debugpanelmod.probe_debug_panels(ctx.http, url, scope_check=_scope_check())
+    return {
+        "target": url, "exposed": bool(findings), "findings": findings,
+        "note": (f"{len(findings)} debug panel(s) exposed — pull any leaked APP_KEY/APP_SECRET into "
+                 "analyze_config for the forge chain" if findings
+                 else "no known framework debug panel exposed"),
+    }
+
+
+@mcp.tool()
+@active_tool()
+async def recover_sourcemaps(target: str) -> dict:
+    """**Recover original source from a shipped `.js.map`.** Give a `.js` or `.js.map`
+    URL (or a page): fetches the source map, reconstructs every module's original
+    pre-minification source from `sourcesContent[]`, separates app source from vendor
+    (`node_modules`/webpack runtime), flags config/secret-looking files, and runs the
+    recovered app source through the secret scanner. A shipped source map discloses the
+    app's real source tree + hard-coded secrets. `analyze_js` detects the map; this
+    recovers it. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    return await sourcemapsmod.recover(ctx.http, url, scope_check=_scope_check())
 
 
 @mcp.tool()
@@ -2072,6 +2233,25 @@ async def desync_probe(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     result = await desyncmod.probe_desync(url, timeout=max(10.0, get_context().settings.timeout))
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def desync_modern_probe(target: str) -> dict:
+    """Detection-only probe for **modern (2025 "HTTP/1.1 Must Die") desync**: 0.CL,
+    TE.0, `Expect: 100-continue` mishandling and chunk-extension parsing. Uses the
+    **timeout-differential** technique — each probe runs on its own fresh
+    `Connection: close` socket that is closed immediately, so no second request ever
+    shares the connection and **nothing is smuggled to a victim**; it infers which
+    length header the server honours from whether it waits for the body it was
+    promised. Reports timing indicators only — NOT a confirmed finding (verify with a
+    dedicated tool). Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and the host in scope.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await desyncmod.probe_modern_desync(url, timeout=max(6.0, get_context().settings.timeout / 2))
     return to_dict(result)
 
 
@@ -3649,25 +3829,42 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
 
 
 @mcp.tool()
-@active_tool(intrusive=True)
-async def vuln_scan(target: str, templates: str | None = None, severity: str | None = None) -> dict:
-    """Run a nuclei template-based vulnerability scan against an in-scope target.
+@safe_tool
+async def scan_coverage() -> dict:
+    """**What nuclei covers vs. what only MoonMCP does** — the honest, executable map.
 
-    Requires nuclei to be installed (there is no safe stdlib equivalent for
-    template-based scanning). ``templates`` maps to nuclei ``-t`` and ``severity``
-    to ``-severity`` (e.g. 'critical,high'). Intrusive: requires
-    MOONMCP_ALLOW_INTRUSIVE, MOONMCP_ALLOW_EXTERNAL_TOOLS and the host in scope.
+    nuclei is a stateless per-template matcher: because everyone mass-scans with it,
+    the bugs it can find are largely already reported. This returns the split so you
+    scan efficiently: `delegate_to_nuclei` (commodity — run `vuln_scan`, don't hand-
+    hunt it), `native_edge` (the stateful/differential/timing/logic probes nuclei
+    STRUCTURALLY can't express — higher hit-rate on already-scanned targets, always
+    run these), plus MoonMCP's architecture edge. Offline; no traffic.
+    """
+
+    return nucleimod.coverage_report()
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def vuln_scan(target: str, templates: str | None = None, severity: str | None = None,
+                    tags: str | None = None, dast: bool = False, record: bool = False) -> dict:
+    """Run a nuclei template-based vulnerability scan against an in-scope target — the
+    commodity pass (delegate what nuclei owns; see `scan_coverage`).
+
+    `tags` takes plain intents (cve, exposure, misconfig, takeover, panel, tech, sqli,
+    xss, ssrf, redirect, lfi, …) mapped to nuclei `-tags`; `templates` maps to `-t`;
+    `severity` to `-severity` (e.g. 'critical,high'); `dast=True` enables nuclei
+    fuzzing of discovered params; `record=True` files findings into the findings store.
+    The result includes `also_run_native` — the probes nuclei can't do that you should
+    run anyway. Requires nuclei installed. Intrusive: MOONMCP_ALLOW_INTRUSIVE +
+    MOONMCP_ALLOW_EXTERNAL_TOOLS + the host in scope.
     """
 
     host = normalize_target(target)
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{host}"
-    args = ["-u", url, "-jsonl", "-silent", "-duc"]
-    if templates:
-        args += ["-t", templates]
-    if severity:
-        args += ["-severity", severity]
+    args = nucleimod.build_args(url, tags=tags, templates=templates, severity=severity, dast=dast)
     result = await cli.run_tool(
         "nuclei", args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
     )
@@ -3677,12 +3874,24 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
             "detail": result.error,
             "suggestion": "Install nuclei, or use analyze_headers + well_known + "
                           "content_discovery + cve_search for a native first pass.",
+            "also_run_native": nucleimod.also_run_native(),
         }
-    findings = cli.parse_jsonl(result.stdout)
+    findings = [nucleimod.normalize_finding(r) for r in cli.parse_jsonl(result.stdout)]
+    recorded = 0
+    if record:
+        for f in findings:
+            ctx.findings.add(target=host, severity=f["severity"], title=f["name"],
+                             type="nuclei", detail=f.get("description", ""),
+                             evidence=f.get("matched_at", ""), source=f.get("template_id", ""))
+            recorded += 1
     return {
         "target": url,
         "findings": findings,
         "finding_count": len(findings),
+        "recorded": recorded,
+        "also_run_native": nucleimod.also_run_native(),
+        "note": ("nuclei is the commodity pass — now run the native-edge probes "
+                 "(see scan_coverage) for bugs that survive the nuclei crowd"),
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
         "stderr_tail": result.stderr[-500:] if result.stderr else "",

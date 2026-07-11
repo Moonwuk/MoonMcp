@@ -29,7 +29,16 @@ duplicate work). Every item is backed by a CVE or a public PoC / primary write-u
 
 ## Theme 1 — Modern desync & cache (global; adapted 🇯🇵)
 
-### 1.1 Modern request smuggling: 0.CL / TE.0 / Expect / chunk-extension ❌
+### 1.1 Modern request smuggling: 0.CL / TE.0 / Expect / chunk-extension ✅ (SHIPPED)
+Implemented in `moonmcp/web/desync.py` (`probe_modern_desync` + pure `interpret_modern`)
++ the `desync_modern_probe` tool (intrusive): the **timeout-differential** technique —
+each probe runs on its own fresh `Connection: close` socket that is closed immediately
+(no second/victim request shares it, so nothing is smuggled). Infers which length
+header the server honours from whether it waits for the promised body: TE.0 (chunked
+with no terminator answered anyway), CL.0 (short-body answered anyway), 0.CL (malformed
+`Expect: y 100-continue` twin diverges — CVE-2025-32094), chunk-extension divergence
+(CVE-2025-55315). A probe only signals when the ambiguous framing was *accepted* with a
+non-error status; a fast 4xx (rejection) or a read timeout (honoured framing) is no signal.
 Kettle's 2025 "HTTP/1.1 Must Die." `CL.0`, `0.CL` (broken `Expect: 100-continue`),
 `TE.0`, and chunk-extension / bare-CR parsing. Researchers earned $200k+ in weeks.
 - CVEs: CVE-2025-32094 (Akamai `Expect: y 100-continue` 0.CL), CVE-2025-55315 (Kestrel chunk-ext, CVSS 9.9), Netty GHSA-fghv-69vj-qj49.
@@ -163,7 +172,7 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 ## Theme 5 — Recon upgrades (🇬🇧 FoxIO + supply-chain)
 
 - **`ja4_fingerprint`** (JA4/JA4S/JA4H/JA4X/JA4T) ❌ — successor to JARM/JA3; sorting defeats Chrome extension-randomization; server/CDN/cert attribution. Reuse `net/jarm.py` ClientHello + `net/tls.py`. Source: github.com/FoxIO-LLC/ja4 (JA4 client is BSD; JA4S/H/X/T under FoxIO License 1.1).
-- **`recover_sourcemaps`** 🟡 — we *detect* `.js.map` (`jsendpoints.py`) but never download; parse `sourcesContent[]` → original source + run through `recon/secrets.py`. Source: pulsesecurity.co.nz/articles/javascript-from-sourcemaps.
+- **`recover_sourcemaps`** ✅ (SHIPPED) — `moonmcp/recon/sourcemaps.py` + the `recover_sourcemaps` tool: fetches the `.js.map` (from a `.js`/`.map`/page), reconstructs each module's original source from `sourcesContent[]`, splits app source from vendor (`node_modules`/webpack runtime), flags config/secret-looking files, and runs the recovered app source through `recon/secrets.py`. Source: pulsesecurity.co.nz/articles/javascript-from-sourcemaps.
 - **`dependency_confusion`** ✅ (SHIPPED) — `moonmcp/recon/depconf.py` + the `dependency_confusion` tool (passive OSINT): parses package.json / composer.json / requirements.txt / Pipfile / Gemfile and existence-checks each dep against its public registry (npm/PyPI/RubyGems/Packagist) — 404 = claimable (scoped 404 = high). Source: blog.gitguardian.com/dependency-confusion-attacks.
 - **Cloud bucket takeover + Alibaba OSS / DO Spaces** 🟡 — `recon/buckets.py` treats `404/NoSuchBucket` as absent; surface "absent-but-referenced" as claimable, add OSS/Spaces providers.
 - **`.well-known` expansion** 🟡 — add `openid-configuration`, `oauth-authorization-server`, `assetlinks.json`, `apple-app-site-association`, `mta-sts.txt` to `recon/content.py`.
@@ -179,6 +188,23 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 - **Client-side prototype pollution** ❌ — load `?__proto__[test]=polluted` in the headless browser (`web/browser.py`), read `Object.prototype.test`.
 
 ---
+
+## Tooling strategy — don't reinvent nuclei (`scan_coverage` + `vuln_scan`)
+nuclei is a **stateless per-template matcher**; because everyone mass-scans with it,
+the bugs it can find are largely already reported. So MoonMCP **delegates** the
+commodity detection nuclei owns (version→CVE, static exposures, takeovers, tech
+fingerprints, DAST fuzzing of reflected params) via `vuln_scan`, and spends its own
+effort on the **stateful / differential / timing / business-logic** probes nuclei
+structurally *cannot* express — those have a higher marginal hit-rate on already-
+scanned targets. The split is encoded (and testable) in `moonmcp/external/nuclei.py`
+(`NUCLEI_DELEGATE` vs `NATIVE_EDGE`) and surfaced live by the `scan_coverage` tool;
+`vuln_scan` returns `also_run_native` to steer the agent to the edge probes after the
+nuclei pass. **Native-edge (keep + sharpen):** access_control_check, logic_probe,
+race_probe, desync_probe/desync_modern_probe, path_bypass_probe, cache_deception_probe,
+response_leak_probe, reset_poison_probe, ssrf_metadata_probe, confirm_finding,
+surface_diff, the behavioural-infra probes, oauth_probe, the config_audit forge-chain
+classifier. **Delegate to nuclei:** cve_*, vcs_exposure, debug_exposure, extract_secrets,
+takeover_check, fingerprint/favicon/waf_detect, and reflected-param injection (`-dast`).
 
 ## Deliberately out of scope (safety)
 Exploitation is never automated — every probe above is a **detection/indicator**;
@@ -209,10 +235,22 @@ Version-match only (never send the exploit; hand that to Strix). EU orgs run the
 - **Palo Alto GlobalProtect** CVE-2024-3400 + CVE-2024-9474 (`X-PAN-AuthCheck`). sekurak.pl.
 - **Mapping:** one `{product: {version_range: CVE}}` table on `fingerprint.py`.
 
-### EU-C. Framework debug/console exposure ❌ (extends `exposure.py`; feeds EU-A)
+### EU-C. Framework debug/console exposure ✅ (SHIPPED)
+Implemented in `moonmcp/web/debugpanel.py` + the `debug_exposure` tool: a curated
+path → distinctive content-signature map covering Laravel Ignition, Symfony profiler /
+`app_dev.php`, Telescope/Horizon, Spring Boot Actuator `/env`, Django debug toolbar,
+the Werkzeug/Flask interactive debugger, Adminer, phpMyAdmin and Rails dev info —
+confirmed by signature (no soft-404 FPs). Panels that leak the signing secret point
+the operator at `analyze_config` for the forge chain (feeds EU-A).
 Laravel **Ignition** (`GET /_ignition/health-check` = exposed; CVE-2021-3129 RCE), Symfony **profiler** (`/_profiler`, `/_wdt`, `/app_dev.php`), **Telescope/Horizon** (`/telescope`, `/horizon`), **Whoops**/Adminer/phpMyAdmin. Path+content-signature, same engine as `.git`/`.env`.
 
-### EU-D. Path-normalization ACL bypass family ❌ (differential; distinct from cache-deception)
+### EU-D. Path-normalization ACL bypass family ✅ (SHIPPED)
+Implemented in `moonmcp/web/pathnorm.py` + the `path_bypass_probe` tool: confirms the
+plain path is protected (401/403), then replays a deduped normalization twin-set
+(`/admin/..;/`, `/%2e/admin`, matrix `;x`, trailing `%2f`/`%2e`/`;`, double internal
+slash, `%`-encoded first char, dot-dot reinjection) and flags any that flip to 2xx.
+GET-only, non-destructive; findings are `review` leads (confirm the 2xx body is the
+real protected content).
 `/..;/`, `/%2e%2e;/`, matrix `admin;x`, trailing dot, double-encoding — front proxy vs backend disagree → reach protected routes. CVE-2024-0204 (Fortra GoAnywhere `/..;/` → admin creation). Source: sekurak.pl · vaadata.com. **Mapping:** for any `401/403` path, replay a fixed twin-set; `200` + protected body on a twin = bypass. Reuses `confirm.py` differential + `web/methods.py`.
 
 ### EU-E. DOMPurify version → mXSS bypass matrix ❌ (🇩🇪 Cure53; client-side recon)

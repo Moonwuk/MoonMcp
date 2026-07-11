@@ -1,0 +1,83 @@
+"""Value / financial-logic manipulation."""
+
+import pytest
+
+from moonmcp import server as srv
+from moonmcp.web import value as v
+
+
+# -- field detection --------------------------------------------------------
+def test_field_classifiers():
+    keys = ["amount", "currency", "coupon", "color", "wallet_balance", "ccy"]
+    assert set(v.money_fields(keys)) >= {"amount", "coupon", "wallet_balance"}
+    assert set(v.currency_fields(keys)) == {"currency", "ccy"}
+    assert "coupon" in v.coupon_fields(keys)
+    assert "color" not in v.money_fields(keys)
+
+
+# -- fake clients -----------------------------------------------------------
+class _R:
+    def __init__(self, status, body=b""):
+        self.status = status
+        self.body = body.encode() if isinstance(body, str) else body
+
+
+class _Seq:
+    """Baseline (first call) then a fixed response for the rest."""
+
+    def __init__(self, baseline, rest):
+        self._baseline = baseline
+        self._rest = rest
+        self._i = 0
+
+    async def fetch(self, url, **kwargs):
+        self._i += 1
+        return self._baseline if self._i == 1 else self._rest
+
+
+@pytest.mark.asyncio
+async def test_value_tampering_flags_accepted_categories():
+    # baseline 200/500 and every manipulation also 200/500 → each category flagged once
+    client = _Seq(_R(200, "x" * 500), _R(200, "x" * 500))
+    res = await v.probe_value_tampering(client, "https://x.test/pay?amount=1", "amount")
+    cats = {f["category"] for f in res}
+    assert {"negative", "zero", "overflow", "precision", "over_100_percent"} <= cats
+    assert any(f["severity"] == "high" for f in res)   # negative / >100% are high
+
+
+@pytest.mark.asyncio
+async def test_value_tampering_no_flag_when_rejected():
+    client = _Seq(_R(200, "x" * 500), _R(400, "bad"))
+    res = await v.probe_value_tampering(client, "https://x.test/pay?amount=1", "amount")
+    assert res == []
+
+
+@pytest.mark.asyncio
+async def test_currency_swap_flags_accepted():
+    client = _Seq(_R(200, "x" * 300), _R(200, "x" * 300))
+    res = await v.probe_currency_swap(client, "https://x.test/pay?currency=USD", "currency")
+    assert res and all(f["kind"] == "currency_swap" for f in res)
+
+
+@pytest.mark.asyncio
+async def test_coupon_reuse_verdict():
+    ok = await v.probe_coupon_reuse(_Seq(_R(200), _R(200)), "https://x.test/apply", "coupon", "SAVE", times=3)
+    assert ok["successes"] == 3 and ok["verdict"] == "review"
+
+    class _OnceThen409:
+        def __init__(self):
+            self._i = 0
+
+        async def fetch(self, url, **kwargs):
+            self._i += 1
+            return _R(200) if self._i == 1 else _R(409)
+
+    no = await v.probe_coupon_reuse(_OnceThen409(), "https://x.test/apply", "coupon", "SAVE", times=3)
+    assert no["successes"] == 1 and no["verdict"] == "no_reuse_signal"
+
+
+# -- registration -----------------------------------------------------------
+@pytest.mark.asyncio
+async def test_value_probe_tool_registered():
+    tools = {t.name for t in await srv.mcp.list_tools()}
+    assert "value_probe" in tools

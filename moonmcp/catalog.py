@@ -50,11 +50,12 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "dns_lookup", "http_probe", "tls_inspect", "analyze_headers",
             "fingerprint", "well_known", "favicon_hash", "tls_fingerprint",
             "jarm_fingerprint", "origin_discovery", "behavior_probe",
-            "crawl", "analyze_js", "parse_openapi", "extract_secrets",
-            "cors_audit", "access_control_check", "graphql_check",
+            "crawl", "analyze_js", "recover_sourcemaps", "parse_openapi", "extract_secrets",
+            "cors_audit", "access_control_check", "authz_probe", "graphql_check",
             "discover_parameters", "waf_detect", "takeover_check",
             "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
-            "response_leak_probe", "reset_poison_probe",
+            "response_leak_probe", "reset_poison_probe", "path_bypass_probe",
+            "debug_exposure",
             "screenshot", "browser_open", "browser_eval", "browser_interact",
             "analyze_binary", "analyze_config", "jwt_analyze", "jwt_crack",
             "oauth_probe",
@@ -66,8 +67,9 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "MOONMCP_ALLOW_INTRUSIVE — get consent first.",
         [
             "port_scan", "content_discovery", "http_methods",
-            "waf_efficacy", "desync_probe", "vuln_scan", "cache_deception_probe",
-            "stack_probe", "ssrf_metadata_probe", "logic_probe", "race_probe",
+            "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
+            "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
+            "logic_probe", "race_probe", "workflow_probe", "value_probe",
         ],
     )),
     ("orchestration", (
@@ -123,7 +125,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "External CLIs",
         "Detect and safely drive installed security CLIs (scope-checked, "
         "file-I/O flags refused). Gated by MOONMCP_ALLOW_EXTERNAL_TOOLS.",
-        ["external_tools", "run_scanner"],
+        ["external_tools", "run_scanner", "scan_coverage"],
     )),
 ])
 
