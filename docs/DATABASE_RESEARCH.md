@@ -217,7 +217,12 @@ forge any-user token → full read/write (CVSS 9.8).
 - **Mapping:** `_probe_influxdb` in `stack_probe` (fingerprint via `GET /ping` →
   `X-Influxdb-Version`, then the empty-secret differential). Reuses `web/jwt.py`.
 
-### B.7 Vector-DB unauthenticated exposure sweep ❌ — RANK 11
+### B.7 Vector-DB unauthenticated exposure sweep 🟡 (SHIPPED via stack_probe) — RANK 11
+Implemented in `web/stacks.py` (`_probe_chroma`/`_probe_weaviate`/`_probe_qdrant` + passive
+signatures): read-only fingerprints — Chroma `/api/v2/heartbeat`+`/api/v2/version` (flags
+ChromaToast CVE-2026-45829, CVSS 10, all versions → critical lead → Strix), Weaviate
+`/v1/meta`, Qdrant `/collections`. Milvus (gRPC-heavy) still to add.
+
 Standalone vector stores (Weaviate/Milvus/Qdrant/Chroma) ship with no auth and bind
 publicly; 3,000+ unauth instances found in 2025; embeddings invert to PII. `pgvector` is
 just Postgres (ordinary SQLi) — the vector-specific risk is *exposure*.

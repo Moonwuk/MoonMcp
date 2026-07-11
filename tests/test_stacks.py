@@ -99,6 +99,33 @@ async def test_probe_druid_and_clickhouse_exposure():
 
 
 @pytest.mark.asyncio
+async def test_probe_vector_stores():
+    def chroma(url, headers):
+        if url.endswith("/api/v2/heartbeat"):
+            return _R(200, '{"nanosecond heartbeat": 1720000000000000000}')
+        if url.endswith("/api/v2/version"):
+            return _R(200, '"1.0.3"')
+        return _R(404, "")
+    res = await stacks.probe_stack(_Client(chroma), "https://t.test:8000/")
+    f = next(f for f in res.findings if f["product"] == "ChromaDB")
+    assert f["severity"] == "critical" and "CVE-2026-45829" in f["detail"] and "1.0.3" in f["detail"]
+
+    def weaviate(url, headers):
+        if url.endswith("/v1/meta"):
+            return _R(200, '{"hostname":"http://[::]:8080","version":"1.24.1","modules":{}}')
+        return _R(404, "")
+    res2 = await stacks.probe_stack(_Client(weaviate), "https://t.test:8080/")
+    assert any(f["product"] == "Weaviate" and f["verdict"] == "exposed" for f in res2.findings)
+
+    def qdrant(url, headers):
+        if url.endswith("/collections"):
+            return _R(200, '{"result":{"collections":[{"name":"docs"}]},"status":"ok","time":0.0}')
+        return _R(404, "")
+    res3 = await stacks.probe_stack(_Client(qdrant), "https://t.test:6333/")
+    assert any(f["product"] == "Qdrant" and f["severity"] == "high" for f in res3.findings)
+
+
+@pytest.mark.asyncio
 async def test_probe_stack_clean_target_no_findings():
     res = await stacks.probe_stack(_Client(lambda url, h: _R(404, "not found")), "https://t.test/")
     assert res.findings == []

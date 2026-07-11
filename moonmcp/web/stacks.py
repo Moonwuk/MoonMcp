@@ -36,6 +36,9 @@ _SIGNATURES: list[tuple[str, str, str]] = [
     ("Yonyou NC", "body", "yonyou"),
     ("ClickHouse", "body", "clickhouse"),
     ("Shiro/Spring", "header:server", "shiro"),
+    ("ChromaDB", "body", "chroma"),
+    ("Weaviate", "body", "weaviate"),
+    ("Qdrant", "body", "qdrant"),
 ]
 
 
@@ -146,8 +149,46 @@ async def _probe_clickhouse(client, base, scope_check) -> dict | None:
     return None
 
 
+async def _probe_chroma(client, base, scope_check) -> dict | None:
+    # Standalone vector store: unauth heartbeat, and ALL versions since 1.0.0 are
+    # pre-auth RCE via ChromaToast (CVE-2026-45829, CVSS 10, unpatched at disclosure).
+    r = await _fetch(client, base.rstrip("/") + "/api/v2/heartbeat", scope_check)
+    if r.status == 200 and "nanosecond heartbeat" in r.text(limit=2000).lower():
+        vr = await _fetch(client, base.rstrip("/") + "/api/v2/version", scope_check)
+        ver = vr.text(limit=200).strip().strip('"') if vr.status == 200 else "?"
+        return {"product": "ChromaDB", "severity": "critical", "verdict": "confirmed",
+                "issue": "unauthenticated ChromaDB vector store",
+                "detail": f"/api/v2/heartbeat answered with no auth (version {ver}) — every version since "
+                          "1.0.0 is pre-auth RCE via ChromaToast (CVE-2026-45829, CVSS 10, unpatched); "
+                          "hand the model-load PoC to Strix, never in-scan"}
+    return None
+
+
+async def _probe_weaviate(client, base, scope_check) -> dict | None:
+    r = await _fetch(client, base.rstrip("/") + "/v1/meta", scope_check)
+    low = r.text(limit=5000).lower() if r.status == 200 else ""
+    if r.status == 200 and '"hostname"' in low and ('"version"' in low or '"modules"' in low):
+        return {"product": "Weaviate", "severity": "high", "verdict": "exposed",
+                "issue": "unauthenticated Weaviate vector store",
+                "detail": "/v1/meta readable with no auth — objects and their (invertible) embeddings are "
+                          "exposed; the GraphQL Get{} API is readable too. Bulk read → Strix"}
+    return None
+
+
+async def _probe_qdrant(client, base, scope_check) -> dict | None:
+    r = await _fetch(client, base.rstrip("/") + "/collections", scope_check)
+    low = r.text(limit=5000).lower() if r.status == 200 else ""
+    if r.status == 200 and '"result"' in low and '"collections"' in low and '"status"' in low:
+        return {"product": "Qdrant", "severity": "high", "verdict": "exposed",
+                "issue": "unauthenticated Qdrant vector store",
+                "detail": "/collections listed with no API key — vectors and their payloads are exposed. "
+                          "Bulk read → Strix"}
+    return None
+
+
 _ACTIVE_PROBES = (_probe_thinkphp, _probe_nacos, _probe_shiro, _probe_druid,
-                  _probe_bitrix, _probe_clickhouse)
+                  _probe_bitrix, _probe_clickhouse,
+                  _probe_chroma, _probe_weaviate, _probe_qdrant)
 
 
 async def probe_stack(client: HttpClient, base_url: str, *,
