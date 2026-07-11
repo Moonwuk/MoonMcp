@@ -77,19 +77,25 @@ Two ways, pick based on the user's situation:
    `parse_openapi`, `discover_parameters`, `cors_audit`, `graphql_check`,
    `extract_secrets`, `trace_redirects`, `open_redirect`, `takeover_check`,
    `vcs_exposure`. For JS-heavy SPAs use `browser_open` / `browser_eval` /
-   `browser_interact` (post-JS DOM, console, network). For IDOR run
+   `browser_interact` (post-JS DOM, console, network) and `cspp_probe`
+   (client-side prototype pollution via a URL `__proto__`/`constructor` path, tested
+   in our own headless browser — safe, never mutates the target). For IDOR run
    `access_control_check` after `auth_set`.
    - **Active detectors** (intrusive, on a discovered param): `ssti_probe`,
      `sqli_probe` (context/oob/time-based/json-waf/multibyte/header lanes),
      `cache_probe`, and `ssrf_probe` (start `oast_selfhost` first for
-     blind-callback confirmation).
+     blind-callback confirmation). When a WAF blocks a payload, `parser_diff_probe`
+     is the **bypass multiplier** — it finds where the app decodes UTF-7 / overlong
+     UTF-8 or accepts duplicate JSON keys / comments / duplicate multipart fields
+     that the WAF's stricter parser rejects (the smuggling primitive; weaponise via Strix).
    - **Databases & data stores:** `db_exposure` sweeps unauth Redis/Mongo/
      Elasticsearch/CouchDB/memcached/InfluxDB/YARN/TiDB; `stack_probe` fingerprints
      ClickHouse/Druid + vector stores (Chroma/Weaviate/Qdrant). On a param:
      `nosqli_probe` (Mongo operator/`$where`), `orm_leak_probe` (Django/Prisma/Rails
      relational lookups), `second_order_sqli_probe` (write→read stored SQLi),
-     `fastjson_oast_probe` (Java autoType, OAST). `ssrf_protocol_probe` reaches
-     internal datastores via gopher/dict. Cloud (safe GET, light-active):
+     `fastjson_oast_probe` (Java autoType, OAST). After `graphql_check`, run
+     `graphql_nosqli` (operator object as a GraphQL variable → Mongo/Mongoose filter).
+     `ssrf_protocol_probe` reaches internal datastores via gopher/dict. Cloud (safe GET, light-active):
      `firebase_exposure` (open RTDB), `supabase_exposure` (RLS-off anon read);
      `extract_secrets` / `analyze_config` classify managed-DB DSNs & tokens.
    - **Behavioural infrastructure** (infer the infra from response variance):

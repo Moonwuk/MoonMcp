@@ -810,6 +810,17 @@ INJECTIONS: list[dict] = [   {   'id': 'sqli',
                               'value': '(BSONError|BSONTypeError|bson\\.errors)',
                               'meaning': 'BSON serialization error leaked when malformed/typed input reaches '
                                          'the driver.'},
+                          {   'technology': 'Mongoose (ODM)',
+                              'type': 'regex',
+                              'value': 'CastError|Cast to \\w+ failed',
+                              'meaning': 'Mongoose CastError leaked when an operator OBJECT ({"$ne":null}) was '
+                                         'passed where a scalar was expected — the object reached the ODM '
+                                         'filter (operator-injection surface, incl. via a GraphQL resolver).'},
+                          {   'technology': 'Mongoose (ODM)',
+                              'type': 'regex',
+                              'value': 'StrictModeError|(Str|str)ictPopulate|MongooseError',
+                              'meaning': 'Mongoose error surfaced from client-controlled filter/populate '
+                                         'input reaching the ODM.'},
                           {   'technology': 'MongoDB',
                               'type': 'error',
                               'value': '$regex has to be a string',

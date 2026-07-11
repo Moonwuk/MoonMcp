@@ -95,6 +95,23 @@ NATIVE_EDGE: dict[str, str] = {
                     "string is expected and diffs the auth/record outcome vs a plain-scalar "
                     "baseline; a stateless per-template matcher can only fuzz a scalar value, "
                     "never swap the value's TYPE for an operator document",
+    "graphql_nosqli": "GraphQL resolver → Mongo/Mongoose operator-injection — sends an operator "
+                      "OBJECT ($ne/$gt/$in/$nin) as a GraphQL VARIABLE value where a scalar is "
+                      "expected and diffs the resolver's data/auth/record outcome vs a string "
+                      "baseline (plus a Mongoose CastError leak); nuclei's -dast fuzzes scalar "
+                      "values in a fixed request and cannot swap a variable's TYPE for an operator "
+                      "document across a two-state GraphQL differential",
+    "cspp_probe": "client-side prototype pollution — loads __proto__/constructor URL paths in a "
+                  "real headless browser and reads Object.prototype[marker] back from the page's JS "
+                  "realm; a stateless HTTP matcher cannot execute the SPA's JS, so it can neither "
+                  "trigger the client-side merge nor observe the polluted prototype",
+    "parser_diff_probe": "HTTP parser-differential / WAF-bypass multiplier — pairs a canonical "
+                         "request against quirk-twins (UTF-7/overlong-UTF-8 decode, duplicate JSON "
+                         "keys, JSON comments/trailing commas, duplicate multipart fields) carrying "
+                         "one unique canary, and correlates which transform the app APPLIED / which "
+                         "non-standard form it ACCEPTED vs a rejected invalid control; a stateless "
+                         "per-template engine sends one fixed request and has no notion of 'same "
+                         "logical input, two encodings, compare the decode/precedence'",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "

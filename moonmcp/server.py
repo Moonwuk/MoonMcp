@@ -24,6 +24,7 @@ import inspect
 import os
 import platform
 import re
+import secrets
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -86,11 +87,13 @@ from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
 from .web import crlf as crlfmod
+from .web import cspp as csppmod
 from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
+from .web import graphqli as gqlimod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
 from .web import logic as logicmod
@@ -99,6 +102,7 @@ from .web import nosqli as nosqlimod
 from .web import oauth as oauthmod
 from .web import ormleak as ormmod
 from .web import params as paramsmod
+from .web import parserdiff as parserdiffmod
 from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
@@ -1619,9 +1623,70 @@ async def browser_open(target: str, capture_html: bool = False,
     headers, cookies = _browser_auth(url)
     result = await browsermod.browse(
         url, capture_html=capture_html, wait_until=wait_until,
-        extra_headers=headers, cookies=cookies,
+        extra_headers=headers, cookies=cookies, scope_ok=_scope_check(),
     )
     return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def cspp_probe(target: str, wait_until: str = "networkidle") -> dict:
+    """**Client-side prototype pollution** — headless-browser detection, safe by design.
+    SPAs that parse `location.search`/`location.hash` and deep-merge them can let a
+    `__proto__`/`constructor.prototype` URL path write `Object.prototype` in the page's
+    JS (the client-side root of DOM-XSS gadget chains). This loads each candidate URL in
+    MoonMCP's **own ephemeral browser**, then reads `Object.prototype[<marker>]` back —
+    the pollution lands in our throwaway Chromium, **never on the target server** (we send
+    an ordinary GET the server ignores) and we send **no engagement auth** (the sink fires
+    regardless of login, so nothing leaks). The marker is a fresh random key per run that a
+    clean baseline proves absent, so any read-back under a payload is attributable. Tries
+    `__proto__`/`constructor` bracket+dotted paths in both query and hash (firing
+    `hashchange` for hash-router sinks). Detection-only — proving the sink is reachable, not
+    a working XSS; gadget→XSS chaining → Strix. Needs Playwright/Chromium (self-degrades if
+    absent). In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    marker = csppmod.MARKER_PREFIX + secrets.token_hex(4)
+    read = csppmod.read_script(marker)
+    scope_ok = _scope_check()
+
+    async def _read(u, script):
+        # No engagement auth on purpose (nothing to leak); scope-gated navigations.
+        return await browsermod.browse(u, script=script, capture_text=False,
+                                       wait_until=wait_until, scope_ok=scope_ok)
+
+    baseline = await _read(url, read)
+    if not baseline.available:
+        return {"target": url, "available": False, "error": baseline.error,
+                "install_hint": baseline.install_hint}
+    if baseline.error or baseline.eval_error:
+        return {"target": url, "available": True, "verdict": "inconclusive",
+                "confidence": "low", "vectors": [],
+                "error": baseline.error or baseline.eval_error,
+                "note": "could not establish a clean prototype baseline (navigation/eval "
+                        "failed) — re-run against a reachable page that returns HTML"}
+
+    hits: list[dict] = []
+    for label, vurl, is_hash in csppmod.vectors(url, marker):
+        script = csppmod.hashchange_script(marker) if is_hash else read
+        r = await _read(vurl, script)
+        if csppmod.assess(baseline.eval_result, r.eval_result):
+            hits.append({"vector": label, "url": vurl, "value": r.eval_result})
+
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"prototype-pollution/client-side ({h['vector']})" for h in hits],
+        reflected=bool(hits))
+    return {"target": url, "available": True, **verdict,
+            "polluted_property": marker if hits else None,
+            "vectors": hits, "baseline_marker": baseline.eval_result,
+            "note": ("client-side prototype pollution — the page's JS merged a URL "
+                     "__proto__/constructor path into Object.prototype (in our own ephemeral "
+                     "browser only; the target server is untouched). Locating a gadget → XSS → Strix"
+                     if hits else
+                     "no client-side prototype-pollution sink reached via URL query/hash "
+                     "(the page may pollute from a different source or on a later event)")}
 
 
 @mcp.tool()
@@ -1640,7 +1705,7 @@ async def browser_eval(target: str, script: str, wait_until: str = "load") -> di
     headers, cookies = _browser_auth(url)
     result = await browsermod.browse(
         url, script=script, capture_text=False, wait_until=wait_until,
-        extra_headers=headers, cookies=cookies,
+        extra_headers=headers, cookies=cookies, scope_ok=_scope_check(),
     )
     out = to_dict(result)
     # trim the network/text noise — browser_eval is about the script result
@@ -4045,6 +4110,176 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],
             "baseline": {"status": control[0].status, "length": control[0].length}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def graphql_nosqli(target: str, query: str, variable: str = "moon") -> dict:
+    """**GraphQL → NoSQL operator-injection** — detection only. After `graphql_check`
+    finds an endpoint, this tests whether a resolver forwards a client object straight
+    into a Mongo/Mongoose filter. Give a GraphQL `query` referencing `$<variable>`
+    declared as a JSON/Object scalar (e.g. `query($moon:JSON){login(filter:$moon){token}}`);
+    the tool sends the variable as a plain-string baseline vs operator objects
+    (`$ne`/`$gt`/`$in`/`$nin`) and flags a *reproducible* flip (a resolver returns data /
+    more records where the scalar did not) or a Mongoose `CastError` in `errors[]`. If the
+    server rejects the object with a GraphQL type error the variable is strictly typed →
+    not injectable via it (reported, not a hit). Detection-only — no `$regex` extraction /
+    `sleep()` (→ NoSQLMap/Strix). Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    # Detection-only: refuse a write. The operator twins are match-everything filters,
+    # so running them through a mutation/subscription could drive a mass write.
+    op_head = re.sub(r"#[^\n]*", "", query).lstrip("﻿ \t\r\n")
+    kw = re.match(r"[A-Za-z]+", op_head)
+    first = kw.group(0).lower() if kw else ""
+    if first in ("mutation", "subscription"):
+        return {"target": url, "error": "invalid_input",
+                "detail": f"graphql_nosqli is detection-only and refuses a {first} operation "
+                          "(the operator twins broaden the filter to match all records, which "
+                          "could drive a mass write). Supply a read `query`; mutation-based "
+                          "validation is Strix's job."}
+    ctx = get_context()
+    bodies: list[str] = []
+
+    async def _send(value):
+        r = await ctx.http.fetch(
+            url, method="POST", headers={"Content-Type": "application/json"},
+            body=gqlimod.build_body(query, variable, value),
+            follow_redirects=False, scope_check=_scope_check())
+        full = r.text()                       # data/rejected need the WHOLE body, not a slice
+        bodies.append(full[:50_000])
+        return gqlimod.Resp(
+            status=r.status, length=len(r.body),
+            data=gqlimod.data_present(full), rejected=gqlimod.is_rejected(full),
+            session=nosqlimod.has_session_cookie(r.get_all("set-cookie")))
+
+    # String baseline (sent twice) vs each operator object (sent twice).
+    control = (await _send(gqlimod.CONTROL), await _send(gqlimod.CONTROL))
+    operator_hits: list[dict] = []
+    any_rejected = False
+    for label, obj in gqlimod.OPERATOR_TWINS:
+        twin = (await _send(obj), await _send(obj))
+        any_rejected = any_rejected or twin[0].rejected
+        hit = gqlimod.assess_operator(control, twin)
+        if hit:
+            operator_hits.append({"operator": label, **hit})
+
+    sig_hits = injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+    # A type rejection (independent of status) means the variable is strictly typed —
+    # not injectable via it. Reported as its own state, never scored as a hit.
+    strictly_typed = any_rejected and not operator_hits and not sig_hits
+
+    strong_op = next((h for h in operator_hits if h["strong"]), None)
+    injection_hits = [f"graphql-nosqli/{h['operator']}" for h in operator_hits]
+    injection_hits += [f"{h['class']}/{h['technology']}" for h in sig_hits]
+    verdict = confirmmod.evaluate(injection_hits=injection_hits, status_changed=bool(strong_op))
+    return {"target": url, "variable": variable, **verdict,
+            "operator_hits": operator_hits, "error_signatures": sig_hits[:10],
+            "strictly_typed_variable": strictly_typed,
+            "note": ("the operator object was rejected by GraphQL validation — the variable is "
+                     "strictly typed (String); try an arg typed as a JSON/Object scalar"
+                     if strictly_typed else None),
+            "baseline": {"status": control[0].status, "length": control[0].length,
+                         "data": control[0].data}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def parser_diff_probe(target: str, param: str, method: str = "POST") -> dict:
+    """**HTTP parser-differential** probe — a WAF-bypass *multiplier*, detection-only.
+    A fronting WAF and the app behind it often parse the same request differently;
+    that disagreement is the primitive behind most modern WAF bypasses. Sends benign
+    canonical-vs-quirk twins carrying an inert canary and reports where the app **(a)
+    decoded** an encoded-only canary — UTF-7 (`+AG0-`) or overlong UTF-8 (`%C1%AD`)
+    reflected back as plain text (strong: a proven transform) — or **(b) accepted and
+    parsed** a form a *standard* parser rejects — JSON comments / trailing commas / a
+    leading UTF-8 BOM, or bare-LF multipart line endings — while an echo-everything
+    endpoint is excluded (medium: a real lax-parser surface). Duplicate JSON keys /
+    multipart fields are RFC-permitted, so they are reported only as a `precedence`
+    lead (which value wins) and never raise the verdict. Delivers nothing executable
+    and extracts nothing; smuggling a real payload through a confirmed differential is
+    Strix's job. Best against an endpoint that echoes `param`. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+
+    async def _send(req, http_method):
+        u, b, h = req
+        r = await ctx.http.fetch(u, method=http_method, body=b, headers=(h or None),
+                                 follow_redirects=False, scope_check=_scope_check())
+        body = r.text(50_000).lower()
+        return parserdiffmod.Resp(
+            status=r.status, length=len(r.body),
+            has_canary=parserdiffmod.CANARY in body,
+            has_decoy=parserdiffmod.DECOY in body)
+
+    C, D = parserdiffmod.CANARY, parserdiffmod.DECOY
+    lanes: list[dict] = []
+
+    # --- decode lanes (strong): sent encoded-only; a plain-canary reflection proves
+    #     the app applied the transform.
+    utf7_base = await _send(parserdiffmod.form_canonical(url, param, C, "POST"), "POST")
+    utf7_quirk = await _send(parserdiffmod.utf7_form(url, param, C), "POST")
+    hit = parserdiffmod.assess_decode(utf7_base, utf7_quirk)
+    if hit:
+        lanes.append({"lane": "charset_utf7", **hit})
+
+    ov_base = await _send(parserdiffmod.form_canonical(url, param, C, "GET"), "GET")
+    ov_quirk = await _send(parserdiffmod.overlong_query(url, param, C), "GET")
+    hit = parserdiffmod.assess_decode(ov_base, ov_quirk)
+    if hit:
+        lanes.append({"lane": "overlong_utf8", **hit})
+
+    # --- JSON tolerance lanes (standard-parser-rejected → scored): canonical + a
+    #     reject-control that gates out echo-everything endpoints.
+    j_base = await _send(parserdiffmod.json_canonical(url, param, C), "POST")
+    j_invalid = await _send(parserdiffmod.json_invalid(url, param, C), "POST")
+    json_quirks = [
+        ("json_comment", parserdiffmod.json_comment(url, param, C)),
+        ("json_trailing", parserdiffmod.json_trailing(url, param, C)),
+        ("json_bom", parserdiffmod.json_bom(url, param, C)),
+    ]
+    for label, req in json_quirks:
+        hit = parserdiffmod.assess_tolerance(j_base, await _send(req, "POST"), j_invalid)
+        if hit:
+            lanes.append({"lane": label, **hit})
+
+    # --- multipart tolerance lane (bare-LF line endings a strict CRLF parser rejects).
+    mp_base = await _send(parserdiffmod.multipart_canonical(url, param, C), "POST")
+    mp_invalid = await _send(parserdiffmod.multipart_invalid(url, param, C), "POST")
+    hit = parserdiffmod.assess_tolerance(
+        mp_base, await _send(parserdiffmod.multipart_lf(url, param, C), "POST"), mp_invalid)
+    if hit:
+        lanes.append({"lane": "multipart_lf", **hit})
+
+    # --- precedence leads (RFC-permitted duplicate keys / fields → informational
+    #     only, never scored: acceptance is standard, only *which value wins* matters).
+    precedence: list[dict] = []
+    p = parserdiffmod.assess_precedence(
+        j_base, await _send(parserdiffmod.json_dupkey(url, param, D, C), "POST"))
+    if p:
+        precedence.append({"lane": "json_dupkey", **p})
+    p = parserdiffmod.assess_precedence(
+        mp_base, await _send(parserdiffmod.multipart_dup(url, param, D, C), "POST"))
+    if p:
+        precedence.append({"lane": "multipart_dup", **p})
+
+    decode_hit = any(x["strong"] for x in lanes)
+    injection_hits = [f"parser-diff/{x['lane']}" for x in lanes]
+    verdict = confirmmod.evaluate(
+        injection_hits=injection_hits,
+        reflected=decode_hit,
+        status_changed=False)
+    return {"target": url, "param": param, "method": m, **verdict,
+            "lanes": lanes, "precedence": precedence,
+            "reflective": utf7_base.has_canary or j_base.has_canary,
+            "note": None if lanes else
+            "no scored parser differential observed (or endpoint does not echo the parameter)"}
 
 
 @mcp.tool()

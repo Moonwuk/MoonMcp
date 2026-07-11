@@ -57,7 +57,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
             "response_leak_probe", "reset_poison_probe", "path_bypass_probe",
             "debug_exposure",
-            "screenshot", "browser_open", "browser_eval", "browser_interact",
+            "screenshot", "browser_open", "browser_eval", "browser_interact", "cspp_probe",
             "analyze_binary", "analyze_config", "jwt_analyze", "jwt_crack",
             "oauth_probe", "oauth_redirect_probe",
         ],
@@ -72,7 +72,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
             "logic_probe", "race_probe", "workflow_probe", "value_probe", "jwt_jku_probe",
             "nosqli_probe", "db_exposure", "second_order_sqli_probe", "orm_leak_probe",
-            "fastjson_oast_probe", "ssrf_protocol_probe",
+            "fastjson_oast_probe", "ssrf_protocol_probe", "parser_diff_probe",
+            "graphql_nosqli",
         ],
     )),
     ("orchestration", (
