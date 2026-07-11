@@ -14,9 +14,14 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
 
 from ..net.http import HttpClient
+
+# Attacker-controlled host the crafted redirect_uri variants point at. Requests are
+# sent with redirects DISABLED, so this host is never actually contacted — a 3xx whose
+# Location lands here proves the authorization endpoint accepted an attacker redirect_uri.
+_OAUTH_CANARY = "moonmcp-oauth-canary.example"
 
 _WELL_KNOWN = ("/.well-known/openid-configuration", "/.well-known/oauth-authorization-server")
 _ENDPOINT_KEYS = (
@@ -76,6 +81,61 @@ def analyze_oidc_metadata(meta: dict) -> list[dict]:
         add("info", "public clients allowed",
             "token_endpoint_auth_methods_supported includes none (public client)")
     return out
+
+
+def redirect_uri_variants(legit_host: str, canary: str = _OAUTH_CANARY) -> list[tuple[str, str]]:
+    """Attacker `redirect_uri` values that exploit the common allow-list weaknesses
+    (open host, subdomain/suffix, `@`-host, path-traversal, backslash confusion)."""
+
+    lh = legit_host or "app.example.com"
+    return [
+        ("attacker-host", f"https://{canary}/callback"),
+        ("subdomain-suffix", f"https://{lh}.{canary}/callback"),
+        ("userinfo-host", f"https://{lh}@{canary}/callback"),
+        ("path-traversal", f"https://{lh}/callback/..;/@{canary}/"),
+        ("backslash-confusion", f"https://{lh}\\@{canary}/"),
+    ]
+
+
+def _lands_on_canary(location: str, canary: str = _OAUTH_CANARY) -> bool:
+    """Does a redirect ``Location`` navigate to the attacker canary host?"""
+
+    if not location:
+        return False
+    try:
+        h = (urlsplit(location).hostname or "").lower()
+    except ValueError:
+        return False
+    return h == canary or h.endswith("." + canary)
+
+
+async def probe_redirect_uri_bypass(client: HttpClient, authorization_endpoint: str, *,
+                                    client_id: str | None = None,
+                                    scope_check: Callable[[str], bool] | None = None) -> list[dict]:
+    """Replay attacker `redirect_uri` variants at the authorization endpoint (redirects
+    disabled) and flag any that make the server 3xx to the canary — an OAuth
+    redirect_uri bypass → auth-code/token theft → account takeover."""
+
+    ep = authorization_endpoint
+    legit_host = urlsplit(ep).hostname or ""
+    findings: list[dict] = []
+    for label, ruri in redirect_uri_variants(legit_host):
+        params = {"response_type": "code", "redirect_uri": ruri, "scope": "openid",
+                  "state": "moonoauthcanary"}
+        if client_id:
+            params["client_id"] = client_id
+        sep = "&" if "?" in ep else "?"
+        test_url = f"{ep}{sep}{urlencode(params)}"
+        r = await client.fetch(test_url, follow_redirects=False, timeout=12.0, scope_check=scope_check)
+        if r.status is not None and 300 <= r.status < 400 and _lands_on_canary(r.header("Location") or ""):
+            findings.append({
+                "kind": "oauth_redirect_bypass", "technique": label, "redirect_uri": ruri,
+                "location": (r.header("Location") or "")[:200], "severity": "high", "verdict": "review",
+                "detail": f"the authorization endpoint 3xx-redirected to an attacker redirect_uri "
+                          f"({label}) — OAuth redirect_uri allow-list bypass: an attacker steals the "
+                          "auth code/token → account takeover. Confirm the code/token is delivered.",
+            })
+    return findings
 
 
 async def probe_oidc(client: HttpClient, base_url: str, *,

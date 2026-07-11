@@ -1726,6 +1726,88 @@ async def oauth_probe(target: str) -> dict:
 
 
 @mcp.tool()
+@active_tool()
+async def oauth_redirect_probe(target: str, client_id: str | None = None,
+                               authorization_endpoint: str | None = None) -> dict:
+    """**OAuth `redirect_uri` bypass chain** — a one-click-ATO class nuclei can't reason
+    about. Discovers the `authorization_endpoint` (or pass `authorization_endpoint=`),
+    then replays attacker `redirect_uri` variants (attacker-host, subdomain/suffix,
+    `@`-host, path-traversal, backslash) at it with **redirects disabled** — a 3xx whose
+    `Location` lands on the canary proves the allow-list is bypassable, so an attacker
+    steals the auth code/token → account takeover. Supply a known public `client_id`
+    for the strongest signal. Benign GETs; the canary is never contacted. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sc = _scope_check()
+    ep = authorization_endpoint
+    if not ep:
+        oidc = await oauthmod.probe_oidc(ctx.http, url, scope_check=sc)
+        ep = oidc.endpoints.get("authorization_endpoint")
+    if not ep:
+        return {"target": url, "error": "no authorization_endpoint — pass authorization_endpoint= "
+                "or a base URL that serves an OIDC discovery document"}
+    findings = await oauthmod.probe_redirect_uri_bypass(ctx.http, ep, client_id=client_id, scope_check=sc)
+    return {
+        "target": url, "authorization_endpoint": ep, "client_id": client_id,
+        "vulnerable": bool(findings), "findings": findings,
+        "note": ("attacker redirect_uri accepted — confirm the code/token is delivered to it (ATO)"
+                 if findings else "no redirect_uri variant landed on the canary"),
+    }
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
+                        oast_token: str | None = None, wait: float = 2.0) -> dict:
+    """**JWT `jku`/`x5u` key-injection (SSRF) probe.** Re-issues `token` with a `jku`
+    (or `x5u`) header pointing at a MoonMCP **OAST canary**, replays it to `target` (an
+    authed endpoint that verifies the JWT) as `Authorization: Bearer`, and polls for a
+    callback — a callback means the server fetched attacker-controlled key material =
+    key-injection / SSRF (CVE-2018-0114), a path to full token forgery. Start
+    `oast_selfhost`/`oast_configure` first. **Callback-only** — never hosts a valid JWKS;
+    weaponization → Strix. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return {"error": "oast_unconfigured",
+                    "detail": "start oast_selfhost or oast_configure before probing jku/x5u SSRF"}
+        cb = ctx.oast.generate(label="jwt_jku")
+    param = "x5u" if header_param.lower() == "x5u" else "jku"
+    try:
+        forged = jwtmod.forge_remote_key_header(token, cb.http_url, param=param)
+    except ValueError:
+        return {"error": "invalid_token", "detail": "the supplied token is not a JWT"}
+    await ctx.http.fetch(url, method="GET", headers={"Authorization": f"Bearer {forged}"},
+                         follow_redirects=False, scope_check=_scope_check())
+    await asyncio.sleep(max(0.0, min(wait, 5.0)))
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(cb.token)
+    else:
+        poll = ctx.oast.poll_target(cb.token)
+        hits = []
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, follow_redirects=True)
+                hits = oastmod.parse_interactions(r.text())
+            except Exception:
+                hits = []
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "header_param": param, "canary": cb.http_url, "token_id": cb.token,
+           **verdict, "interactions": hits[:20]}
+    if not hits:
+        out["note"] = "no callback yet — the server may fetch the key later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
 @active_tool(intrusive=True)
 async def cache_deception_probe(target: str) -> dict:
     """Test an authenticated page for **web cache deception** — the cache storing
