@@ -8,8 +8,10 @@ hostnames worth adding to scope.
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import ssl
+import tempfile
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,11 +50,33 @@ def _parse_cert_date(value: str) -> datetime | None:
         return None
 
 
+def _decode_der_cert(der: bytes) -> dict:
+    """Decode a DER certificate into the ``getpeercert()``-style dict WITHOUT trust
+    verification. ``getpeercert()`` returns ``{}`` under ``CERT_NONE`` (CPython does
+    not decode an unverified peer cert), so to inspect a cert regardless of trust we
+    parse the raw DER ourselves via the stdlib decoder."""
+
+    if not der:
+        return {}
+    try:
+        pem = ssl.DER_cert_to_PEM_cert(der)
+        tf = tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False)
+        try:
+            tf.write(pem)
+            tf.close()
+            return ssl._ssl._test_decode_cert(tf.name)  # type: ignore[attr-defined]
+        finally:
+            os.unlink(tf.name)
+    except Exception:
+        return {}
+
+
 def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | None) -> TlsResult:
     result = TlsResult(host=host, port=port)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    der = b""
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=server_name or host) as tls:
@@ -60,7 +84,8 @@ def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | N
                 result.version = tls.version()
                 cipher = tls.cipher()
                 result.cipher = cipher[0] if cipher else None
-                cert = tls.getpeercert()
+                # getpeercert() is {} under CERT_NONE — grab the DER and decode it.
+                der = tls.getpeercert(binary_form=True) or b""
     except TimeoutError:
         result.error = "connection timed out"
         return result
@@ -68,6 +93,7 @@ def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | N
         result.error = str(exc)
         return result
 
+    cert = _decode_der_cert(der)
     if not cert:
         result.error = "no certificate presented"
         return result

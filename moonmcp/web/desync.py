@@ -215,10 +215,15 @@ def _modern_payloads(host: str, path: str) -> dict[str, bytes]:
         "expect_malformed": _raw_bytes(host, path, method="POST",
                                        extra_headers="Expect: y 100-continue\r\nContent-Length: 30\r\n"),
         # Chunk-extension on the terminating chunk (CVE-2025-55315 Kestrel class) —
-        # a complete message; compared against the control's status.
+        # a complete message; compared against a plain chunked-POST baseline below so
+        # ONLY the chunk-extension differs (not the request method).
         "chunk_ext": _raw_bytes(host, path, method="POST",
                                 extra_headers="Transfer-Encoding: chunked\r\n",
                                 body="0;moonmcp=1\r\n\r\n"),
+        # The same chunked POST with a plain terminating chunk (no extension).
+        "chunk_control": _raw_bytes(host, path, method="POST",
+                                    extra_headers="Transfer-Encoding: chunked\r\n",
+                                    body="0\r\n\r\n"),
     }
 
 
@@ -250,10 +255,15 @@ def interpret_modern(probes: dict[str, dict]) -> tuple[list[str], str]:
             (e1.get("status"), e1.get("outcome")) != (e2.get("status"), e2.get("outcome")):
         ind.append("Expect: 100-continue handling diverges on a malformed twin "
                    "(`Expect: y 100-continue`) — 0.CL candidate (CVE-2025-32094 class)")
-    cs, xs = control.get("status"), probes.get("chunk_ext", {}).get("status")
-    if accepted("chunk_ext") and cs is not None and xs is not None and xs != cs:
-        ind.append("A chunk-extension on the terminating chunk changed the response vs the control "
-                   "— review chunk-extension parsing (CVE-2025-55315 class)")
+    # Compare the chunk-extension POST against a plain chunked POST (same method +
+    # framing, only the extension differs) — NOT the GET control, or a mere
+    # method-difference (POST-redirect-GET) would masquerade as a parsing divergence.
+    cc = probes.get("chunk_control", {})
+    cs, xs = cc.get("status"), probes.get("chunk_ext", {}).get("status")
+    if accepted("chunk_ext") and cc.get("outcome") == "response" and \
+            cs is not None and xs is not None and xs != cs:
+        ind.append("A chunk-extension on the terminating chunk changed the response vs a plain "
+                   "chunked POST — review chunk-extension parsing (CVE-2025-55315 class)")
     return ind, ("review" if ind else "low")
 
 

@@ -68,7 +68,9 @@ def assess_rtdb(status: int | None, body: str) -> dict | None:
                 "detail": "RTDB rules deny anonymous read (Permission denied)."}
     if status == 200:
         stripped = (body or "").strip()
-        if stripped == "null" or stripped[:1] in "{[":
+        # NB: `"" in "{["` is True in Python, so an empty 200 body must be excluded —
+        # require actual JSON content (`null`, or a leading `{`/`[`).
+        if stripped == "null" or stripped[:1] in ("{", "["):
             return {"verdict": "confirmed", "severity": "high",
                     "detail": "RTDB is readable with NO auth (/.json?shallow=true returned data) — "
                               "open Security Rules; the whole dataset is exposed. Bulk dump → Strix."}

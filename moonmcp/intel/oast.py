@@ -127,5 +127,14 @@ def parse_interactions(body: str) -> list[dict]:
             v = data.get(key)
             if isinstance(v, list):
                 return [d for d in v if isinstance(d, dict)]
-        return [data]
+        # A dict with no list of interactions is only a real hit if it LOOKS like a
+        # single interaction record — otherwise an empty/error poll envelope
+        # (e.g. interactsh's {"data": null, "aes_key": ...}) would be miscounted as
+        # one interaction and falsely "confirm" a blind vuln.
+        interaction_fields = {"protocol", "remote-address", "remoteaddress", "unique-id",
+                              "uniqueid", "full-id", "fullid", "raw-request", "rawrequest",
+                              "q-type", "qtype"}
+        if {k.lower() for k in data} & interaction_fields:
+            return [data]
+        return []
     return []

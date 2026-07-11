@@ -337,16 +337,26 @@ def _host_like_tokens(args: list[str]) -> list[str]:
 
     import ipaddress
 
-    found: list[str] = []
+    # Expand comma/whitespace-delimited values so an embedded target (e.g.
+    # `-u in-scope.example.com,169.254.169.254`) is scope-checked, not skipped whole.
+    # `_HOSTISH_RE` requires a dot+TLD and IPs are matched separately, so tag/status
+    # lists (`-tags redis,mongodb`, `-mc 200,301`) never look host-like.
+    expanded: list[str] = []
     for tok in args:
+        t = tok.strip()
+        if t and not t.startswith("-") and ("," in t or " " in t):
+            expanded.extend(p for p in re.split(r"[,\s]+", t) if p)
+        else:
+            expanded.append(tok)
+
+    found: list[str] = []
+    for tok in expanded:
         t = tok.strip()
         if not t or t.startswith("-"):
             continue
         if "://" in t:
             found.append(t)
             continue
-        if "," in t or " " in t:
-            continue  # list / not a single bare host
         if "/" in t:
             # A CIDR block is itself a scan target; a host/path (example.com/api)
             # must still have its host scope-checked — don't skip either.
@@ -1969,7 +1979,7 @@ async def oauth_redirect_probe(target: str, client_id: str | None = None,
 
 
 @mcp.tool()
-@active_tool(intrusive=True)
+@active_tool("target", intrusive=True)
 async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
                         oast_token: str | None = None, wait: float = 2.0) -> dict:
     """**JWT `jku`/`x5u` key-injection (SSRF) probe.** Re-issues `token` with a `jku`
@@ -2168,7 +2178,7 @@ async def race_probe(target: str, method: str = "POST", n: int = 20,
 
 
 @mcp.tool()
-@active_tool(intrusive=True)
+@active_tool(self_scoped=True, intrusive=True)
 async def workflow_probe(steps: list[dict]) -> dict:
     """**Workflow / step-skipping** abuse on a multi-step flow. Pass the flow as an
     ORDERED list of steps — each a dict `{"url", "method"?, "body"?, "success"?}`
@@ -2182,6 +2192,12 @@ async def workflow_probe(steps: list[dict]) -> dict:
     """
 
     ctx = get_context()
+    # self_scoped: enforce the intrusive gate + scope + SSRF-resolve guard on EACH
+    # step's host (the decorator can't scope-check the steps list itself).
+    for s in steps:
+        u = s if isinstance(s, str) else (s.get("url") if isinstance(s, dict) else None)
+        if u:
+            await _require_scope(str(u), intrusive=True, tool="workflow_probe")
     result = await workflowmod.probe_workflow_skip(ctx.http, steps, scope_check=_scope_check())
     n = len(result.get("findings", []))
     result["note"] = (f"{n} step-skipping lead(s) — confirm the business effect of reaching the step "

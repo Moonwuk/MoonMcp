@@ -124,8 +124,7 @@ def _blocking_fetch(
     started = time.monotonic()
     req = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
     ctx = ssl.create_default_context() if verify_tls else _insecure_context()
-    https_handler = urllib.request.HTTPSHandler(context=ctx)
-    opener = urllib.request.build_opener(https_handler, _NoRedirect)
+    opener = _build_opener(ctx)
     resp: HTTPResponse | None = None
     try:
         resp = opener.open(req, timeout=timeout)
@@ -198,6 +197,35 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
+    """An opener with ONLY http(s) handlers — never urllib's default FileHandler /
+    FTPHandler / DataHandler, so a redirect (or crafted URL) to ``file://`` /
+    ``ftp://`` / ``data:`` cannot smuggle a local-file read or a non-HTTP fetch past
+    the SSRF guard. Unknown schemes hit UnknownHandler → a clean URLError, not a crash."""
+
+    opener = urllib.request.OpenerDirector()
+    for h in (
+        urllib.request.ProxyHandler(),
+        urllib.request.UnknownHandler(),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(context=ctx),
+        urllib.request.HTTPDefaultErrorHandler(),
+        _NoRedirect(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(h)
+    return opener
+
+
+def _origin(u: str) -> tuple[str, str, int | None]:
+    sp = urlsplit(u)
+    return (sp.scheme.lower(), (sp.hostname or "").lower(), sp.port)
+
+
+# Headers that must never be replayed to a different origin across a redirect.
+_SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+
+
 class HttpClient:
     """Async HTTP client with shared rate limiting and manual redirect tracing."""
 
@@ -238,16 +266,32 @@ class HttpClient:
         suppress_auth: bool = False,
     ) -> HttpResult:
         merged = {"User-Agent": self._ua, "Accept-Encoding": "gzip, deflate", "Accept": "*/*"}
+        auth_keys: set[str] = set()
         if self._auth_provider is not None and not suppress_auth:
-            merged.update(self._auth_provider())
+            ap = self._auth_provider()
+            auth_keys = set(ap)
+            merged.update(ap)
         if headers:
             merged.update(headers)  # per-call headers win over engagement auth
+        origin0 = _origin(url)
         chain: list[str] = []
         current = url
         seen: set[str] = set()
         result: HttpResult | None = None
         hops = max_redirects if follow_redirects else 0
         for _ in range(hops + 1):
+            # Only ever speak HTTP(S). A redirect (or the caller) that hands us a
+            # file:// / ftp:// / data: / gopher: URL is refused, not fetched.
+            scheme = urlsplit(current).scheme.lower()
+            if scheme not in ("http", "https"):
+                reason = f"refusing non-HTTP(S) scheme {scheme or '(none)'!r}"
+                if result is None:
+                    return HttpResult(url=url, final_url=current, status=None, reason="",
+                                      headers=[], body=b"", elapsed_ms=0.0,
+                                      error=reason, blocked_reason=reason)
+                result.redirect_blocked = current
+                result.blocked_reason = reason
+                break
             # SSRF connect-guard: resolve+check this hop's host before we touch it.
             # The guard does a blocking getaddrinfo, so keep it off the event loop.
             if self._connect_guard is not None:
@@ -286,6 +330,12 @@ class HttpClient:
             if scope_check is not None and not scope_check(nxt):
                 result.redirect_blocked = nxt
                 break
+            # Drop credentials before crossing to a different origin — never replay
+            # Authorization/Cookie (or engagement-auth headers) to another host.
+            if _origin(nxt) != origin0:
+                for k in list(merged):
+                    if k.lower() in _SENSITIVE_HEADERS or k in auth_keys:
+                        merged.pop(k, None)
             seen.add(nxt)
             chain.append(nxt)
             current = nxt

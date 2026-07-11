@@ -19,7 +19,7 @@ _ERROR_SIGNATURES = [
     "System.Web", "at java.", "ORA-", "SQLSTATE", "Fatal error", "Warning: ",
     "Microsoft OLE DB", "You have an error in your SQL syntax", "stack trace",
     "/var/www/", "DEBUG = True", "Werkzeug Debugger", "django.", "Rails.root",
-    "Exception Details", ".java:", "line ", "Undefined index",
+    "Exception Details", ".java:", " on line ", "Undefined index",
 ]
 _CANARY_HOST = "moonmcp-behaviour-canary.example"
 

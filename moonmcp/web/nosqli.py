@@ -131,6 +131,8 @@ def assess_operator(control: tuple[Resp, Resp], twin: tuple[Resp, Resp]) -> dict
     r1, r2 = twin
     if not _stable(r1, r2):
         return None
+    if not _stable(c1, c2):
+        return None  # a noisy/unreproducible baseline can't be trusted for a flip
     reasons: list[str] = []
     strong = False
     if r1.status is not None and r1.status != c1.status:
@@ -139,8 +141,7 @@ def assess_operator(control: tuple[Resp, Resp], twin: tuple[Resp, Resp]) -> dict
     if r1.session_cookie and not c1.session_cookie:
         reasons.append("new session Set-Cookie appeared")
         strong = True
-    control_stable = _stable(c1, c2)
-    if control_stable and r1.length - c1.length >= max(64, c1.length // 2):
+    if r1.length - c1.length >= max(64, c1.length // 2):
         reasons.append(f"response +{r1.length - c1.length} bytes vs baseline (more records?)")
     if not reasons:
         return None
