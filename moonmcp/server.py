@@ -91,6 +91,7 @@ from .web import inject as injectmod
 from .web import jwt as jwtmod
 from .web import logic as logicmod
 from .web import methods as methodsmod
+from .web import nosqli as nosqlimod
 from .web import oauth as oauthmod
 from .web import params as paramsmod
 from .web import pathnorm as pathnormmod
@@ -3548,6 +3549,77 @@ async def sqli_probe(target: str, param: str, method: str = "GET") -> dict:
             "boolean_differential": bool_diff, "reproducible": bool(true_stable and false_stable),
             "true_status": t1.status, "true_len": len(t1.body),
             "false_status": f1.status, "false_len": len(f1.body)}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
+    """**NoSQL (MongoDB) operator-injection** probe — non-destructive. Sends an
+    *object* where the app expects a *string* — `$ne`/`$gt`/`$nin` in both the
+    bracket form (`param[$ne]=x`) and JSON form (`{"param":{"$ne":null}}`) — plus a
+    `$where` server-side-JS **boolean** pair (`return true` vs `return false`).
+    Confirmed when a *reproducible* operator twin flips the outcome vs a plain-string
+    baseline (auth bypass / more records), the `$where` boolean differs, or a MongoDB
+    error signature fires. No data extraction (no `$regex` char-oracle, no `sleep()` —
+    those go to NoSQLMap/Strix). Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    bodies: list[str] = []
+
+    async def _send(req, http_method):
+        u, b, h = req
+        r = await ctx.http.fetch(u, method=http_method, body=b, headers=(h or None),
+                                 follow_redirects=False, scope_check=_scope_check())
+        bodies.append(r.text(50_000))
+        return nosqlimod.Resp(status=r.status, length=len(r.body),
+                              session_cookie=nosqlimod.has_session_cookie(r.get_all("set-cookie")))
+
+    # Negative baseline: a plain scalar unlikely to match, sent twice.
+    c_req = nosqlimod.scalar_request(url, param, nosqlimod.CONTROL, m)
+    control = (await _send(c_req, m), await _send(c_req, m))
+
+    # Operator lane: bracket twins in the requested method + JSON twins as POST.
+    operator_hits: list[dict] = []
+    for label, op, val in nosqlimod.BRACKET_TWINS:
+        req = nosqlimod.bracket_request(url, param, op, val, m)
+        twin = (await _send(req, m), await _send(req, m))
+        hit = nosqlimod.assess_operator(control, twin)
+        if hit:
+            operator_hits.append({"variant": label, **hit})
+    for label, obj in nosqlimod.JSON_TWINS:
+        req = nosqlimod.json_request(url, param, obj)
+        twin = (await _send(req, "POST"), await _send(req, "POST"))
+        hit = nosqlimod.assess_operator(control, twin)
+        if hit:
+            operator_hits.append({"variant": label, **hit})
+
+    # $where server-side-JS boolean oracle (JSON body, boolean only).
+    wt = (await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_TRUE), "POST"),
+          await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_TRUE), "POST"))
+    wf = (await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_FALSE), "POST"),
+          await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_FALSE), "POST"))
+    where_hit = nosqlimod.assess_where(wt, wf)
+
+    # Error lane: MongoDB/BSON error signatures leaked by any twin.
+    sig_hits = injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+
+    strong_op = next((h for h in operator_hits if h["strong"]), None)
+    injection_hits = [f"nosqli/{h['variant']}" for h in operator_hits]
+    injection_hits += [f"{h['class']}/{h['technology']}" for h in sig_hits]
+    if where_hit:
+        injection_hits.append("nosqli/$where-js")
+    verdict = confirmmod.evaluate(
+        injection_hits=injection_hits,
+        status_changed=bool(strong_op) or bool(where_hit and where_hit["status_changed"]),
+        length_delta=(where_hit["length_delta"] if where_hit else 0))
+    return {"target": url, "param": param, "method": m, **verdict,
+            "operator_hits": operator_hits, "where_oracle": where_hit,
+            "error_signatures": sig_hits[:10],
+            "baseline": {"status": control[0].status, "length": control[0].length}}
 
 
 @mcp.tool()

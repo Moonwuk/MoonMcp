@@ -15,6 +15,59 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence
         pass
 
+    def _nosqli_reply(self, text: str, ctype: str):
+        # DELIBERATELY VULNERABLE login: a plain scalar `user` is denied (401), but
+        # an operator OBJECT ($ne/$gt/$nin, or $where returning true) bypasses auth
+        # (200 + a session cookie + a longer "records" body). $where:false stays 401,
+        # giving the boolean oracle its differential.
+        from urllib.parse import parse_qs
+        operator = where_false = False
+        if "json" in ctype:
+            import json as _json
+            try:
+                v = _json.loads(text).get("user")
+            except Exception:
+                v = None
+            if isinstance(v, dict):
+                where_false = v.get("$where") == "return false"
+                operator = not where_false
+        else:
+            operator = any("[$" in k for k in parse_qs(text))
+        if operator and not where_false:
+            body = (b"<html>welcome admin! records: alice bob carol dave "
+                    b"erin frank grace heidi ivan</html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Set-Cookie", "session=itsme; Path=/; HttpOnly")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            body = b"<html>invalid credentials</html>"
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def do_POST(self):
+        # drain the request body so the socket stays clean
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path.startswith("/nosqli-safe"):
+            # NOT vulnerable: identical 200 regardless of operator vs scalar.
+            body = b"<html>login page</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/nosqli"):
+            self._nosqli_reply(raw.decode("utf-8", "replace"),
+                               self.headers.get("Content-Type", ""))
+            return
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self):
         if self.path == "/echo":
             # Echo the request headers back as JSON (used to verify auth context).

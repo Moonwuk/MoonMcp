@@ -57,7 +57,7 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 
 | # | Capability | New/extends | Lane | Why first |
 |---|---|---|---|---|
-| 1 | `nosqli_probe` — Mongo operator (`$ne/$gt/$in`) auth-bypass + `$where` boolean | **new** `web/nosqli.py` | native edge | `nosqli` exists only in the KB, never as a probe; lives on real login/search endpoints; nuclei can't express the object-injection differential; consensus #1 across 3 agents |
+| 1 | `nosqli_probe` — Mongo operator (`$ne/$gt/$in`) auth-bypass + `$where` boolean | ✅ **SHIPPED** `web/nosqli.py` | native edge | `nosqli` existed only in the KB, never as a probe; lives on real login/search endpoints; nuclei can't express the object-injection differential; consensus #1 across 3 agents |
 | 2 | `db_exposure` — raw-socket + HTTP unauth datastore sweep | **new** `recon/datastores.py` | native edge | `port_scan` sends no protocol probe today; covers Redis/Mongo/ES/CouchDB/memcached/Zookeeper/Kafka/YARN/TiDB/InfluxDB/vector-DB in one scope-gated fan-out |
 | 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | extend `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
 | 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | **new**, model on `workflow_probe` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher; the workflow engine already exists |
@@ -78,7 +78,13 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 biggest single gap. All signals below are benign two/three-request differentials; blind
 regex/`sleep` *extraction* is delegated to **NoSQLMap** or Strix.
 
-### A.1 MongoDB operator-injection auth bypass (`$ne`/`$gt`/`$in`/`$nin`) ❌ — RANK 1
+### A.1 MongoDB operator-injection auth bypass (`$ne`/`$gt`/`$in`/`$nin`) ✅ (SHIPPED) — RANK 1
+Implemented in `moonmcp/web/nosqli.py` + the `nosqli_probe` tool (intrusive): sends the
+bracket (`param[$ne]=x`) and JSON (`{"param":{"$ne":null}}`) operator twins twice each and
+flags a *reproducible* flip vs a plain-`CONTROL` baseline (status change / new session
+`Set-Cookie` / materially more body), plus a `$where` boolean oracle and `nosqli`
+error-signature matching. Detection-only; `$regex` char-extraction / `sleep()` → NoSQLMap/Strix.
+
 When an app forwards `req.body`/`req.query` straight into a Mongo/Mongoose filter, an
 attacker sends an *object* where a *string* is expected: `{"$ne":null}` matches any
 value, `{"$gt":""}` any non-empty string, `{"$in":[...]}` enumerates admins → on
@@ -94,7 +100,10 @@ value, `{"$gt":""}` any non-empty string, `{"$in":[...]}` enumerates admins → 
 - Source: https://portswigger.net/web-security/nosql-injection · https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/NoSQL%20Injection/README.md · https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.6-Testing_for_NoSQL_Injection
 - **Mapping:** **new `nosqli_probe`** (`web/nosqli.py`, model on `stacks.py`; `web/inject.py:with_param` + a JSON-body variant). Register **light_active** (benign/differential). Deep boolean/regex extraction → NoSQLMap / Strix.
 
-### A.2 MongoDB `$where` server-side JS injection (boolean) ❌ — RANK 4
+### A.2 MongoDB `$where` server-side JS injection (boolean) ✅ (SHIPPED) — RANK 4
+Folded into `nosqli_probe` — `{"$where":"return true"}` vs `{"$where":"return false"}`
+reproducible boolean differential (never `sleep()`).
+
 `$where` evaluates a JS expression server-side (still default-enabled in many deploys).
 - **SAFE signal:** boolean-only — `{"$where":"return true"}` vs `{"$where":"return false"}`;
   compare response / record count. **Avoid `sleep()`** in detection (DoS-adjacent);

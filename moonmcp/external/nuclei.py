@@ -63,6 +63,10 @@ NATIVE_EDGE: dict[str, str] = {
                             "(one-click ATO). A discovery→differential chain, not a template match",
     "jwt_jku_probe": "re-issue the target's OWN token with jku/x5u→OAST, replay, correlate the "
                      "callback — cross-request key-injection/SSRF nuclei can't derive from the token",
+    "nosqli_probe": "MongoDB operator-injection ($ne/$gt/$nin/$where) — sends an OBJECT where a "
+                    "string is expected and diffs the auth/record outcome vs a plain-scalar "
+                    "baseline; a stateless per-template matcher can only fuzz a scalar value, "
+                    "never swap the value's TYPE for an operator document",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "
