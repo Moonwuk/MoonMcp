@@ -47,8 +47,10 @@ behavioural-infra (cross-sample statistical inference), `config_audit` forge-cha
 *classifier*, `surface_diff` (cross-run state).
 
 **NUCLEI-WEAK — modest/packaging edge, honest caveats:**
-`race_probe` (**our `asyncio.gather` is *not* the single-packet attack — subject to
-the same jitter; edge over nuclei is modest, and inferior to Turbo Intruder**),
+`race_probe` (**upgraded**: now a real **single-packet attack** via HTTP/1.1 last-byte
+synchronization — `moonmcp/web/singlepacket.py`, all N requests complete within ~1 ms,
+neutralizing the jitter the old `asyncio.gather` was bound to; the tighter HTTP/2
+single-packet variant is deferred as it needs the `h2` dependency),
 `value_probe`, `logic_probe`, `response_leak_probe`, `reset_poison_probe`,
 `path_bypass_probe`, `tls_behavior`, `oauth_probe`, `recover_sourcemaps`, `jwt_crack`
 (really a jwt_tool/hashcat wrapper), `desync_probe`, `confirm_finding`, `origin_discovery`.
@@ -81,6 +83,7 @@ raw-timing / business-intent), *not* "self-written" per se — several of our ow
 so the uplift is contingent on a strong lead→confirmed pipeline (`confirm_finding` +
 Strix); (2) the uplift only materializes on targets with stateful/multi-identity
 surface (APIs, checkout/auth flows, multi-tenant) — a static site gives the edge tools
-nothing to bite on; (3) `race_probe` needs a real single-packet implementation to be
-more than modest. **Invest in the CANNOT tier + the governance/orchestration layer;
-stop competing with nuclei on the FINE tier.**
+nothing to bite on; (3) `race_probe` now ships a real single-packet implementation
+(HTTP/1.1 last-byte sync), moving it from "modest" toward genuine edge. **Invest in the
+CANNOT tier + the governance/orchestration layer; stop competing with nuclei on the
+FINE tier.**

@@ -95,6 +95,7 @@ from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
+from .web import singlepacket as spmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
@@ -1836,20 +1837,40 @@ async def logic_probe(target: str, param: str | None = None, method: str = "GET"
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def race_probe(target: str, method: str = "POST", n: int = 20) -> dict:
-    """**Race-condition / limit-bypass** probe: fire N identical requests in PARALLEL
-    at a state-changing endpoint (coupon apply, vote, withdrawal, invite, signup)
-    and report how many returned 2xx — a non-atomic per-user limit lets more than
-    one through. Confirm the side effect actually happened >1×. Set the session with
-    `auth_set` for authenticated actions. Intrusive; in scope only.
+async def race_probe(target: str, method: str = "POST", n: int = 20,
+                     single_packet: bool = True, headers: dict[str, str] | None = None,
+                     body: str | None = None) -> dict:
+    """**Race-condition / limit-bypass** probe on a state-changing endpoint (coupon
+    apply, vote, withdrawal, invite, signup). By default uses the **single-packet
+    attack** (HTTP/1.1 last-byte synchronization) so all N requests complete at the
+    server within ~1 ms — neutralizing network jitter, which the naive parallel-fire
+    approach can't. Reports how many returned 2xx; >1 on a should-be-once action is a
+    race. Engagement `auth_set` cookies/headers are injected automatically; pass extra
+    `headers`/`body` as needed. Set `single_packet=False` for the plain asyncio-gather
+    fallback. Confirm the side effect actually happened >1×. Intrusive; in scope only.
     """
+
+    from urllib.parse import urlsplit
 
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
+    if single_packet:
+        parts = urlsplit(url)
+        tls = parts.scheme != "http"
+        host = parts.hostname or ""
+        port = parts.port or (443 if tls else 80)
+        path = parts.path or "/"
+        if parts.query:
+            path = f"{path}?{parts.query}"
+        hdrs = {**ctx.auth.merged_headers(), **(headers or {})}
+        req = spmod.build_request(host, path, method=method, headers=hdrs, body=(body or ""))
+        result = await spmod.single_packet_race(host, port, tls, req, n,
+                                                timeout=max(10.0, ctx.settings.timeout))
+        return {"target": url, "method": method.upper(), **result}
     result = await logicmod.probe_race(ctx.http, url, method=method, n=n,
                                        scope_check=_scope_check())
-    return {"target": url, "method": method.upper(), **result}
+    return {"target": url, "method": method.upper(), "technique": "asyncio-gather", **result}
 
 
 @mcp.tool()

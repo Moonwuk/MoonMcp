@@ -60,9 +60,9 @@ NATIVE_EDGE: dict[str, str] = {
                       "without completing prerequisites) — needs the ordered flow + sequence state",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
-    "race_probe": "N-parallel race; nuclei's race directive is gate-based and historically broken. "
-                  "CAVEAT (audit): our asyncio.gather is NOT a true single-packet attack — it is "
-                  "jitter-bound and weaker than Turbo Intruder; the edge here is modest",
+    "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "
+                  "complete within ~1ms, neutralizing jitter) — nuclei's race directive is gate-based "
+                  "and historically broken, and cannot do single-packet timing on its normalizing client",
     "desync_probe": "CL.TE / obfuscated-TE framing indicators on RAW sockets",
     "desync_modern_probe": "0.CL/TE.0/Expect/chunk-ext via response-timeout deltas on raw sockets — "
                            "nuclei's HTTP client normalises framing, so it cannot send these",
