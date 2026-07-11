@@ -640,7 +640,8 @@ Highest-ROI *net-new knowledge* — English tools don't fingerprint these at all
   `knowledge/vulns_data.py` default-cred KB; TiDB-status & PD-2379 unauth reads →
   `db_exposure`. Login attempt → Strix (agent lane: fingerprint → "try known default").
 
-### G.2 Korean domestic DBMS error signatures + default creds ❌ — RANK KR-A
+### G.2 Korean domestic DBMS error signatures + default creds 🟡 (signatures SHIPPED) — RANK KR-A
+Implemented — added Tibero (`TBR-####`/`com.tmax.tibero.jdbc`), CUBRID (`cubrid.jdbc.driver`), Altibase (`Altibase.jdbc.driver`) error signatures to the `sqli` KB class, so `sqli_probe`/`match_signatures` now fingerprint domestic KR DBMS. Default-cred KB still to add.
 Korean public sector/finance runs **Tibero** (domestic Oracle-replacement), **CUBRID**
 (gov portals), **Altibase** (telecom/finance). MoonMCP's SQLi error-signature DB has zero
 coverage → a SQLi on a `.go.kr` Tibero/CUBRID backend reports "unknown DBMS".
@@ -653,7 +654,8 @@ coverage → a SQLi on a `.go.kr` Tibero/CUBRID backend reports "unknown DBMS".
   zero new code path, `sqli_probe`/`match_injection_signatures` immediately gain
   domestic-DBMS fingerprinting; + a default-cred KB entry.
 
-### G.3 Cassandra / ScyllaDB CQL injection ❌ — RANK 12
+### G.3 Cassandra / ScyllaDB CQL injection ✅ (SHIPPED) — RANK 12
+Implemented — added Cassandra/ScyllaDB CQL error signatures (`com.datastax.driver`/`InvalidRequestException`/`no viable alternative at input`) to the `sqli` KB class; the generic boolean differential handles the active side.
 Concatenated CQL is injectable, constrained (drivers reject trailing comments/multi-
 statements) → boolean conditions + `ALLOW FILTERING`. KB has no `cql-injection` class.
 - **SAFE signal:** SQLi-style boolean differential + error-signature match
@@ -662,7 +664,8 @@ statements) → boolean conditions + `ALLOW FILTERING`. KB has no `cql-injection
 - **Mapping:** new KB class `cql-injection` in `injections_data.py` with signatures wired
   into `match_signatures()`; active differential handled by `sqli_probe`/nuclei DAST.
 
-### G.4 Adminer arbitrary-server file-read + SSRF (CVE-2021-21311) 🟡 (panel found) — RANK JP-KR
+### G.4 Adminer arbitrary-server file-read + SSRF (CVE-2021-21311) ✅ (SHIPPED) — RANK JP-KR
+Implemented — `debug_exposure`'s Adminer entry upgraded to `high` and now flags the user-controllable host field → rogue-MySQL LOCAL INFILE file-read / CVE-2021-21311 SSRF (CISA KEV); weaponize via Strix.
 `debug_exposure` finds the Adminer panel; the interesting part is Adminer connects to an
 **arbitrary DB host** → SSRF (CVE-2021-21311, CISA KEV, <4.7.9) and rogue-MySQL
 `LOAD DATA LOCAL INFILE` file-read — no creds on the target's own DB needed.
@@ -674,7 +677,8 @@ statements) → boolean conditions + `ALLOW FILTERING`. KB has no `cql-injection
   `arbitrary_db_host:true` flag; optional OAST-canary reachability check (intrusive).
   Rogue-MySQL file-read → Strix.
 
-### G.5 APAC / regional WAF fingerprints ❌ — RANK JP-KR
+### G.5 APAC / regional WAF fingerprints ✅ (SHIPPED) — RANK JP-KR
+Implemented — added Penta Security WAPPLES, MonitorApp AIWAF, Cloudbric, Scutum (ML-based), Shadan-kun (攻撃遮断くん) fingerprints to `web/waf.py` `_SIGNATURES`.
 MoonMCP's WAF DB is CN/RU/global. Missing: **WAPPLES** (#1 APAC share) + **MonitorApp
 AIWAF** (Korean gov/finance), **Scutum / Cloudbric / 攻撃遮断くん** (Japan). Scutum is
 explicitly ML-based not signature-based → down-weight naïve comment/case evasion against it.
