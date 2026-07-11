@@ -41,6 +41,14 @@ _SIGNATURES: dict[str, list[tuple[str, str]]] = {
                          ("body", "wzws-waf-cgi")],
     "Baidu Yunjiasu": [("server", "yunjiasu-nginx")],
     "BaoTa / aaPanel (宝塔)": [("body", "宝塔网站防火墙"), ("body", "waf.bt.cn")],
+    # APAC WAFs (JP/KR): Penta Security WAPPLES has the #1 APAC share; MonitorApp AIWAF
+    # fronts most KR gov/finance; Scutum/Cloudbric/Shadan-kun dominate Japan.
+    "Penta Security WAPPLES": [("body", "wapples"), ("body", "Penta Security"),
+                               ("header:server", "wapples")],
+    "MonitorApp AIWAF": [("cookie", "aiwaf"), ("body", "aiwaf"), ("header:server", "monitorapp")],
+    "Cloudbric": [("cookie", "_cloudbric"), ("body", "cloudbric"), ("header:server", "cloudbric")],
+    "Scutum (ML-based)": [("header:x-scutum", ""), ("cookie", "scutum"), ("body", "scutum.jp")],
+    "Shadan-kun (攻撃遮断くん)": [("body", "攻撃遮断くん"), ("body", "shadan"), ("cookie", "SBK_")],
 }
 
 # Benign-but-suspicious payloads (URL-encoded when sent) to see if a WAF trips.

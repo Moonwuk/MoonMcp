@@ -52,14 +52,30 @@ _PANELS: dict[str, tuple[str, list[str], str, str]] = {
         "Werkzeug interactive debugger console — arbitrary code execution if the PIN "
         "is unset or known"),
     "/adminer.php": (
-        "Adminer", ["Adminer", "adminer.org"], "medium",
-        "Adminer database console exposed"),
+        "Adminer", ["Adminer", "adminer.org"], "high",
+        "Adminer DB console exposed — the server/host field is user-controllable: point it at "
+        "an attacker MySQL for a rogue-server LOCAL INFILE file-read, or (Adminer <4.7.9) abuse "
+        "CVE-2021-21311 SSRF (CISA KEV). Parse the footer version; weaponize via Strix"),
     "/phpmyadmin/": (
         "phpMyAdmin", ["phpMyAdmin", "pmahomme"], "medium",
         "phpMyAdmin exposed"),
     "/rails/info/routes": (
         "Rails dev info", ["Routing Error", "Path / Url", "rails/info"], "medium",
         "Rails dev routes/properties exposed — running in development env"),
+    # DB admin consoles left reachable in prod — a direct browse/query/delete surface.
+    "/db/admin": (
+        "Mongo-Express", ["Mongo Express", "mongo-express"], "high",
+        "Mongo-Express DB console exposed — often no auth (ME_CONFIG_BASICAUTH unset) → "
+        "full browse/query/delete of every collection"),
+    "/browser/": (
+        "pgAdmin", ["pgAdmin", "pgadmin4"], "medium",
+        "pgAdmin console exposed — a full PostgreSQL admin UI"),
+    "/play": (
+        "ClickHouse /play", ["ClickHouse", "Play UI", "play-textarea"], "high",
+        "ClickHouse /play SQL console exposed (the DeepSeek pattern) — arbitrary SELECT over the DB"),
+    "/redisinsight": (
+        "RedisInsight", ["RedisInsight"], "medium",
+        "RedisInsight console exposed — a full Redis admin UI"),
 }
 
 

@@ -67,6 +67,20 @@ NATIVE_EDGE: dict[str, str] = {
                       "[field][startsWith], Ransack) — a filter differential over an injected ORM "
                       "lookup, with NO raw SQL, so neither nuclei's -dast sqli fuzzing nor sqli_probe "
                       "fires; the empty-prefix vs no-match reproducible diff is native-edge",
+    "ssrf_protocol_probe": "SSRF→internal-datastore reach: per-scheme OAST canaries (gopher/dict/ftp) "
+                           "to prove non-HTTP scheme deref, plus a loopback DB-port reachability "
+                           "differential vs a closed-port control — a two-request differential + OAST "
+                           "correlation across MoonMCP's own callback server, not a template match",
+    "fastjson_oast_probe": "Fastjson/Jackson autoType deserialization via a benign @type OAST "
+                           "canary (java.net.Inet4Address/URL) correlated to MoonMCP's own callback "
+                           "server — the request→callback correlation across MoonMCP's OAST is "
+                           "state nuclei's stateless matcher can't carry; deep gadget/JNDI → Strix",
+    "firebase_exposure": "Firebase RTDB open-rules — harvest the app's OWN databaseURL from its "
+                         "JS firebaseConfig, then a shallow unauth read of the derived backend; a "
+                         "config-discovery→backend-differential chain across two hosts, not a template match",
+    "supabase_exposure": "Supabase RLS-off — harvest the project URL + public anon key from the app "
+                         "JS, enumerate tables from the PostgREST schema, then a per-table limit=1 read "
+                         "with that key; key-discovery→schema→per-table differential, nuclei can't derive it",
     "second_order_sqli_probe": "stored SQLi where the sink is a DIFFERENT endpoint from the "
                                "injection — seed a tagged payload at a write endpoint, then drive "
                                "the read endpoints and correlate the SQL error/differential by the "

@@ -217,7 +217,12 @@ forge any-user token → full read/write (CVSS 9.8).
 - **Mapping:** `_probe_influxdb` in `stack_probe` (fingerprint via `GET /ping` →
   `X-Influxdb-Version`, then the empty-secret differential). Reuses `web/jwt.py`.
 
-### B.7 Vector-DB unauthenticated exposure sweep ❌ — RANK 11
+### B.7 Vector-DB unauthenticated exposure sweep 🟡 (SHIPPED via stack_probe) — RANK 11
+Implemented in `web/stacks.py` (`_probe_chroma`/`_probe_weaviate`/`_probe_qdrant` + passive
+signatures): read-only fingerprints — Chroma `/api/v2/heartbeat`+`/api/v2/version` (flags
+ChromaToast CVE-2026-45829, CVSS 10, all versions → critical lead → Strix), Weaviate
+`/v1/meta`, Qdrant `/collections`. Milvus (gRPC-heavy) still to add.
+
 Standalone vector stores (Weaviate/Milvus/Qdrant/Chroma) ship with no auth and bind
 publicly; 3,000+ unauth instances found in 2025; embeddings invert to PII. `pgvector` is
 just Postgres (ordinary SQLi) — the vector-specific risk is *exposure*.
@@ -396,7 +401,13 @@ Bitrix ORM/`filter[]` injection.
   mass-assignment→privilege check to `logic_probe`. Fingerprint fuel:
   `recover_sourcemaps`/`stack_probe` reveal Django/Prisma/Rails/Bitrix to pick the suffix set.
 
-### D.2 Fastjson / Jackson autoType → JNDI (pre-auth RCE) ❌ — RANK 8/CN-S
+### D.2 Fastjson / Jackson autoType → JNDI (pre-auth RCE) ✅ (SHIPPED) — RANK 8/CN-S
+Implemented in `web/fastjson.py` + the `fastjson_oast_probe` tool (intrusive, OAST-correlated):
+POSTs benign `@type` OAST canaries (`java.net.Inet4Address`/`java.net.URL` fastjson forms +
+the Jackson array form) whose only effect is a DNS/HTTP lookup, then polls OAST — a callback
+= the endpoint deserializes attacker-controlled `@type` (vuln class confirmed), no JNDI
+gadget named. Weaponization → Strix.
+
 The #1 CN Java-stack bug. JSON binders that embed `@type` instantiate the class and fire
 setters during parse; `JdbcRowSetImpl`/`BasicDataSource` turn a setter into a JNDI lookup
 → LDAP/RMI → RCE (CVE-2017-18349, CVE-2022-25845, 1.2.24/47/68 chains). Documented
@@ -411,7 +422,8 @@ conceptually in `docs/TECHNIQUES.md` but **no active detector**.
   + `oast_generate/oast_poll`; POST the benign `Inet4Address`/`URL` type into JSON
   params/body; confirm via OAST hit. Gadget selection + JNDI server → Strix.
 
-### D.3 Druid monitor → session hijack (`/druid/websession.json`) 🟡 — RANK CN-S
+### D.3 Druid monitor → session hijack (`/druid/websession.json`) ✅ (SHIPPED) — RANK CN-S
+Implemented — `stack_probe._probe_druid` now reads `/druid/websession.json` after `/druid/index.html` and upgrades the verdict to `high` (session hijack) when live session objects (SESSIONID + principal) are present.
 Beyond the `/druid/index.html` "exposed" tell already flagged, `/druid/websession.json`
 leaks **live session objects** (SESSIONID, principal, last-access) → copy the freshest
 cookie → authenticated backend access; `/druid/sql.json` leaks the literal server SQL
@@ -439,7 +451,12 @@ Biggest net-new wins: an in-scope HTTPS GET or offline regex, epidemic, thin nuc
 coverage. Deliberately NOT duplicated: `ssrf_metadata_probe`, `analyze_config`,
 `dependency_confusion`, bucket enumeration, Adminer/phpMyAdmin panels.
 
-### E.1 Firebase RTDB / Firestore open rules ❌ — RANK 7/1
+### E.1 Firebase RTDB / Firestore open rules ✅ (SHIPPED) — RANK 7/1
+Implemented in `recon/firebase.py` + the `firebase_exposure` tool (self-scoped): harvests
+`databaseURL`/`projectId` from the page + JS `firebaseConfig`, then one unauth
+`GET <databaseURL>/.json?shallow=true` — 200 with JSON (not Permission denied) = open
+rules. The RTDB backend host is scope-checked; a `projectId` is reported as a Firestore lead.
+
 Security Rules with `if true`/`.read:true`; the project id sits in the app's
 `firebaseConfig`. Comparitech attributes 100M+ leaked records/year. RTDB and Firestore
 use different endpoints — probe both.
@@ -452,7 +469,12 @@ use different endpoints — probe both.
 - **Mapping:** new passive `recon/firebase.py` + `firebase_exposure`; reuse
   `secrets.py`/`crawl.py` JS extraction. Bulk dump/write → Strix via `leadpipe` kind `firebase_open`.
 
-### E.2 Supabase RLS-off / anon-key full-table read ❌ — RANK 7/2
+### E.2 Supabase RLS-off / anon-key full-table read ✅ (SHIPPED) — RANK 7/2
+Implemented in `recon/supabase.py` + the `supabase_exposure` tool (self-scoped): harvests
+the project URL + `anon` key (a JWT with `role:anon`) from the app JS, reads the PostgREST
+schema at `/rest/v1/?apikey=`, then a per-table `?select=*&limit=1` read — a returned row =
+RLS off. Rows are not surfaced; the backend host is scope-checked.
+
 Supabase tables have Row-Level Security **off by default**; the `anon` key is public-by-
 design (ships in the frontend) → full CRUD on every PostgREST-exposed table. CVE-2025-48757;
 10.3% of analyzed Lovable apps shipped anon-readable tables.
@@ -499,7 +521,8 @@ treats "publicly accessible RDS/CloudSQL" and "SG exposes risky ports" as distin
 - **Mapping:** `DB_PORT_MAP`/`classify_db_exposure(host)` in `intel/shodan.py` + an
   `exposed_db_probe` tool. Reachability confirm (not auth) → `leadpipe` kind `exposed_db` → Strix.
 
-### E.5 DB admin dashboards reachable (Mongo-Express/pgAdmin/RedisInsight/ClickHouse `/play`) ❌ — RANK 5
+### E.5 DB admin dashboards reachable (Mongo-Express/pgAdmin/RedisInsight/ClickHouse `/play`) ✅ (SHIPPED) — RANK 5
+Implemented — added Mongo-Express (`/db/admin`), pgAdmin (`/browser/`), ClickHouse `/play`, RedisInsight to `debug_exposure`'s `_PANELS` (path→signature engine).
 Web DB consoles left in prod; Mongo-Express in particular ships with no auth
 (`ME_CONFIG_BASICAUTH` unset) → full browse/query/delete. `debug_exposure` already
 covers Adminer/phpMyAdmin with the same path→signature engine — one-line additions.
@@ -510,7 +533,8 @@ covers Adminer/phpMyAdmin with the same path→signature engine — one-line add
 - **Mapping:** add entries to `web/debugpanel.py:_PANELS`. Cross-link to Theme F (these
   panels are prime SSRF targets).
 
-### E.6 Backup/dump artifacts (`.sql`/`.bak`/mongodump) in object storage ❌ — RANK 6
+### E.6 Backup/dump artifacts (`.sql`/`.bak`/mongodump) in object storage ✅ (SHIPPED) — RANK 6
+Implemented — `recon/buckets.py` now parses a public-listable bucket's XML listing (`<Key>`/`<Name>`) for DB dump/backup keys (`extract_dump_keys`) and flags them `critical`; added `-dump`/`-sql`/`-database` name permutations.
 DB dumps written to S3/GCS/Azure Blob that are public. GrayHatWarfare indexes ~470k open
 buckets by extension — `.sql`/`.bak`/`.dump`/mongodump = a one-search data breach.
 `recon/buckets.py` finds buckets but doesn't hunt dump keys.
@@ -543,7 +567,14 @@ those creds mint an RDS IAM token / `GetSecretValue` / `rds-data` call to reach 
 **protocol-level** reach into internal DBs. Detection-only; weaponization → Strix
 (matches the shipped `desync→strix` precedent).
 
-### F.1 gopher:// / dict:// smuggling to Redis/Memcached/MySQL/Postgres ❌ — RANK 10/7
+### F.1 gopher:// / dict:// smuggling to Redis/Memcached/MySQL/Postgres ✅ (SHIPPED) — RANK 10/7
+Implemented in `web/ssrf_protocol.py` + the `ssrf_protocol_probe` tool (intrusive): a
+scheme-deref lane (per-scheme `gopher`/`dict`/`ftp` OAST canaries + an `http` control, each
+with its own token for attribution — gopher/dict/ftp callbacks need a DNS/TCP OAST via
+`oast_configure`, the built-in HTTP catcher sees only the http control) and an internal-port
+reachability differential (`http://127.0.0.1:<db_port>/` vs a closed-port control). No
+payload bytes delivered; the gopher `SET`/`CONFIG` weaponization → Strix.
+
 An SSRF sink that accepts arbitrary schemes sends raw bytes to a TCP port — enough to
 speak Redis RESP (`CONFIG SET dir` → cron RCE), memcached, or a MySQL/Postgres handshake.
 Gopherus generates payloads for 3306/11211/6379/9000. The classic blind-SSRF-to-RCE
@@ -560,7 +591,8 @@ escalation; also the CN Redis-未授权 chain.
   payloads go in the injection KB (per Gopherus), not a bridged interactive generator.
   `leadpipe` kind `ssrf_protocol` → Strix.
 
-### F.2 DNS-rebinding to internal DB (TOCTOU SSRF-guard bypass) ❌ — RANK 10 (companion)
+### F.2 DNS-rebinding to internal DB (TOCTOU SSRF-guard bypass) 🟡 (needs a DNS-capable OAST) — RANK 10 (companion)
+> Deferred: the built-in OAST catcher is HTTP-only, so serving a rebinding A-record needs `intel/oast_server.py` to gain a DNS listener (or a configured interactsh). Tracked as a follow-up; the methodology below stands.
 An SSRF allowlist that validates the hostname then re-resolves at fetch time is defeated
 by a rebinding domain (public IP first, then `169.254.169.254`/`127.0.0.1`/internal DB).
 Live 2026 CVEs (CVE-2026-27826 MCP-Atlassian TOCTOU; Burp MCP DNS-rebinding SSRF H1
@@ -608,7 +640,8 @@ Highest-ROI *net-new knowledge* — English tools don't fingerprint these at all
   `knowledge/vulns_data.py` default-cred KB; TiDB-status & PD-2379 unauth reads →
   `db_exposure`. Login attempt → Strix (agent lane: fingerprint → "try known default").
 
-### G.2 Korean domestic DBMS error signatures + default creds ❌ — RANK KR-A
+### G.2 Korean domestic DBMS error signatures + default creds 🟡 (signatures SHIPPED) — RANK KR-A
+Implemented — added Tibero (`TBR-####`/`com.tmax.tibero.jdbc`), CUBRID (`cubrid.jdbc.driver`), Altibase (`Altibase.jdbc.driver`) error signatures to the `sqli` KB class, so `sqli_probe`/`match_signatures` now fingerprint domestic KR DBMS. Default-cred KB still to add.
 Korean public sector/finance runs **Tibero** (domestic Oracle-replacement), **CUBRID**
 (gov portals), **Altibase** (telecom/finance). MoonMCP's SQLi error-signature DB has zero
 coverage → a SQLi on a `.go.kr` Tibero/CUBRID backend reports "unknown DBMS".
@@ -621,7 +654,8 @@ coverage → a SQLi on a `.go.kr` Tibero/CUBRID backend reports "unknown DBMS".
   zero new code path, `sqli_probe`/`match_injection_signatures` immediately gain
   domestic-DBMS fingerprinting; + a default-cred KB entry.
 
-### G.3 Cassandra / ScyllaDB CQL injection ❌ — RANK 12
+### G.3 Cassandra / ScyllaDB CQL injection ✅ (SHIPPED) — RANK 12
+Implemented — added Cassandra/ScyllaDB CQL error signatures (`com.datastax.driver`/`InvalidRequestException`/`no viable alternative at input`) to the `sqli` KB class; the generic boolean differential handles the active side.
 Concatenated CQL is injectable, constrained (drivers reject trailing comments/multi-
 statements) → boolean conditions + `ALLOW FILTERING`. KB has no `cql-injection` class.
 - **SAFE signal:** SQLi-style boolean differential + error-signature match
@@ -630,7 +664,8 @@ statements) → boolean conditions + `ALLOW FILTERING`. KB has no `cql-injection
 - **Mapping:** new KB class `cql-injection` in `injections_data.py` with signatures wired
   into `match_signatures()`; active differential handled by `sqli_probe`/nuclei DAST.
 
-### G.4 Adminer arbitrary-server file-read + SSRF (CVE-2021-21311) 🟡 (panel found) — RANK JP-KR
+### G.4 Adminer arbitrary-server file-read + SSRF (CVE-2021-21311) ✅ (SHIPPED) — RANK JP-KR
+Implemented — `debug_exposure`'s Adminer entry upgraded to `high` and now flags the user-controllable host field → rogue-MySQL LOCAL INFILE file-read / CVE-2021-21311 SSRF (CISA KEV); weaponize via Strix.
 `debug_exposure` finds the Adminer panel; the interesting part is Adminer connects to an
 **arbitrary DB host** → SSRF (CVE-2021-21311, CISA KEV, <4.7.9) and rogue-MySQL
 `LOAD DATA LOCAL INFILE` file-read — no creds on the target's own DB needed.
@@ -642,7 +677,8 @@ statements) → boolean conditions + `ALLOW FILTERING`. KB has no `cql-injection
   `arbitrary_db_host:true` flag; optional OAST-canary reachability check (intrusive).
   Rogue-MySQL file-read → Strix.
 
-### G.5 APAC / regional WAF fingerprints ❌ — RANK JP-KR
+### G.5 APAC / regional WAF fingerprints ✅ (SHIPPED) — RANK JP-KR
+Implemented — added Penta Security WAPPLES, MonitorApp AIWAF, Cloudbric, Scutum (ML-based), Shadan-kun (攻撃遮断くん) fingerprints to `web/waf.py` `_SIGNATURES`.
 MoonMCP's WAF DB is CN/RU/global. Missing: **WAPPLES** (#1 APAC share) + **MonitorApp
 AIWAF** (Korean gov/finance), **Scutum / Cloudbric / 攻撃遮断くん** (Japan). Scutum is
 explicitly ML-based not signature-based → down-weight naïve comment/case evasion against it.

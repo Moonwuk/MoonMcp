@@ -32,6 +32,38 @@ def test_classify_status():
     assert bucketsmod.classify_status(None) is None
 
 
+def test_extract_dump_keys():
+    xml = ("<ListBucketResult>"
+           "<Contents><Key>backups/prod-dump.sql</Key></Contents>"
+           "<Contents><Key>assets/logo.png</Key></Contents>"
+           "<Contents><Key>db/mysqldump-2024.sql.gz</Key></Contents>"
+           "<Contents><Key>mongodump/users.bson</Key></Contents></ListBucketResult>")
+    keys = bucketsmod.extract_dump_keys(xml)
+    assert set(keys) == {"backups/prod-dump.sql", "db/mysqldump-2024.sql.gz", "mongodump/users.bson"}
+    # Azure <Name> form, and no false positive on ordinary assets
+    assert bucketsmod.extract_dump_keys("<Blob><Name>db/full.bak</Name></Blob>") == ["db/full.bak"]
+    assert bucketsmod.extract_dump_keys("<Key>css/app.css</Key><Key>img/a.png</Key>") == []
+
+
+@pytest.mark.asyncio
+async def test_check_buckets_flags_dump_keys():
+    class _BR:
+        def __init__(self, status, body):
+            self.status, self.body = status, body
+
+        def text(self, limit=None):
+            return self.body.decode() if isinstance(self.body, bytes) else self.body
+
+    class _Fake:
+        async def fetch(self, url, **kwargs):
+            return _BR(200, b"<ListBucketResult><Contents><Key>db/prod-dump.sql</Key>"
+                           b"</Contents></ListBucketResult>")
+
+    found = await bucketsmod.check_buckets(_Fake(), ["acme-db"], templates={"s3": "https://{name}.s3/"})
+    assert found and found[0]["access"] == "public-listable"
+    assert found[0]["dump_keys"] == ["db/prod-dump.sql"] and found[0]["severity"] == "critical"
+
+
 @pytest.mark.asyncio
 async def test_check_buckets_against_mock(local_server, fresh_context):
     base, _ = local_server

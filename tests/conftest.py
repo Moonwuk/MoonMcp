@@ -80,6 +80,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/fastjson"):
+            # DELIBERATELY VULNERABLE: "deserializes" the @type body by fetching the
+            # URL it carries (simulates java.net.URL autoType → outbound lookup).
+            import re
+            mm = re.search(r"https?://[^\s\"'}\]]+", raw.decode("utf-8", "replace"))
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if self.path.startswith("/nosqli"):
             self._nosqli_reply(raw.decode("utf-8", "replace"),
                                self.headers.get("Content-Type", ""))
@@ -257,6 +272,45 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/fbapp":
+            # App page whose firebaseConfig.databaseURL points at THIS local server,
+            # so the derived RTDB backend is in-scope (127.0.0.1) for the test.
+            host = self.headers.get("Host", "127.0.0.1")
+            body = (b"<html><script>var firebaseConfig={apiKey:'AIzaFakeKey',"
+                    b"projectId:'demo-proj',databaseURL:'http://" + host.encode() + b"'};"
+                    b"</script></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/fbapp-noconfig":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>no firebase here</html>")
+            return
+        if self.path.startswith("/.json"):
+            # DELIBERATELY OPEN Firebase RTDB: shallow read returns data with no auth.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"users":true,"settings":true}')
+            return
+        if self.path.startswith("/rest/v1/"):
+            # DELIBERATELY RLS-OFF Supabase (PostgREST): schema lists tables; 'users'
+            # returns a row (RLS off), others return [] (RLS on).
+            from urllib.parse import urlparse
+            p = urlparse(self.path).path
+            if p == "/rest/v1/":
+                body = b'{"definitions":{"users":{},"profiles":{}},"paths":{}}'
+            else:
+                table = p[len("/rest/v1/"):]
+                body = b'[{"id":1,"email":"redactme"}]' if table == "users" else b"[]"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/orm-safe"):
             # NOT vulnerable: ignores injected ORM lookups → constant result set.
             self.send_response(200)
@@ -279,6 +333,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 body = b"<html>users: alice bob carol dave erin frank grace heidi ivan</html>"
             else:
                 body = b"<html>users:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/ssrf-proto"):
+            # DELIBERATELY VULNERABLE: fetches the injected ?url= server-side and
+            # reflects whether the internal target was reachable (distinct body length).
+            from urllib.parse import parse_qs, urlparse
+            u = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
+            reachable = False
+            if u.startswith(("http://", "https://")):
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(u, timeout=1).read(16)
+                    reachable = True
+                except Exception:
+                    reachable = False
+            body = b"internal-service-reachable-marker" if reachable else b"refused"
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)

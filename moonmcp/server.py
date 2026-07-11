@@ -66,6 +66,7 @@ from .recon import datastores as datastoresmod
 from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
+from .recon import firebase as firebasemod
 from .recon import headers as headersmod
 from .recon import infra as inframod
 from .recon import jsendpoints as jsmod
@@ -74,6 +75,7 @@ from .recon import origin as originmod
 from .recon import secrets as secretsmod
 from .recon import sourcemaps as sourcemapsmod
 from .recon import subdomains as submod
+from .recon import supabase as supabasemod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
@@ -87,6 +89,7 @@ from .web import crlf as crlfmod
 from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
+from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
@@ -103,6 +106,7 @@ from .web import screenshot as screenshotmod
 from .web import secondorder as somod
 from .web import singlepacket as spmod
 from .web import ssrf_meta as ssrfmetamod
+from .web import ssrf_protocol as sspmod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
 from .web import value as valuemod
@@ -1123,6 +1127,143 @@ async def extract_secrets(target: str, scan_js: bool = True, max_js: int = 15) -
     data = to_dict(scan)
     data["count"] = scan.count
     return data
+
+
+async def _fetch_app_source(ctx, url: str, sc, max_js: int = 10) -> tuple[str, list[str]]:
+    """Fetch a page + its linked JS; return ``(combined_text, sources)`` for scanning
+    an app's embedded backend config (Firebase/Supabase)."""
+
+    from urllib.parse import urljoin
+    sources: list[str] = []
+    parts: list[str] = []
+    page = await ctx.http.fetch(url, follow_redirects=True, timeout=12.0, scope_check=sc)
+    if page.status is None:
+        return "", sources
+    html = page.text(500_000)
+    final = page.final_url or url
+    sources.append(final)
+    parts.append(html)
+    try:
+        _, js, _, _ = crawlmod._extract(final, html)
+    except Exception:
+        js = set()
+    for jm in crawlmod._JS_URL_RE.finditer(html):
+        js.add(urljoin(final, jm.group(1)))
+    js_files = [u for u in js if u.lower().split("?")[0].endswith(".js")][:max(1, min(max_js, 30))]
+    for jurl in js_files:
+        if not sc(jurl):
+            continue
+        jr = await ctx.http.fetch(jurl, follow_redirects=True, timeout=12.0, scope_check=sc)
+        if jr.status is None or not jr.body:
+            continue
+        sources.append(jurl)
+        parts.append(jr.text(800_000))
+    return "\n".join(parts), sources
+
+
+@mcp.tool()
+@active_tool(self_scoped=True)
+async def firebase_exposure(target: str, database_url: str | None = None, max_js: int = 10) -> dict:
+    """**Firebase RTDB open-rules** exposure — safe read-only. Harvests
+    `databaseURL`/`projectId` from the page + JS `firebaseConfig` (or pass
+    `database_url`), then one unauthenticated `GET <databaseURL>/.json?shallow=true`
+    (`shallow=true` = top-level keys only, no bulk pull). A 200 with JSON (not
+    "Permission denied") = open Security Rules → the whole dataset is readable. A
+    discovered `projectId` is reported as a Firestore follow-up lead. Bulk dump → Strix.
+    In scope only (the RTDB backend host is scope-checked too).
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    await _require_scope(url, tool="firebase_exposure")
+    sc = _scope_check()
+    text, sources = await _fetch_app_source(ctx, url, sc, max_js)
+    cfg = firebasemod.parse_firebase_config(text)
+    if database_url:
+        cfg["databaseURL"] = database_url.rstrip("/")
+    out: dict[str, Any] = {"target": url, "config": cfg, "sources_scanned": len(sources)}
+    db = cfg.get("databaseURL")
+    if not db:
+        out["verdict"] = "no_firebase_config"
+        out["note"] = "no firebaseConfig / databaseURL found in the page or its JS"
+        return out
+    probe = firebasemod.rtdb_probe_url(db)
+    try:
+        await _require_scope(probe, tool="firebase_exposure")
+    except ScopeError as exc:
+        out["verdict"] = "backend_out_of_scope"
+        out["note"] = f"discovered RTDB {db} but it is out of scope ({exc}) — add it to scope to test"
+        return out
+    r = await ctx.http.fetch(probe, follow_redirects=True, timeout=12.0, scope_check=sc)
+    out["rtdb_url"] = db
+    out["rtdb_status"] = r.status
+    finding = firebasemod.assess_rtdb(r.status, r.text(50_000))
+    out.update(finding or {"verdict": "inconclusive"})
+    if cfg.get("projectId"):
+        out["firestore_lead"] = (
+            f"projectId '{cfg['projectId']}' — also check Firestore: GET https://firestore."
+            f"googleapis.com/v1/projects/{cfg['projectId']}/databases/(default)/documents/<collection>")
+    return out
+
+
+@mcp.tool()
+@active_tool(self_scoped=True)
+async def supabase_exposure(target: str, project_url: str | None = None, anon_key: str | None = None,
+                            max_tables: int = 15, max_js: int = 10) -> dict:
+    """**Supabase RLS-off** exposure — safe read-only. Harvests the project URL
+    (`https://<ref>.supabase.co`) + the public `anon` key from the app JS (or pass
+    `project_url`/`anon_key`), fetches the PostgREST schema at `/rest/v1/?apikey=<anon>`
+    to enumerate tables, then `GET /rest/v1/<table>?select=*&limit=1` — a 200 returning a
+    row = Row-Level Security OFF (the public key can SELECT the table). Uses the app's own
+    public key against its own API; `limit=1`, rows are NOT returned. Bulk dump → Strix.
+    In scope only (the Supabase backend host is scope-checked too).
+    """
+
+    raw = target.strip()
+    app_url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    await _require_scope(app_url, tool="supabase_exposure")
+    sc = _scope_check()
+    text, sources = await _fetch_app_source(ctx, app_url, sc, max_js)
+    cfg = supabasemod.parse_supabase_config(text)
+    if project_url:
+        cfg["url"] = project_url.rstrip("/")
+    if anon_key:
+        cfg["anon_key"], cfg["key_type"] = anon_key, "provided"
+    out: dict[str, Any] = {"target": app_url, "sources_scanned": len(sources),
+                           "project_url": cfg.get("url"), "key_type": cfg.get("key_type")}
+    surl, key = cfg.get("url"), cfg.get("anon_key")
+    if not surl or not key:
+        out["verdict"] = "no_supabase_config"
+        out["note"] = "no Supabase URL + anon key found in the page or its JS"
+        return out
+    try:
+        await _require_scope(surl, tool="supabase_exposure")
+    except ScopeError as exc:
+        out["verdict"] = "backend_out_of_scope"
+        out["note"] = f"discovered {surl} but it is out of scope ({exc}) — add it to scope to test"
+        return out
+    hdr = {"apikey": key, "Authorization": f"Bearer {key}"}
+    schema = await ctx.http.fetch(supabasemod.schema_url(surl, key), headers=hdr,
+                                  follow_redirects=True, timeout=12.0, scope_check=sc)
+    tables = supabasemod.parse_tables(schema.text(200_000))
+    out["tables_discovered"] = len(tables)
+    open_tables: list[str] = []
+    for t in tables[:max(1, min(max_tables, 40))]:
+        r = await ctx.http.fetch(supabasemod.table_url(surl, t, key), headers=hdr,
+                                 follow_redirects=False, timeout=12.0, scope_check=sc)
+        if supabasemod.assess_table(r.status, r.text(50_000)):
+            open_tables.append(t)
+    out["rls_off_tables"] = open_tables
+    if open_tables:
+        out.update(verdict="confirmed", severity="high",
+                   detail=(f"{len(open_tables)} table(s) readable with the public anon key (RLS off): "
+                           f"{', '.join(open_tables[:10])} — full SELECT exposure. Bulk dump → Strix."))
+    else:
+        out["verdict"] = "no_open_tables"
+        out["detail"] = "no table returned a row to the anon key (RLS appears enabled)"
+    return out
 
 
 @mcp.tool()
@@ -3990,6 +4131,139 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
            **verdict, "interactions": hits[:20]}
     if not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
+                              ports: str = "db", oast_token: str | None = None,
+                              wait: float = 3.0) -> dict:
+    """**SSRF → internal datastore** reach — protocol-smuggling + internal-port detection.
+    Two safe lanes: (1) inject `gopher://`/`dict://`/`ftp://` (+ an `http://` control)
+    canaries and poll OAST — a callback proves the sink dereferences that scheme (raw-TCP
+    reach to internal Redis/memcached, etc.); gopher/dict/ftp callbacks need a DNS/TCP OAST
+    (`oast_configure`), the built-in HTTP catcher only sees the http control. (2) inject
+    `http://127.0.0.1:<db_port>/` and diff the response vs a closed-port control — a
+    differential = the sink reaches internal services. No payload bytes are delivered;
+    weaponization → Strix. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    sc = _scope_check()
+
+    async def _get(value: str):
+        u, b = _with_param(url, param, value, m)
+        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
+
+    async def _poll(cb) -> list:
+        if ctx.oast_server is not None and ctx.oast_server.running:
+            return ctx.oast_server.interactions(cb.token)
+        pt = ctx.oast.poll_target(cb.token)
+        if not pt:
+            return []
+        try:
+            r = await ctx.http.fetch(pt, follow_redirects=True)
+            return oastmod.parse_interactions(r.text())
+        except Exception:
+            return []
+
+    # Lane 1 — scheme-deref OAST canaries (one token per scheme for attribution).
+    scheme_hits: dict[str, int] = {}
+    scheme_note = None
+    if not ctx.oast.configured:
+        scheme_note = "OAST unconfigured — scheme-deref lane skipped (start oast_selfhost/oast_configure)"
+    else:
+        canaries = {s: ctx.oast.generate(label=f"ssrf_proto_{s}") for s in sspmod.SCHEMES}
+        for s, cb in canaries.items():
+            await _get(sspmod.scheme_payload(s, cb.canary_host, cb.http_url))
+        await asyncio.sleep(max(0.0, min(wait, 8.0)))
+        for s, cb in canaries.items():
+            n = len(await _poll(cb))
+            if n:
+                scheme_hits[s] = n
+
+    # Lane 2 — internal-port reachability differential.
+    port_list = sspmod.parse_ports(ports)
+    ctrl_r = await _get(sspmod.closed_control_url())
+    ctrl = (ctrl_r.status, len(ctrl_r.body))
+    reachable: list[str] = []
+    for label, iurl in sspmod.internal_port_targets(port_list):
+        r = await _get(iurl)
+        if sspmod.assess_reachability(ctrl, (r.status, len(r.body))):
+            reachable.append(label)
+
+    non_http_schemes = {s: n for s, n in scheme_hits.items() if s != "http"}
+    verdict = confirmmod.evaluate(
+        oast_count=sum(non_http_schemes.values()),
+        injection_hits=(["ssrf/internal-port-reach"] if reachable else []),
+        status_changed=bool(reachable))
+    out: dict[str, Any] = {"target": url, "param": param, **verdict,
+                           "scheme_callbacks": scheme_hits, "reachable_internal_ports": reachable}
+    if scheme_note:
+        out["scheme_note"] = scheme_note
+    if non_http_schemes:
+        out["detail"] = (f"the sink dereferenced non-HTTP scheme(s) {list(non_http_schemes)} — raw-TCP "
+                         "reach to internal services; hand the gopher payload (Redis SET/CONFIG, etc.) to Strix")
+    elif reachable:
+        out["detail"] = (f"the sink reached internal port(s) {reachable} — SSRF into the internal network; "
+                         "pivot with gopher/dict via Strix")
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def fastjson_oast_probe(target: str, method: str = "POST",
+                              oast_token: str | None = None, wait: float = 3.0) -> dict:
+    """**Fastjson / Jackson autoType** deserialization probe (the #1 CN Java-stack bug).
+    POSTs benign `@type` OAST canaries (`java.net.Inet4Address` / `java.net.URL`, plus the
+    Jackson array form) to a JSON endpoint — their ONLY effect is a DNS/HTTP lookup to the
+    canary. A callback proves the endpoint deserializes attacker-controlled `@type` (the
+    vuln class is confirmed) with no JNDI gadget and no code landed. Start `oast_selfhost`
+    (or `oast_configure`) first. Weaponization → Strix. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return {"error": "oast_unconfigured",
+                    "detail": "start oast_selfhost or oast_configure before a Fastjson OAST probe"}
+        cb = ctx.oast.generate(label="fastjson_oast")
+    m = method.upper()
+    host = cb.canary_host or cb.http_url
+    sent: list[str] = []
+    for label, body in fastjsonmod.fastjson_payloads(host, cb.http_url):
+        await ctx.http.fetch(url, method=m, body=body,
+                             headers={"Content-Type": fastjsonmod.JSON_CT},
+                             follow_redirects=False, scope_check=_scope_check())
+        sent.append(label)
+    await asyncio.sleep(max(0.0, min(wait, 8.0)))
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(cb.token)
+    else:
+        poll = ctx.oast.poll_target(cb.token)
+        hits = []
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, follow_redirects=True)
+                hits = oastmod.parse_interactions(r.text())
+            except Exception:
+                hits = []
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "canary": cb.http_url, "token": cb.token, "payloads_sent": sent,
+           **verdict, "interactions": hits[:20]}
+    if not hits:
+        out["note"] = ("no callback yet — the sink may not deserialize @type, or it calls back later; "
+                       "re-check with oast_poll")
+    else:
+        out["detail"] = ("the endpoint resolved our benign @type canary — Fastjson/Jackson autoType "
+                         "deserialization is reachable; hand gadget selection + the JNDI server to Strix")
     return out
 
 
