@@ -192,14 +192,35 @@ def edge_layers(headers: dict[str, str]) -> dict:
 
 def summarize_http_behavior(*, baseline_status: int | None, connection: str | None,
                             http10_status: int | None, invalid_method_status: int | None,
-                            oversized_status: int | None, bare_lf_status: int | None) -> dict:
-    """Turn raw HTTP/1.x edge-case reactions into a behaviour profile + concerns."""
+                            oversized_status: int | None, bare_lf_status: int | None,
+                            bare_cr_status: int | None = None, obs_fold_status: int | None = None,
+                            dup_cl_status: int | None = None) -> dict:
+    """Turn raw HTTP/1.x edge-case reactions into a behaviour profile + concerns.
 
-    bare_lf_accepted = bare_lf_status is not None and 200 <= bare_lf_status < 400
+    ``bare_cr``/``obs_fold``/``dup_cl`` are optional additional framing probes; each
+    accepted (non-error) reaction is a lenient-parsing / proxy-origin-mismatch signal.
+    """
+
+    def _accepted(s: int | None) -> bool:
+        return s is not None and 200 <= s < 400
+
+    bare_lf_accepted = _accepted(bare_lf_status)
+    bare_cr_accepted = _accepted(bare_cr_status)
+    obs_fold_accepted = _accepted(obs_fold_status)
+    dup_cl_accepted = _accepted(dup_cl_status)
     concerns: list[str] = []
     if bare_lf_accepted:
         concerns.append("server accepted bare-LF (no CR) line endings — lenient HTTP parsing, a "
                         "request-smuggling / desync risk factor; confirm with desync_probe")
+    if bare_cr_accepted:
+        concerns.append("server accepted bare-CR line endings — lenient HTTP parsing / desync risk "
+                        "factor; a CR-strict peer in front would disagree on framing")
+    if obs_fold_accepted:
+        concerns.append("server accepted obsolete line folding (obs-fold) — RFC 7230-deprecated; a "
+                        "proxy-origin header-parsing mismatch (smuggling factor)")
+    if dup_cl_accepted:
+        concerns.append("server accepted duplicate Content-Length headers — CL.CL framing ambiguity; "
+                        "confirm with desync_modern_probe")
     if oversized_status is None:
         concerns.append("connection dropped on an oversized header (no HTTP response) — an "
                         "intermediary enforced a header-size limit before the origin")
@@ -213,6 +234,12 @@ def summarize_http_behavior(*, baseline_status: int | None, connection: str | No
         "oversized_header_status": oversized_status,
         "bare_lf_status": bare_lf_status,
         "bare_lf_accepted": bare_lf_accepted,
+        "bare_cr_status": bare_cr_status,
+        "bare_cr_accepted": bare_cr_accepted,
+        "obs_fold_status": obs_fold_status,
+        "obs_fold_accepted": obs_fold_accepted,
+        "dup_cl_status": dup_cl_status,
+        "dup_cl_accepted": dup_cl_accepted,
         "concerns": concerns,
     }
 

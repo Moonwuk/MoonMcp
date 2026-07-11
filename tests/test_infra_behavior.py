@@ -127,6 +127,18 @@ def test_edge_layers_detects_cloudflare_and_cache():
     assert len(r["proxy_hops"]) == 2
 
 
+def test_summarize_http_behavior_flags_new_framing_signals():
+    r = infra.summarize_http_behavior(
+        baseline_status=200, connection="close", http10_status=200, invalid_method_status=501,
+        oversized_status=400, bare_lf_status=400, bare_cr_status=200, obs_fold_status=200,
+        dup_cl_status=200)
+    assert r["bare_cr_accepted"] and r["obs_fold_accepted"] and r["dup_cl_accepted"]
+    joined = " ".join(r["concerns"])
+    assert "bare-CR" in joined and "obs-fold" in joined and "duplicate Content-Length" in joined
+    # a rejected (4xx) framing probe is not flagged
+    assert r["bare_lf_accepted"] is False
+
+
 def test_summarize_http_behavior_flags_bare_lf():
     r = infra.summarize_http_behavior(baseline_status=200, connection="close",
                                       http10_status=200, invalid_method_status=501,

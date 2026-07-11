@@ -3734,10 +3734,12 @@ async def edge_map(target: str) -> dict:
 async def http_behavior(target: str) -> dict:
     """**Raw HTTP/1.x behaviour fingerprint.** Sends a handful of complete
     edge-case requests on fresh connections — HTTP/1.0, an unknown method, an
-    oversized header, and **bare-LF** line endings — and reports how the stack
-    reacts. Bare-LF acceptance and inconsistent framing point at **lenient parsing
-    / a proxy-origin mismatch** (request-smuggling surface). Detection-only (no
-    partial requests, nothing left to poison a connection). Intrusive; in scope only.
+    oversized header, **bare-LF** and **bare-CR** line endings, **obsolete line
+    folding** (obs-fold), and **duplicate Content-Length** — and reports how the
+    stack reacts. Accepting any of these points at **lenient parsing / a proxy-origin
+    mismatch** (request-smuggling surface); confirm with desync_modern_probe.
+    Detection-only (complete requests, nothing left to poison a connection).
+    Intrusive; in scope only.
     """
 
     from urllib.parse import urlsplit
@@ -3763,6 +3765,14 @@ async def http_behavior(target: str) -> dict:
                       + "A" * 16384 + "\r\nConnection: close\r\n\r\n").encode("latin-1"))
     # Bare-LF (no CR) line endings — lenient parsers accept this.
     lf = await _raw(f"GET {path} HTTP/1.1\nHost: {host}\n{ua.replace(chr(13), '')}Connection: close\n\n".encode("latin-1"))
+    # Bare-CR (no LF) line endings.
+    cr = await _raw(f"GET {path} HTTP/1.1\rHost: {host}\rUser-Agent: MoonMCP\rConnection: close\r\r".encode("latin-1"))
+    # Obsolete line folding (obs-fold): a header value continued on the next line.
+    fold = await _raw((f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}X-Fold: a\r\n b\r\n"
+                       "Connection: close\r\n\r\n").encode("latin-1"))
+    # Duplicate Content-Length (RFC 7230 says reject) — CL.CL framing ambiguity.
+    dupcl = await _raw((f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}Content-Length: 0\r\n"
+                        "Content-Length: 0\r\nConnection: close\r\n\r\n").encode("latin-1"))
 
     base_status, base_server = desyncmod._status_of(base) if base else (None, None)
     conn = None
@@ -3777,6 +3787,9 @@ async def http_behavior(target: str) -> dict:
         invalid_method_status=desyncmod._status_of(badm)[0] if badm else None,
         oversized_status=desyncmod._status_of(big)[0] if big else None,
         bare_lf_status=desyncmod._status_of(lf)[0] if lf else None,
+        bare_cr_status=desyncmod._status_of(cr)[0] if cr else None,
+        obs_fold_status=desyncmod._status_of(fold)[0] if fold else None,
+        dup_cl_status=desyncmod._status_of(dupcl)[0] if dupcl else None,
     )
     return {"target": url, "server": base_server, **summary}
 
