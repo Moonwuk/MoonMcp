@@ -63,6 +63,11 @@ NATIVE_EDGE: dict[str, str] = {
                             "(one-click ATO). A discovery→differential chain, not a template match",
     "jwt_jku_probe": "re-issue the target's OWN token with jku/x5u→OAST, replay, correlate the "
                      "callback — cross-request key-injection/SSRF nuclei can't derive from the token",
+    "second_order_sqli_probe": "stored SQLi where the sink is a DIFFERENT endpoint from the "
+                               "injection — seed a tagged payload at a write endpoint, then drive "
+                               "the read endpoints and correlate the SQL error/differential by the "
+                               "tag; the write→read state is exactly what a stateless per-template "
+                               "engine cannot carry (nor can sqlmap against the write endpoint alone)",
     "db_exposure": "unauthenticated datastore sweep speaking each store's minimal read-only "
                    "handshake (Redis PING/INFO, memcached version, MongoDB listDatabases wire "
                    "query, ES/CouchDB/InfluxDB/YARN/TiDB HTTP) — nuclei's normalizing HTTP client "

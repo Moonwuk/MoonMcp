@@ -9,8 +9,9 @@ from moonmcp.context import build_context
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
-    _lb = 0   # /lb backend rotation counter
-    _rl = 0   # /rl rate-limit counter
+    _lb = 0    # /lb backend rotation counter
+    _rl = 0    # /rl rate-limit counter
+    _stored = ""   # /store last-written value, re-rendered by /render (second-order)
 
     def log_message(self, *args):  # silence
         pass
@@ -53,6 +54,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         # drain the request body so the socket stays clean
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path.startswith("/store"):
+            # Phase 1 of a second-order flow: store the written value (safely) so a
+            # later /render call re-uses it in a query (the vulnerable sink).
+            from urllib.parse import parse_qs
+            ctype = self.headers.get("Content-Type", "")
+            if "json" in ctype:
+                import json as _json
+                try:
+                    v = str(_json.loads(raw.decode("utf-8", "replace")).get("comment", ""))
+                except Exception:
+                    v = ""
+            else:
+                v = (parse_qs(raw.decode("utf-8", "replace")).get("comment") or [""])[0]
+            type(self)._stored = v
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"saved")
+            return
         if self.path.startswith("/nosqli-safe"):
             # NOT vulnerable: identical 200 regardless of operator vs scalar.
             body = b"<html>login page</html>"
@@ -207,6 +226,33 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 body = b"<html>rows: alice bob carol dave erin</html>"
             else:
                 body = b"<html>rows:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/render"):
+            # Phase 2 (VULNERABLE sink): re-uses the /store'd value in a query, so a
+            # stored quote errors, a stored boolean twin diverges, and a stored OOB
+            # payload's URL is fetched server-side — all AWAY from the write endpoint.
+            v = type(self)._stored
+            import re
+            mm = re.search(r"https?://[^\s')]+", v)
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            vb = v.encode("utf-8", "replace")
+            if "'" in v and "AND '1'='1" not in v and "AND '1'='2" not in v:
+                body = (b"Database error: You have an error in your SQL syntax; check the MySQL "
+                        b"manual near '" + vb[:40] + b"'")
+            elif "AND '1'='1" in v:
+                body = b"<html>comment " + vb + b" -> rows: a b c d e f g h</html>"
+            elif "AND '1'='2" in v:
+                body = b"<html>comment " + vb + b" -> rows:</html>"
+            else:
+                body = b"<html>comment: " + vb + b"</html>"
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)

@@ -99,6 +99,7 @@ from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
+from .web import secondorder as somod
 from .web import singlepacket as spmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import stacks as stacksmod
@@ -1980,6 +1981,114 @@ async def workflow_probe(steps: list[dict]) -> dict:
                       "without its prerequisites" if n
                       else "no step served cold — the flow appears to enforce its sequence")
     return result
+
+
+@mcp.tool()
+@active_tool(self_scoped=True, intrusive=True)
+async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str = "comment",
+                                  oob: bool = False, wait: float = 3.0,
+                                  oast_token: str | None = None) -> dict:
+    """**Second-order (stored) SQL injection** — the sink is a DIFFERENT endpoint from
+    the injection (a stateless scanner sees nothing). Seed a uniquely-tagged value at
+    the `write` endpoint (`{"url","method"?,"body"?}` — inject into `param`, or use a
+    `body` template with a `{payload}` placeholder), then drive the `read` endpoint(s)
+    and look for a SQL **error** signature that only appears after the seed, or a
+    reflected-tag **boolean** differential (equal-length twins, so a verbatim echo gives
+    nothing). `oob=True` seeds a tagged OAST payload and polls for a callback. Returns
+    `review` leads; extraction → sqlmap `--second-url` / Strix. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    if not isinstance(write, dict) or not write.get("url"):
+        return {"error": "invalid_input", "detail": "write must be {'url':..., 'method'?, 'body'?}"}
+    w_raw = str(write["url"]).strip()
+    w_url = w_raw if "://" in w_raw else f"https://{w_raw}"
+    w_method = str(write.get("method") or "POST").upper()
+    w_body_tpl = write.get("body")
+    w_ctype = write.get("content_type")
+    reads = somod.normalize_reads(read)
+    for r in reads:
+        r["url"] = r["url"] if "://" in r["url"] else f"https://{r['url']}"
+    if not reads:
+        return {"error": "invalid_input", "detail": "read must be a URL or list of URLs"}
+
+    await _require_scope(w_url, intrusive=True, tool="second_order_sqli_probe")
+    for r in reads:
+        await _require_scope(r["url"], intrusive=True, tool="second_order_sqli_probe")
+    sc = _scope_check()
+
+    async def _write(value: str):
+        if isinstance(w_body_tpl, str) and "{payload}" in w_body_tpl:
+            hdr = {"Content-Type": w_ctype} if w_ctype else None
+            await ctx.http.fetch(w_url, method=w_method, body=w_body_tpl.replace("{payload}", value).encode(),
+                                 headers=hdr, follow_redirects=False, scope_check=sc)
+        else:
+            u, b = _with_param(w_url, param, value, w_method)
+            await ctx.http.fetch(u, method=w_method, body=b, follow_redirects=False, scope_check=sc)
+
+    async def _read_all() -> list:
+        obs = []
+        for r in reads:
+            resp = await ctx.http.fetch(r["url"], method=r["method"], follow_redirects=False, scope_check=sc)
+            obs.append(somod.ReadObs(resp.status, resp.text(50_000)))
+        return obs
+
+    async def _cycle(value: str) -> list:
+        await _write(value)
+        return await _read_all()
+
+    tag = somod.make_tag()
+    seeds = somod.seed_payloads(tag)
+    control = await _cycle(seeds["control"])
+    error = await _cycle(seeds["error"])
+    true_r = await _cycle(seeds["true"])
+    false_r = await _cycle(seeds["false"])
+
+    def _match(t: str) -> list:
+        return injmod.match_signatures(t, class_id="sqli")
+
+    findings: list[dict] = []
+    for i, r in enumerate(reads):
+        hit = somod.assess_read(tag, control[i], error[i], true_r[i], false_r[i], _match)
+        if hit:
+            findings.append({"read": r["url"], **hit})
+
+    oast_count = 0
+    oob_out: dict | None = None
+    if oob:
+        cb = ctx.oast.get(oast_token) if oast_token else None
+        if cb is None and ctx.oast.configured:
+            cb = ctx.oast.generate(label="second_order_sqli")
+        if cb is None:
+            oob_out = {"error": "oast_unconfigured"}
+        else:
+            await _cycle(somod.oob_seed(tag, cb.http_url, cb.canary_host))
+            await asyncio.sleep(max(0.0, min(wait, 8.0)))
+            if ctx.oast_server is not None and ctx.oast_server.running:
+                oh = ctx.oast_server.interactions(cb.token)
+            else:
+                poll = ctx.oast.poll_target(cb.token)
+                oh = []
+                if poll:
+                    try:
+                        rr = await ctx.http.fetch(poll, follow_redirects=True)
+                        oh = oastmod.parse_interactions(rr.text())
+                    except Exception:
+                        oh = []
+            oast_count = len(oh)
+            oob_out = {"canary": cb.http_url, "token": cb.token,
+                       "interaction_count": oast_count, "interactions": oh[:20]}
+
+    has_error = any(f["error_signatures"] for f in findings)
+    verdict = confirmmod.evaluate(
+        injection_hits=["sqli/second-order" for _ in findings] + (["sqli/second-order-oob"] if oast_count else []),
+        reflected=has_error, status_changed=any(f["boolean_differential"] for f in findings),
+        oast_count=oast_count)
+    out: dict[str, Any] = {"write": w_url, "reads": [r["url"] for r in reads], "tag": tag,
+                           **verdict, "findings": findings}
+    if oob_out is not None:
+        out["oob"] = oob_out
+    return out
 
 
 @mcp.tool()

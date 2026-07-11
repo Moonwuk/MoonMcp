@@ -60,7 +60,7 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 | 1 | `nosqli_probe` — Mongo operator (`$ne/$gt/$in`) auth-bypass + `$where` boolean | ✅ **SHIPPED** `web/nosqli.py` | native edge | `nosqli` existed only in the KB, never as a probe; lives on real login/search endpoints; nuclei can't express the object-injection differential; consensus #1 across 3 agents |
 | 2 | `db_exposure` — raw-socket + HTTP unauth datastore sweep | 🟡 **SHIPPED** `recon/datastores.py` | native edge | `port_scan` sent no protocol probe; now covers Redis/Mongo/memcached/ES/CouchDB/InfluxDB/YARN/TiDB in one scope-gated fan-out (Zookeeper/Kafka/vector-DB still to add) |
 | 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | ✅ **SHIPPED** `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
-| 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | **new**, model on `workflow_probe` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher; the workflow engine already exists |
+| 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | ✅ **SHIPPED** `web/secondorder.py` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher |
 | 5 | `orm_leak_probe` — Django/Prisma/Rails relational-lookup + mass-assignment | **new** `web/ormleak.py` | native edge | hot 2023-25 class (elttam ORM Leak); fully nuclei-blind; RU Bitrix ORM variant folds in |
 | 6 | `db_credential_scan` — managed-DB DSN + warehouse-token classifier | extend `recon/secrets.py` + `config_audit.py` | offline classifier | highest-confidence net-new; PlanetScale/Neon/Turso/Atlas-srv/Snowflake/Redis-Cloud/BigQuery = direct DB, zero traffic |
 | 7 | `firebase_exposure` + `supabase_exposure` (RLS-off anon-key) | **new** `recon/{firebase,supabase}.py` | passive active-GET | epidemic in vibe-coded apps; one safe GET with the app's own public key |
@@ -339,7 +339,14 @@ scientific notation, hex literals, unicode) restore a blocked differential.
   add a thin **encoding-differential flag** ("SQLi blocked plainly but reachable via
   `<encoding>`"). Deep per-header fuzzing / tamper-chaining → sqlmap `--level 3-5 --tamper`.
 
-### C.6 Second-order / stored SQLi (write in request 1, fires in request N) ❌ — RANK 4/TOP
+### C.6 Second-order / stored SQLi (write in request 1, fires in request N) ✅ (SHIPPED) — RANK 4/TOP
+Implemented in `moonmcp/web/secondorder.py` + the `second_order_sqli_probe` tool
+(self-scoped, intrusive): seeds a uniquely-tagged control/error/boolean/OOB value at a
+`write` endpoint, drives the `read` endpoint(s), and flags a SQL error signature absent
+for the benign control, a reflected-tag boolean differential (equal-length twins), or an
+OAST callback — all correlated by the tag, away from the write. Extraction → sqlmap
+`--second-url`.
+
 Input stored safely in request 1, then re-read and concatenated into a *different* query
 in request N — the sink is never on the injection endpoint, so any stateless matcher
 (nuclei, `-dast`, even sqlmap against endpoint 1) sees nothing. Emphasized in VN
