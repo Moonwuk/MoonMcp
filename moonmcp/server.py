@@ -106,6 +106,7 @@ from .web import screenshot as screenshotmod
 from .web import secondorder as somod
 from .web import singlepacket as spmod
 from .web import ssrf_meta as ssrfmetamod
+from .web import ssrf_protocol as sspmod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
 from .web import value as valuemod
@@ -4130,6 +4131,86 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
            **verdict, "interactions": hits[:20]}
     if not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
+                              ports: str = "db", oast_token: str | None = None,
+                              wait: float = 3.0) -> dict:
+    """**SSRF → internal datastore** reach — protocol-smuggling + internal-port detection.
+    Two safe lanes: (1) inject `gopher://`/`dict://`/`ftp://` (+ an `http://` control)
+    canaries and poll OAST — a callback proves the sink dereferences that scheme (raw-TCP
+    reach to internal Redis/memcached, etc.); gopher/dict/ftp callbacks need a DNS/TCP OAST
+    (`oast_configure`), the built-in HTTP catcher only sees the http control. (2) inject
+    `http://127.0.0.1:<db_port>/` and diff the response vs a closed-port control — a
+    differential = the sink reaches internal services. No payload bytes are delivered;
+    weaponization → Strix. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    sc = _scope_check()
+
+    async def _get(value: str):
+        u, b = _with_param(url, param, value, m)
+        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
+
+    async def _poll(cb) -> list:
+        if ctx.oast_server is not None and ctx.oast_server.running:
+            return ctx.oast_server.interactions(cb.token)
+        pt = ctx.oast.poll_target(cb.token)
+        if not pt:
+            return []
+        try:
+            r = await ctx.http.fetch(pt, follow_redirects=True)
+            return oastmod.parse_interactions(r.text())
+        except Exception:
+            return []
+
+    # Lane 1 — scheme-deref OAST canaries (one token per scheme for attribution).
+    scheme_hits: dict[str, int] = {}
+    scheme_note = None
+    if not ctx.oast.configured:
+        scheme_note = "OAST unconfigured — scheme-deref lane skipped (start oast_selfhost/oast_configure)"
+    else:
+        canaries = {s: ctx.oast.generate(label=f"ssrf_proto_{s}") for s in sspmod.SCHEMES}
+        for s, cb in canaries.items():
+            await _get(sspmod.scheme_payload(s, cb.canary_host, cb.http_url))
+        await asyncio.sleep(max(0.0, min(wait, 8.0)))
+        for s, cb in canaries.items():
+            n = len(await _poll(cb))
+            if n:
+                scheme_hits[s] = n
+
+    # Lane 2 — internal-port reachability differential.
+    port_list = sspmod.parse_ports(ports)
+    ctrl_r = await _get(sspmod.closed_control_url())
+    ctrl = (ctrl_r.status, len(ctrl_r.body))
+    reachable: list[str] = []
+    for label, iurl in sspmod.internal_port_targets(port_list):
+        r = await _get(iurl)
+        if sspmod.assess_reachability(ctrl, (r.status, len(r.body))):
+            reachable.append(label)
+
+    non_http_schemes = {s: n for s, n in scheme_hits.items() if s != "http"}
+    verdict = confirmmod.evaluate(
+        oast_count=sum(non_http_schemes.values()),
+        injection_hits=(["ssrf/internal-port-reach"] if reachable else []),
+        status_changed=bool(reachable))
+    out: dict[str, Any] = {"target": url, "param": param, **verdict,
+                           "scheme_callbacks": scheme_hits, "reachable_internal_ports": reachable}
+    if scheme_note:
+        out["scheme_note"] = scheme_note
+    if non_http_schemes:
+        out["detail"] = (f"the sink dereferenced non-HTTP scheme(s) {list(non_http_schemes)} — raw-TCP "
+                         "reach to internal services; hand the gopher payload (Redis SET/CONFIG, etc.) to Strix")
+    elif reachable:
+        out["detail"] = (f"the sink reached internal port(s) {reachable} — SSRF into the internal network; "
+                         "pivot with gopher/dict via Strix")
     return out
 
 

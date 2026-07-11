@@ -67,6 +67,10 @@ NATIVE_EDGE: dict[str, str] = {
                       "[field][startsWith], Ransack) — a filter differential over an injected ORM "
                       "lookup, with NO raw SQL, so neither nuclei's -dast sqli fuzzing nor sqli_probe "
                       "fires; the empty-prefix vs no-match reproducible diff is native-edge",
+    "ssrf_protocol_probe": "SSRF→internal-datastore reach: per-scheme OAST canaries (gopher/dict/ftp) "
+                           "to prove non-HTTP scheme deref, plus a loopback DB-port reachability "
+                           "differential vs a closed-port control — a two-request differential + OAST "
+                           "correlation across MoonMCP's own callback server, not a template match",
     "fastjson_oast_probe": "Fastjson/Jackson autoType deserialization via a benign @type OAST "
                            "canary (java.net.Inet4Address/URL) correlated to MoonMCP's own callback "
                            "server — the request→callback correlation across MoonMCP's OAST is "

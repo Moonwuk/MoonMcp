@@ -337,6 +337,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/ssrf-proto"):
+            # DELIBERATELY VULNERABLE: fetches the injected ?url= server-side and
+            # reflects whether the internal target was reachable (distinct body length).
+            from urllib.parse import parse_qs, urlparse
+            u = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
+            reachable = False
+            if u.startswith(("http://", "https://")):
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(u, timeout=1).read(16)
+                    reachable = True
+                except Exception:
+                    reachable = False
+            body = b"internal-service-reachable-marker" if reachable else b"refused"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/ssrf"):
             # DELIBERATELY VULNERABLE: fetches the ?url= param server-side.
             from urllib.parse import parse_qs, urlparse

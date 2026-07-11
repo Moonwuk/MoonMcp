@@ -567,7 +567,14 @@ those creds mint an RDS IAM token / `GetSecretValue` / `rds-data` call to reach 
 **protocol-level** reach into internal DBs. Detection-only; weaponization → Strix
 (matches the shipped `desync→strix` precedent).
 
-### F.1 gopher:// / dict:// smuggling to Redis/Memcached/MySQL/Postgres ❌ — RANK 10/7
+### F.1 gopher:// / dict:// smuggling to Redis/Memcached/MySQL/Postgres ✅ (SHIPPED) — RANK 10/7
+Implemented in `web/ssrf_protocol.py` + the `ssrf_protocol_probe` tool (intrusive): a
+scheme-deref lane (per-scheme `gopher`/`dict`/`ftp` OAST canaries + an `http` control, each
+with its own token for attribution — gopher/dict/ftp callbacks need a DNS/TCP OAST via
+`oast_configure`, the built-in HTTP catcher sees only the http control) and an internal-port
+reachability differential (`http://127.0.0.1:<db_port>/` vs a closed-port control). No
+payload bytes delivered; the gopher `SET`/`CONFIG` weaponization → Strix.
+
 An SSRF sink that accepts arbitrary schemes sends raw bytes to a TCP port — enough to
 speak Redis RESP (`CONFIG SET dir` → cron RCE), memcached, or a MySQL/Postgres handshake.
 Gopherus generates payloads for 3306/11211/6379/9000. The classic blind-SSRF-to-RCE
@@ -584,7 +591,8 @@ escalation; also the CN Redis-未授权 chain.
   payloads go in the injection KB (per Gopherus), not a bridged interactive generator.
   `leadpipe` kind `ssrf_protocol` → Strix.
 
-### F.2 DNS-rebinding to internal DB (TOCTOU SSRF-guard bypass) ❌ — RANK 10 (companion)
+### F.2 DNS-rebinding to internal DB (TOCTOU SSRF-guard bypass) 🟡 (needs a DNS-capable OAST) — RANK 10 (companion)
+> Deferred: the built-in OAST catcher is HTTP-only, so serving a rebinding A-record needs `intel/oast_server.py` to gain a DNS listener (or a configured interactsh). Tracked as a follow-up; the methodology below stands.
 An SSRF allowlist that validates the hostname then re-resolves at fetch time is defeated
 by a rebinding domain (public IP first, then `169.254.169.254`/`127.0.0.1`/internal DB).
 Live 2026 CVEs (CVE-2026-27826 MCP-Atlassian TOCTOU; Burp MCP DNS-rebinding SSRF H1
