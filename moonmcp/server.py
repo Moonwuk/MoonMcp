@@ -34,6 +34,7 @@ from . import catalog as catalogmod
 from . import confirm as confirmmod
 from . import cvss as cvssmod
 from . import intercept as interceptmod
+from . import leadpipe as leadpipemod
 from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
@@ -2301,6 +2302,44 @@ async def add_finding(target: str, severity: str, title: str, detail: str = "",
                    target=target.strip().lower(), severity=f.severity, source=type,
                    trust="curated", provenance="manual", tags="finding", created_at=ts)
     return {"recorded": to_dict(f), "summary": ctx.findings.summary()}
+
+
+@mcp.tool()
+@safe_tool
+async def promote_lead(target: str, kind: str, detail: str = "", evidence: str = "",
+                       severity: str = "medium", record: bool = True) -> dict:
+    """**Lead → PoC pipeline.** Turn an edge-probe's `review` lead into a confirmation
+    plan: classifies the lead by `kind` (e.g. `multistep_bola`, `step_skip`,
+    `value_tampering`, `race`, `path_bypass`, `cache_deception`, `sqli`, `ssrf`, …),
+    routes it (**confirm_finding** for injection classes, **side-effect
+    re-observation** for logic/authz/financial, a **Strix** PoC brief for smuggling),
+    and states exactly what "confirmed" looks like. With `record`, files the lead into
+    the findings store + shared memory so it's tracked and shared across agents. This is
+    the bridge that converts the honest `review` leads into proven findings. Offline; no
+    traffic. See `business_logic_hunt` for the hunting side.
+    """
+
+    from datetime import datetime, timezone
+
+    ctx = get_context()
+    tgt = target.strip()
+    plan = leadpipemod.confirmation_plan(kind, tgt, detail)
+    out: dict = {"target": tgt, **plan}
+    if record:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        store_target = normalize_target(tgt) if "://" in tgt else tgt.lower()
+        f = ctx.findings.add(target=store_target, severity=severity,
+                             title=f"Lead ({plan['family']}): {plan['kind']} on {tgt}",
+                             type="lead", detail=detail, evidence=evidence,
+                             source="promote_lead", created_at=ts)
+        # A lead is observed/asserted-by-a-tool, not a vetted conclusion → untrusted.
+        mid = ctx.memory.add(kind="lead", title=f"{plan['kind']} on {tgt}",
+                             body=(detail or evidence or plan["confirmed_when"]),
+                             target=store_target, severity=severity, source="promote_lead",
+                             trust="untrusted", provenance="tool", tags=f"lead,{plan['family']}",
+                             created_at=ts)
+        out["recorded"] = {"finding_id": f.id, "memory_id": mid}
+    return out
 
 
 @mcp.tool()
