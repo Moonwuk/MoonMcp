@@ -439,7 +439,12 @@ Biggest net-new wins: an in-scope HTTPS GET or offline regex, epidemic, thin nuc
 coverage. Deliberately NOT duplicated: `ssrf_metadata_probe`, `analyze_config`,
 `dependency_confusion`, bucket enumeration, Adminer/phpMyAdmin panels.
 
-### E.1 Firebase RTDB / Firestore open rules ❌ — RANK 7/1
+### E.1 Firebase RTDB / Firestore open rules ✅ (SHIPPED) — RANK 7/1
+Implemented in `recon/firebase.py` + the `firebase_exposure` tool (self-scoped): harvests
+`databaseURL`/`projectId` from the page + JS `firebaseConfig`, then one unauth
+`GET <databaseURL>/.json?shallow=true` — 200 with JSON (not Permission denied) = open
+rules. The RTDB backend host is scope-checked; a `projectId` is reported as a Firestore lead.
+
 Security Rules with `if true`/`.read:true`; the project id sits in the app's
 `firebaseConfig`. Comparitech attributes 100M+ leaked records/year. RTDB and Firestore
 use different endpoints — probe both.
@@ -452,7 +457,12 @@ use different endpoints — probe both.
 - **Mapping:** new passive `recon/firebase.py` + `firebase_exposure`; reuse
   `secrets.py`/`crawl.py` JS extraction. Bulk dump/write → Strix via `leadpipe` kind `firebase_open`.
 
-### E.2 Supabase RLS-off / anon-key full-table read ❌ — RANK 7/2
+### E.2 Supabase RLS-off / anon-key full-table read ✅ (SHIPPED) — RANK 7/2
+Implemented in `recon/supabase.py` + the `supabase_exposure` tool (self-scoped): harvests
+the project URL + `anon` key (a JWT with `role:anon`) from the app JS, reads the PostgREST
+schema at `/rest/v1/?apikey=`, then a per-table `?select=*&limit=1` read — a returned row =
+RLS off. Rows are not surfaced; the backend host is scope-checked.
+
 Supabase tables have Row-Level Security **off by default**; the `anon` key is public-by-
 design (ships in the frontend) → full CRUD on every PostgREST-exposed table. CVE-2025-48757;
 10.3% of analyzed Lovable apps shipped anon-readable tables.

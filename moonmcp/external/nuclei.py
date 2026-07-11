@@ -67,6 +67,12 @@ NATIVE_EDGE: dict[str, str] = {
                       "[field][startsWith], Ransack) — a filter differential over an injected ORM "
                       "lookup, with NO raw SQL, so neither nuclei's -dast sqli fuzzing nor sqli_probe "
                       "fires; the empty-prefix vs no-match reproducible diff is native-edge",
+    "firebase_exposure": "Firebase RTDB open-rules — harvest the app's OWN databaseURL from its "
+                         "JS firebaseConfig, then a shallow unauth read of the derived backend; a "
+                         "config-discovery→backend-differential chain across two hosts, not a template match",
+    "supabase_exposure": "Supabase RLS-off — harvest the project URL + public anon key from the app "
+                         "JS, enumerate tables from the PostgREST schema, then a per-table limit=1 read "
+                         "with that key; key-discovery→schema→per-table differential, nuclei can't derive it",
     "second_order_sqli_probe": "stored SQLi where the sink is a DIFFERENT endpoint from the "
                                "injection — seed a tagged payload at a write endpoint, then drive "
                                "the read endpoints and correlate the SQL error/differential by the "
