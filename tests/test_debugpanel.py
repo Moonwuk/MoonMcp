@@ -63,6 +63,18 @@ async def test_no_false_positive_on_generic_200():
 
 
 @pytest.mark.asyncio
+async def test_flags_db_admin_consoles():
+    site = _Site({
+        "/db/admin": (200, "<html><title>Mongo Express</title><div id='leftPanel'></div></html>"),
+        "/play": (200, "<html>ClickHouse Play UI <textarea class='play-textarea'></textarea></html>"),
+    })
+    res = await dp.probe_debug_panels(site, "https://x.test")
+    by = {f["label"]: f for f in res}
+    assert by["Mongo-Express"]["severity"] == "high"
+    assert "ClickHouse /play" in by
+
+
+@pytest.mark.asyncio
 async def test_debug_exposure_tool_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "debug_exposure" in tools

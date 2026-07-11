@@ -422,7 +422,8 @@ conceptually in `docs/TECHNIQUES.md` but **no active detector**.
   + `oast_generate/oast_poll`; POST the benign `Inet4Address`/`URL` type into JSON
   params/body; confirm via OAST hit. Gadget selection + JNDI server → Strix.
 
-### D.3 Druid monitor → session hijack (`/druid/websession.json`) 🟡 — RANK CN-S
+### D.3 Druid monitor → session hijack (`/druid/websession.json`) ✅ (SHIPPED) — RANK CN-S
+Implemented — `stack_probe._probe_druid` now reads `/druid/websession.json` after `/druid/index.html` and upgrades the verdict to `high` (session hijack) when live session objects (SESSIONID + principal) are present.
 Beyond the `/druid/index.html` "exposed" tell already flagged, `/druid/websession.json`
 leaks **live session objects** (SESSIONID, principal, last-access) → copy the freshest
 cookie → authenticated backend access; `/druid/sql.json` leaks the literal server SQL
@@ -520,7 +521,8 @@ treats "publicly accessible RDS/CloudSQL" and "SG exposes risky ports" as distin
 - **Mapping:** `DB_PORT_MAP`/`classify_db_exposure(host)` in `intel/shodan.py` + an
   `exposed_db_probe` tool. Reachability confirm (not auth) → `leadpipe` kind `exposed_db` → Strix.
 
-### E.5 DB admin dashboards reachable (Mongo-Express/pgAdmin/RedisInsight/ClickHouse `/play`) ❌ — RANK 5
+### E.5 DB admin dashboards reachable (Mongo-Express/pgAdmin/RedisInsight/ClickHouse `/play`) ✅ (SHIPPED) — RANK 5
+Implemented — added Mongo-Express (`/db/admin`), pgAdmin (`/browser/`), ClickHouse `/play`, RedisInsight to `debug_exposure`'s `_PANELS` (path→signature engine).
 Web DB consoles left in prod; Mongo-Express in particular ships with no auth
 (`ME_CONFIG_BASICAUTH` unset) → full browse/query/delete. `debug_exposure` already
 covers Adminer/phpMyAdmin with the same path→signature engine — one-line additions.
@@ -531,7 +533,8 @@ covers Adminer/phpMyAdmin with the same path→signature engine — one-line add
 - **Mapping:** add entries to `web/debugpanel.py:_PANELS`. Cross-link to Theme F (these
   panels are prime SSRF targets).
 
-### E.6 Backup/dump artifacts (`.sql`/`.bak`/mongodump) in object storage ❌ — RANK 6
+### E.6 Backup/dump artifacts (`.sql`/`.bak`/mongodump) in object storage ✅ (SHIPPED) — RANK 6
+Implemented — `recon/buckets.py` now parses a public-listable bucket's XML listing (`<Key>`/`<Name>`) for DB dump/backup keys (`extract_dump_keys`) and flags them `critical`; added `-dump`/`-sql`/`-database` name permutations.
 DB dumps written to S3/GCS/Azure Blob that are public. GrayHatWarfare indexes ~470k open
 buckets by extension — `.sql`/`.bak`/`.dump`/mongodump = a one-search data breach.
 `recon/buckets.py` finds buckets but doesn't hunt dump keys.

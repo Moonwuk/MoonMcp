@@ -119,12 +119,22 @@ async def _probe_shiro(client, base, scope_check) -> dict | None:
 async def _probe_druid(client, base, scope_check) -> dict | None:
     r = await _fetch(client, base.rstrip("/") + "/druid/index.html", scope_check)
     body = r.text(limit=20_000).lower() if r.status == 200 else ""
-    if "druid stat index" in body or "druid-min.js" in body:
-        return {"product": "Alibaba Druid", "severity": "medium", "verdict": "confirmed",
-                "issue": "Druid monitor exposed unauthenticated",
-                "detail": "/druid/index.html reachable — /druid/websession.json can leak live "
-                          "sessions"}
-    return None
+    if not ("druid stat index" in body or "druid-min.js" in body):
+        return None
+    # Upgrade: /druid/websession.json leaks LIVE session objects (SESSIONID, principal),
+    # so an attacker copies the freshest cookie → authenticated backend access.
+    ws = await _fetch(client, base.rstrip("/") + "/druid/websession.json", scope_check)
+    ws_body = ws.text(limit=20_000) if ws.status == 200 else ""
+    if ws.status == 200 and "SESSIONID" in ws_body and ("Principal" in ws_body or "LastAccessTime" in ws_body):
+        return {"product": "Alibaba Druid", "severity": "high", "verdict": "confirmed",
+                "issue": "Druid monitor session leak (websession.json)",
+                "detail": "/druid/websession.json leaked live sessions (SESSIONID + principal) — copy the "
+                          "freshest SESSIONID cookie for authenticated backend access; /druid/sql.json "
+                          "also leaks server SQL. Replay the cookie via Strix"}
+    return {"product": "Alibaba Druid", "severity": "medium", "verdict": "confirmed",
+            "issue": "Druid monitor exposed unauthenticated",
+            "detail": "/druid/index.html reachable — check /druid/websession.json (live sessions) and "
+                      "/druid/sql.json (server SQL)"}
 
 
 async def _probe_bitrix(client, base, scope_check) -> dict | None:

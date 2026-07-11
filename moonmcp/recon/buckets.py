@@ -23,7 +23,27 @@ _SUFFIXES = [
     "-media", "-images", "-img", "-uploads", "-upload", "-files", "-data",
     "-db", "-logs", "-log", "-public", "-private", "-internal", "-cdn", "-www",
     "-web", "-app", "-api", "-config", "-secret", "-secrets", "-archive", "-s3",
+    "-dump", "-dumps", "-sql", "-database", "-databases",
 ]
+
+# Object keys inside a listable bucket that are a DB dump / backup (a one-search data
+# breach): a dump extension, or a dump/backup keyword in the key. <Key> is S3/GCS,
+# <Name> is Azure Blob.
+_KEY_TAG_RE = re.compile(r"<(?:Key|Name)>([^<]+)</(?:Key|Name)>", re.I)
+_BACKUP_KEY_RE = re.compile(
+    r"(?i)(?:\.(?:sql|bak|dump|bson)(?:\.(?:gz|tar|tgz|zip|bz2|xz))?$|"
+    r"mongodump|mysqldump|pg_?dump|[-_/](?:backup|dumps?|snapshot|db[-_]?export))")
+
+
+def extract_dump_keys(listing_body: str) -> list[str]:
+    """From a public bucket's XML listing, the object keys that look like a DB
+    dump / backup (a directly-downloadable data breach)."""
+
+    out: list[str] = []
+    for key in _KEY_TAG_RE.findall(listing_body or ""):
+        if _BACKUP_KEY_RE.search(key) and key not in out:
+            out.append(key)
+    return out
 _PREFIXES = ["", "dev-", "prod-", "staging-", "test-", "backup-", "assets-", "cdn-", "s3-"]
 
 
@@ -94,8 +114,17 @@ async def check_buckets(http_client, names: list[str], *,
         access = classify_status(r.status)
         if access is None:
             return None
-        return {"name": name, "provider": provider, "url": url,
-                "status": r.status, "access": access}
+        entry: dict = {"name": name, "provider": provider, "url": url,
+                       "status": r.status, "access": access}
+        # A listable bucket that also holds a DB dump/backup key is a direct data breach.
+        if access == "public-listable" and getattr(r, "body", None):
+            dumps = extract_dump_keys(r.text(limit=300_000))
+            if dumps:
+                entry["dump_keys"] = dumps[:20]
+                entry["severity"] = "critical"
+                entry["detail"] = (f"public bucket lists {len(dumps)} DB dump/backup object(s) "
+                                   f"(e.g. {dumps[0]}) — directly downloadable data breach")
+        return entry
 
     jobs = []
     for name in names:

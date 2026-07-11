@@ -99,6 +99,30 @@ async def test_probe_druid_and_clickhouse_exposure():
 
 
 @pytest.mark.asyncio
+async def test_probe_druid_session_leak():
+    def handler(url, headers):
+        if url.endswith("/druid/index.html"):
+            return _R(200, "<title>Druid Stat Index</title>")
+        if url.endswith("/druid/websession.json"):
+            return _R(200, '[{"SESSIONID":"abc123","Principal":"admin","LastAccessTime":"2026"}]')
+        return _R(404, "")
+    res = await stacks.probe_stack(_Client(handler), "https://t.test/")
+    f = next(f for f in res.findings if f["product"] == "Alibaba Druid")
+    assert f["severity"] == "high" and "session leak" in f["issue"].lower()
+
+
+@pytest.mark.asyncio
+async def test_probe_druid_monitor_only_stays_medium():
+    def handler(url, headers):
+        if url.endswith("/druid/index.html"):
+            return _R(200, "druid-min.js")
+        return _R(404, "")   # websession.json not exposed
+    res = await stacks.probe_stack(_Client(handler), "https://t.test/")
+    f = next(f for f in res.findings if f["product"] == "Alibaba Druid")
+    assert f["severity"] == "medium"
+
+
+@pytest.mark.asyncio
 async def test_probe_vector_stores():
     def chroma(url, headers):
         if url.endswith("/api/v2/heartbeat"):
