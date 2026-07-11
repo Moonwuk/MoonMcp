@@ -52,13 +52,24 @@ _RAW_PATTERNS: list[tuple[str, str, str, int]] = [
     ("DigitalOcean PAT", r"dop_v1_[a-f0-9]{64}", "low", 0),
     ("Databricks PAT", r"\bdapi[a-f0-9]{32}\b", "medium", 0),
     # Managed / serverless DB credentials — a DSN-with-creds or a provider token is a
-    # DIRECT path to the data (no exploit). See docs/DATABASE_RESEARCH.md E.3.
-    ("PlanetScale Password", r"pscale_pw_[0-9A-Za-z._\-]{20,}", "low", 0),
-    ("PlanetScale Service Token", r"pscale_tkn_[0-9A-Za-z._\-]{20,}", "low", 0),
-    ("Neon Postgres DSN", r"(?i)postgres(?:ql)?://[^\s:@/]+:[^\s:@/]+@ep-[a-z0-9\-]+[a-z0-9.\-]*\.neon\.tech", "low", 0),
-    ("MongoDB Atlas SRV DSN", r"(?i)mongodb\+srv://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-]+\.[a-z0-9]+\.mongodb\.net", "low", 0),
-    ("Upstash/Redis-Cloud DSN", r"(?i)rediss?://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-.]+\.(?:upstash\.io|redis-cloud\.com)", "low", 0),
-    ("Turso libSQL URL", r"(?i)libsql://[a-z0-9.\-]+\.turso\.io", "medium", 0),
+    # DIRECT path to the data (no exploit). See docs/DATABASE_RESEARCH.md E.3. The
+    # "managed_db" risk tier adds a placeholder-credential gate (kills doc DSNs like
+    # user:password@ / <db_password>). Every host pattern carries a trailing boundary
+    # `(?![a-z0-9.\-])` so a look-alike suffix (neon.tech.attacker.com) does NOT match.
+    ("PlanetScale Token", r"(?i)\bpscale_(?:pw|tkn|oauth)_[\w=.\-]{32,64}(?![\w=.\-])", "managed_db", 0),
+    ("Neon Postgres DSN",
+     r"(?i)postgres(?:ql)?(?:\+[a-z0-9]+)?://[^\s:@/]+:[^\s:@/]+@ep-[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.neon\.tech(?![a-z0-9.\-])",
+     "managed_db", 0),
+    ("MongoDB Atlas SRV DSN",
+     r"(?i)mongodb\+srv://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)+\.mongodb(?:gov)?\.net(?![a-z0-9.\-])",
+     "managed_db", 0),
+    ("Upstash Redis DSN",
+     r"(?i)rediss?://[^\s:@/]*:[^\s:@/]+@[a-z0-9\-]+\.upstash\.io(?![a-z0-9.\-])", "managed_db", 0),
+    ("Redis Cloud DSN",
+     r"(?i)rediss?://[^\s:@/]*:[^\s:@/]+@[a-z0-9.\-]+\.(?:redis-cloud\.com|redislabs\.com|rlrcp\.com|db\.redis\.io)(?![a-z0-9.\-])",
+     "managed_db", 0),
+    ("Turso libSQL URL",
+     r"(?i)(?:libsql|wss?|https?)://[a-z0-9][a-z0-9.\-]*\.turso\.io(?![a-z0-9.\-])", "managed_db", 0),
     ("New Relic API Key", r"NRAK-[A-Z0-9]{27}", "low", 0),
     ("Linear API Key", r"lin_api_[0-9A-Za-z]{40}", "low", 0),
     ("Age Secret Key", r"AGE-SECRET-KEY-1[0-9A-Z]{58}", "low", 0),
@@ -102,6 +113,26 @@ def _looks_placeholder(value: str) -> bool:
     return any(p in low for p in ("example", "changeme", "your_", "placeholder", "xxxx"))
 
 
+# Literal placeholder credentials used in provider docs/READMEs (not real secrets).
+_PLACEHOLDER_CRED = {"password", "pass", "changeme", "example", "demo", "test",
+                     "secret", "user", "username", "dbpassword", "yourpassword"}
+_DSN_PASS_RE = re.compile(r"://[^\s:/@]*:([^\s:/@]+)@")
+
+
+def _managed_placeholder(value: str) -> bool:
+    """A managed-DB DSN/endpoint that is obviously a doc placeholder, not a live
+    credential — angle-bracket templates, ``your-*``/``example``/``placeholder``
+    hosts, or a literal ``user:password@`` userinfo."""
+
+    low = value.lower()
+    if "<" in value or ">" in value:
+        return True
+    if any(t in low for t in ("your_", "your-", "example", "placeholder", "changeme", "xxxx", "dummy")):
+        return True
+    m = _DSN_PASS_RE.search(value)
+    return bool(m and m.group(1).lower() in _PLACEHOLDER_CRED)
+
+
 @dataclass
 class SecretHit:
     type: str
@@ -137,6 +168,10 @@ def scan_text(text: str, source: str = "") -> list[SecretHit]:
             # A medium hex-family token that's immediately followed by an asset
             # extension is a filename hash (e.g. /assets/key-<md5>.js), not a secret.
             if risk == "medium" and _ASSET_TAIL_RE.match(text, m.end()):
+                continue
+            # Managed-DB DSNs/endpoints: skip obvious doc placeholders (user:password@,
+            # <db_password>, your-*/example hosts) so a README sample isn't flagged.
+            if risk == "managed_db" and _managed_placeholder(value):
                 continue
             key = (name, value)
             if key in seen:
