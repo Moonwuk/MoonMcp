@@ -33,6 +33,10 @@ def _sig(sample: dict) -> tuple:
         (sample.get("via") or "").strip().lower(),
         (sample.get("backend") or "").strip().lower(),
         tuple(sorted(sample.get("cookies") or [])),
+        # Response header-NAME ordering is a covert per-backend fingerprint: distinct
+        # server software/config emits headers in a distinct order even when the values
+        # match. A stateless per-response scanner never compares ordering across samples.
+        tuple(sample.get("header_order") or ()),
     )
 
 
@@ -89,10 +93,24 @@ def cluster_backends(samples: list[dict]) -> dict:
                 reps.append(min(ds))  # each backend's earliest observed Date
         skew = round(max(reps) - min(reps), 1) if len(reps) >= 2 else 0.0
 
+    # Content drift: different backends returning a different ETag / Last-Modified for
+    # the SAME URL means they serve different builds — a stale node may expose old code
+    # or a since-patched vulnerability. Gated on a real fleet (like patch drift).
+    content_versions: set[tuple[str, str]] = set()
+    for members in groups.values():
+        for m in members:
+            tag = ((m.get("etag") or "").strip(), (m.get("last_modified") or "").strip())
+            if tag != ("", ""):
+                content_versions.add(tag)
+    content_drift = load_balanced and len(content_versions) > 1
+
     concerns: list[str] = []
     if patch_drift:
         concerns.append(f"backends report different Server versions {server_versions} — "
                         "possible patch drift; the lagging node may be individually vulnerable")
+    if content_drift:
+        concerns.append("backends return different ETag/Last-Modified for the same URL — "
+                        "content/build drift across the fleet; a stale node may serve old code")
     if skew > 2:
         concerns.append(f"~{skew:.0f}s clock skew between backends — nodes are not time-synced")
     return {
@@ -101,6 +119,10 @@ def cluster_backends(samples: list[dict]) -> dict:
         "backends": backends,
         "patch_drift": patch_drift,
         "server_versions": server_versions if patch_drift else [],
+        "content_drift": content_drift,
+        "content_versions": (
+            [f"etag={e or '-'} last-modified={lm or '-'}" for e, lm in sorted(content_versions)]
+            if content_drift else []),
         "clock_skew_seconds": skew,
         "concerns": concerns,
     }

@@ -3465,11 +3465,12 @@ async def cache_probe(target: str) -> dict:
 async def backend_probe(target: str, samples: int = 12) -> dict:
     """**Infer the backend fleet behind a load balancer** from response variance.
     Sends N benign requests and clusters them by their discriminators (Server,
-    X-Powered-By, Via, backend-id headers, Set-Cookie names) to count distinct
-    backends, and flags **patch drift** (nodes reporting different Server versions
-    — a lagging node may be individually vulnerable) and **clock skew** between
-    nodes. The load-balancing/consistency picture a single request can't show.
-    In scope only.
+    X-Powered-By, Via, backend-id headers, Set-Cookie names, **response
+    header-name ordering**) to count distinct backends, and flags **patch drift**
+    (nodes reporting different Server versions — a lagging node may be individually
+    vulnerable), **content drift** (nodes serving different ETag/Last-Modified for the
+    same URL — build/deploy inconsistency), and **clock skew** between nodes. The
+    load-balancing/consistency picture a single request can't show. In scope only.
     """
 
     raw = target.strip()
@@ -3487,6 +3488,10 @@ async def backend_probe(target: str, samples: int = 12) -> dict:
             # it doesn't inflate the backend count; prefer origin-identifying headers.
             "backend": r.header("X-Backend-Server") or r.header("X-Server"),
             "cookies": [c.split("=", 1)[0].strip() for c in r.get_all("set-cookie")],
+            "etag": r.header("ETag"),
+            "last_modified": r.header("Last-Modified"),
+            # header-name order (lowercased) — a covert per-backend fingerprint.
+            "header_order": tuple(k.lower() for k, _ in r.headers),
             "date_epoch": inframod.parse_http_date(r.header("Date")),
             "elapsed_ms": r.elapsed_ms,
         })
