@@ -3653,9 +3653,10 @@ async def tls_behavior(target: str, port: int = 443) -> dict:
     """**Behavioural TLS profiling.** Compares the certificate served for the real
     host vs a **bogus SNI** — if a valid cert for another domain comes back, the
     edge is SNI-routing/shared-hosting (a default-backend / origin-exposure hint);
-    if identical, the host doesn't route on SNI. Also reports supported TLS
-    versions (flagging weak TLS 1.0/1.1), the negotiated cipher, and HTTP/2 (ALPN).
-    In scope only.
+    if identical, the host doesn't route on SNI. **Mines the default (bogus-SNI)
+    cert's SANs** for `origin_hostname_hints` — sibling tenants or the origin's own
+    hostname to pivot on. Also reports supported TLS versions (flagging weak TLS
+    1.0/1.1), the negotiated cipher, and HTTP/2 (ALPN). In scope only.
     """
 
     host, tls_port = _split_host_port(target, port)
@@ -3671,12 +3672,19 @@ async def tls_behavior(target: str, port: int = 443) -> dict:
     real_serial = real.serial_number
     bogus_serial = bogus.serial_number if bogus.connected else None
     sni_routing = bool(bogus_serial) and bogus_serial != real_serial
+    # Mine the DEFAULT (bogus-SNI) cert's SANs for origin/tenant hostnames — the cert an
+    # edge serves when it doesn't recognise the SNI often names the origin or a sibling.
+    default_sans = bogus.subject_alt_names if (bogus.connected and sni_routing) else []
+    origin_hints = tlsmod.origin_hostname_hints(host, default_sans)
     concerns: list[str] = []
     if profile.weak_versions:
         concerns.append(f"weak TLS versions accepted: {', '.join(profile.weak_versions)}")
     if sni_routing:
         concerns.append("a different certificate is served for an unknown SNI — SNI-based routing "
                         "/ shared hosting; the default cert may expose another tenant or the origin")
+    if origin_hints:
+        concerns.append(f"the default certificate names other hosts {origin_hints[:8]} — sibling "
+                        "tenants or the origin hostname; pivot on these for origin/lateral surface")
     if real.expired:
         concerns.append("the certificate is expired")
     return {
@@ -3685,7 +3693,13 @@ async def tls_behavior(target: str, port: int = 443) -> dict:
                         "san": real.subject_alt_names[:20], "serial": real_serial,
                         "not_after": real.not_after, "days_until_expiry": real.days_until_expiry},
         "sni_routing": sni_routing,
+        "default_cert": {
+            "subject": bogus.subject.get("commonName") if bogus.connected else None,
+            "issuer": bogus.issuer.get("organizationName") if bogus.connected else None,
+            "san": default_sans[:20],
+        },
         "default_cert_subject": bogus.subject.get("commonName") if bogus.connected else None,
+        "origin_hostname_hints": origin_hints[:20],
         "supported_versions": profile.supported_versions,
         "weak_versions": profile.weak_versions,
         "http2": profile.http2,
