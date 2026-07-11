@@ -24,6 +24,42 @@ MAX_NETWORK = 200
 MAX_ERRORS = 50
 
 
+async def _install_scope_guard(context, scope_ok: Callable[[str], bool],
+                               extra_headers: dict[str, str] | None) -> None:
+    """Route every request: abort out-of-scope navigations, and strip the engagement
+    auth headers from out-of-scope subresources — so Playwright's blanket header
+    application can't leak a credential to a third-party host or a redirect target."""
+
+    auth_keys = {k.lower() for k in (extra_headers or {})}
+
+    async def _guard(route) -> None:
+        req = route.request
+        try:
+            in_scope = scope_ok(req.url)
+        except Exception:
+            in_scope = False
+        try:
+            if not in_scope:
+                if req.is_navigation_request():
+                    await route.abort()
+                    return
+                if auth_keys:
+                    kept = {k: v for k, v in req.headers.items() if k.lower() not in auth_keys}
+                    await route.continue_(headers=kept)
+                    return
+            await route.continue_()
+        except Exception:
+            try:
+                await route.continue_()
+            except Exception:
+                pass
+
+    try:
+        await context.route("**/*", _guard)
+    except Exception:
+        pass
+
+
 @dataclass
 class BrowserResult:
     url: str
@@ -53,9 +89,16 @@ async def browse(
     max_chars: int = MAX_CHARS,
     extra_headers: dict[str, str] | None = None,
     cookies: list[dict] | None = None,
+    scope_ok: Callable[[str], bool] | None = None,
 ) -> BrowserResult:
     """Navigate a headless browser to *url*, collect observability, optionally
-    evaluate a JS expression, and return a structured :class:`BrowserResult`."""
+    evaluate a JS expression, and return a structured :class:`BrowserResult`.
+
+    When *scope_ok* is given, out-of-scope **navigations** are aborted (so a redirect
+    can't carry the engagement auth off-scope) and any engagement-auth headers are
+    **stripped from out-of-scope subresource requests** — the same fail-closed scope
+    discipline the HTTP tools enforce, which Playwright's blanket header application
+    otherwise bypasses."""
 
     result = BrowserResult(url=url, available=playwright_available())
     if not result.available:
@@ -104,6 +147,8 @@ async def browse(
                 context = await browser.new_context()
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
+                if scope_ok is not None:
+                    await _install_scope_guard(context, scope_ok, extra_headers)
                 if cookies:
                     try:
                         await context.add_cookies(cookies)

@@ -77,7 +77,9 @@ Two ways, pick based on the user's situation:
    `parse_openapi`, `discover_parameters`, `cors_audit`, `graphql_check`,
    `extract_secrets`, `trace_redirects`, `open_redirect`, `takeover_check`,
    `vcs_exposure`. For JS-heavy SPAs use `browser_open` / `browser_eval` /
-   `browser_interact` (post-JS DOM, console, network). For IDOR run
+   `browser_interact` (post-JS DOM, console, network) and `cspp_probe`
+   (client-side prototype pollution via a URL `__proto__`/`constructor` path, tested
+   in our own headless browser — safe, never mutates the target). For IDOR run
    `access_control_check` after `auth_set`.
    - **Active detectors** (intrusive, on a discovered param): `ssti_probe`,
      `sqli_probe` (context/oob/time-based/json-waf/multibyte/header lanes),

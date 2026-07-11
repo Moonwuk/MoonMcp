@@ -101,6 +101,10 @@ NATIVE_EDGE: dict[str, str] = {
                       "baseline (plus a Mongoose CastError leak); nuclei's -dast fuzzes scalar "
                       "values in a fixed request and cannot swap a variable's TYPE for an operator "
                       "document across a two-state GraphQL differential",
+    "cspp_probe": "client-side prototype pollution — loads __proto__/constructor URL paths in a "
+                  "real headless browser and reads Object.prototype[marker] back from the page's JS "
+                  "realm; a stateless HTTP matcher cannot execute the SPA's JS, so it can neither "
+                  "trigger the client-side merge nor observe the polluted prototype",
     "parser_diff_probe": "HTTP parser-differential / WAF-bypass multiplier — pairs a canonical "
                          "request against quirk-twins (UTF-7/overlong-UTF-8 decode, duplicate JSON "
                          "keys, JSON comments/trailing commas, duplicate multipart fields) carrying "

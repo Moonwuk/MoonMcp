@@ -24,6 +24,7 @@ import inspect
 import os
 import platform
 import re
+import secrets
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -86,6 +87,7 @@ from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
 from .web import cors as corsmod
 from .web import crlf as crlfmod
+from .web import cspp as csppmod
 from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
@@ -1621,9 +1623,70 @@ async def browser_open(target: str, capture_html: bool = False,
     headers, cookies = _browser_auth(url)
     result = await browsermod.browse(
         url, capture_html=capture_html, wait_until=wait_until,
-        extra_headers=headers, cookies=cookies,
+        extra_headers=headers, cookies=cookies, scope_ok=_scope_check(),
     )
     return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def cspp_probe(target: str, wait_until: str = "networkidle") -> dict:
+    """**Client-side prototype pollution** — headless-browser detection, safe by design.
+    SPAs that parse `location.search`/`location.hash` and deep-merge them can let a
+    `__proto__`/`constructor.prototype` URL path write `Object.prototype` in the page's
+    JS (the client-side root of DOM-XSS gadget chains). This loads each candidate URL in
+    MoonMCP's **own ephemeral browser**, then reads `Object.prototype[<marker>]` back —
+    the pollution lands in our throwaway Chromium, **never on the target server** (we send
+    an ordinary GET the server ignores) and we send **no engagement auth** (the sink fires
+    regardless of login, so nothing leaks). The marker is a fresh random key per run that a
+    clean baseline proves absent, so any read-back under a payload is attributable. Tries
+    `__proto__`/`constructor` bracket+dotted paths in both query and hash (firing
+    `hashchange` for hash-router sinks). Detection-only — proving the sink is reachable, not
+    a working XSS; gadget→XSS chaining → Strix. Needs Playwright/Chromium (self-degrades if
+    absent). In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    marker = csppmod.MARKER_PREFIX + secrets.token_hex(4)
+    read = csppmod.read_script(marker)
+    scope_ok = _scope_check()
+
+    async def _read(u, script):
+        # No engagement auth on purpose (nothing to leak); scope-gated navigations.
+        return await browsermod.browse(u, script=script, capture_text=False,
+                                       wait_until=wait_until, scope_ok=scope_ok)
+
+    baseline = await _read(url, read)
+    if not baseline.available:
+        return {"target": url, "available": False, "error": baseline.error,
+                "install_hint": baseline.install_hint}
+    if baseline.error or baseline.eval_error:
+        return {"target": url, "available": True, "verdict": "inconclusive",
+                "confidence": "low", "vectors": [],
+                "error": baseline.error or baseline.eval_error,
+                "note": "could not establish a clean prototype baseline (navigation/eval "
+                        "failed) — re-run against a reachable page that returns HTML"}
+
+    hits: list[dict] = []
+    for label, vurl, is_hash in csppmod.vectors(url, marker):
+        script = csppmod.hashchange_script(marker) if is_hash else read
+        r = await _read(vurl, script)
+        if csppmod.assess(baseline.eval_result, r.eval_result):
+            hits.append({"vector": label, "url": vurl, "value": r.eval_result})
+
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"prototype-pollution/client-side ({h['vector']})" for h in hits],
+        reflected=bool(hits))
+    return {"target": url, "available": True, **verdict,
+            "polluted_property": marker if hits else None,
+            "vectors": hits, "baseline_marker": baseline.eval_result,
+            "note": ("client-side prototype pollution — the page's JS merged a URL "
+                     "__proto__/constructor path into Object.prototype (in our own ephemeral "
+                     "browser only; the target server is untouched). Locating a gadget → XSS → Strix"
+                     if hits else
+                     "no client-side prototype-pollution sink reached via URL query/hash "
+                     "(the page may pollute from a different source or on a later event)")}
 
 
 @mcp.tool()
@@ -1642,7 +1705,7 @@ async def browser_eval(target: str, script: str, wait_until: str = "load") -> di
     headers, cookies = _browser_auth(url)
     result = await browsermod.browse(
         url, script=script, capture_text=False, wait_until=wait_until,
-        extra_headers=headers, cookies=cookies,
+        extra_headers=headers, cookies=cookies, scope_ok=_scope_check(),
     )
     out = to_dict(result)
     # trim the network/text noise — browser_eval is about the script result

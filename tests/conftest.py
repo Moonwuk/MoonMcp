@@ -7,6 +7,33 @@ import pytest
 from moonmcp import server as srv
 from moonmcp.context import build_context
 
+# A deliberately-vulnerable SPA: it deep-merges location.search + location.hash into
+# an object via bracket/dot paths, so a __proto__/constructor path pollutes
+# Object.prototype in the page's JS realm (client-side prototype pollution).
+_CSPP_VULN = rb"""<!doctype html><html><head><title>CSPP</title></head><body>cspp app
+<script>
+function setPath(o,p,v){var ks=p.split(/[\[\]\.]+/).filter(Boolean);var c=o;
+for(var i=0;i<ks.length-1;i++){if(c[ks[i]]===undefined)c[ks[i]]={};c=c[ks[i]];}
+c[ks[ks.length-1]]=v;}
+function parse(s){var o={};(s||'').replace(/^[?#]/,'').split('&').forEach(function(p){
+if(!p)return;var kv=p.split('=');setPath(o,decodeURIComponent(kv[0]),decodeURIComponent(kv[1]||''));});
+return o;}
+parse(location.search);parse(location.hash);
+</script></body></html>"""
+
+# The hardened twin: it refuses the dangerous keys, so no pollution occurs.
+_CSPP_SAFE = rb"""<!doctype html><html><head><title>CSPP</title></head><body>cspp safe
+<script>
+function setPath(o,p,v){var ks=p.split(/[\[\]\.]+/).filter(Boolean);
+for(var i=0;i<ks.length;i++){if(ks[i]==='__proto__'||ks[i]==='constructor'||ks[i]==='prototype')return;}
+var c=o;for(var i=0;i<ks.length-1;i++){if(c[ks[i]]===undefined)c[ks[i]]={};c=c[ks[i]];}
+c[ks[ks.length-1]]=v;}
+function parse(s){var o={};(s||'').replace(/^[?#]/,'').split('&').forEach(function(p){
+if(!p)return;var kv=p.split('=');setPath(o,decodeURIComponent(kv[0]),decodeURIComponent(kv[1]||''));});
+return o;}
+parse(location.search);parse(location.hash);
+</script></body></html>"""
+
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     _lb = 0    # /lb backend rotation counter
@@ -664,6 +691,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(payload)
+            return
+        if self.path.startswith("/cspp-safe") or self.path.startswith("/cspp"):
+            body = _CSPP_SAFE if self.path.startswith("/cspp-safe") else _CSPP_VULN
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path.startswith("/parserdiff-safe"):
             self._parserdiff_get(safe=True)
