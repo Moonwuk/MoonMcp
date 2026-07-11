@@ -2922,6 +2922,17 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     ctx = get_context()
     report: dict[str, Any] = {"target": host}
 
+    # RECALL: surface what this (or another) agent already learned about the target so
+    # the caller can build on it instead of re-deriving — the shared-memory payoff.
+    prior = ctx.memory.search("", target=host, limit=10)
+    if prior:
+        report["prior_memory"] = {
+            "count": len(prior),
+            "items": [{"kind": p["kind"], "title": p["title"], "trust": p["trust"],
+                       "severity": p.get("severity")} for p in prior],
+            "note": "already-known facts/findings for this target — build on these, don't re-derive",
+        }
+
     if include_subdomains:
         subs = await submod.enumerate_subdomains(ctx.http, host)
         report["subdomains"] = {"count": subs.count, "sources": subs.sources,
