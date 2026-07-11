@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **120+ tools**, **11 resources** and **8 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **150 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -91,6 +91,14 @@ MoonMCP exposes **120+ tools**, **11 resources** and **8 operator prompts**, gro
 | `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
 | `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |
 | `access_control_check` | Replay a request as **user A (auth) vs user B vs anonymous** and diff the responses → broken-access-control / IDOR signal (the #1 payout class; set `auth_set` first). |
+| `authz_probe` | Function/object-level authorization: replay a privileged/admin action as a lower-priv or anonymous user → BFLA / BOLA. |
+| `response_leak_probe` | Drives the OTP / reset / verify flow and detects the out-of-band secret (token/OTP) returned **in-band** in the response (account-takeover primitive). |
+| `reset_poison_probe` | **Password-reset poisoning** via `Host` / `X-Forwarded-Host` — the reset link is built to point at an attacker host. |
+| `path_bypass_probe` | 401/403 → 2xx **path-normalization ACL bypass** (`/admin/./`, `%2e`, trailing dot, case, `..;/`). |
+| `crlf_probe` | **CRLF injection** → response splitting / header injection (Set-Cookie / redirect smuggling). |
+| `oauth_probe` | **OIDC discovery** recon — flags implicit grant, missing/`plain` PKCE, `none`/HS256 signing, `http` issuer, issuer↔jwks mismatch. |
+| `oauth_redirect_probe` | OAuth **`redirect_uri` validation bypass** (prefix/suffix/subdomain/open-redirect chaining). |
+| `recover_sourcemaps` | Recover the original app source from exposed `.js.map` **sourcemaps** and scan the recovered code for secrets. |
 | `graphql_check` | Discover GraphQL endpoints and test whether **introspection** is enabled. |
 | `discover_parameters` | Brute a wordlist of param names → flag hidden params the app reacts to: `reflected` (XSS/SSRF/injection entry point) or behavioural `status`/`length` change. |
 | `waf_detect` | Fingerprint WAF/CDN (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, …). |
@@ -118,7 +126,36 @@ MoonMCP exposes **120+ tools**, **11 resources** and **8 operator prompts**, gro
 | `http_methods` | Enumerate allowed methods + probe risky ones (TRACE/PUT/DELETE/PATCH → XST / write-enabled). |
 | `waf_efficacy` | Test which attack categories the WAF blocks (benign canaries) + whether simple transforms bypass it. |
 | `desync_probe` | Detection-only request-smuggling indicators (CL+TE / obfuscated TE); complete-message probes, never poisons a connection. |
+| `desync_modern_probe` | Modern desync (2025 class): 0.CL / TE.0 / `Expect: 100-continue` / chunk-extension via response-timeout deltas on raw closed sockets (CVE-2025-32094 / CVE-2025-55315). Detection-only. |
+| `cache_deception_probe` | Web-cache **deception**: primes a path-confusion variant (`/x.css`, `;x.css`, `%2f`) of the private page and re-reads it cookieless → a cached authed body under an attacker-readable key. |
+| `ssrf_metadata_probe` | Response-based SSRF → **cloud-metadata credential theft** (AWS/GCP/Azure/Alibaba/Yandex/Oracle/DO): injects each provider's IMDS URL and scans for its credential signature. |
+| `logic_probe` | Business-logic abuse: mass-assignment (privileged fields echoed back) + value/quantity tampering. |
+| `value_probe` | Money-aware value manipulation (negative/overflow/precision/>100 % discount, currency swap, single-use-coupon reuse). |
+| `race_probe` | Single-packet **race condition** (HTTP/1.1 last-byte sync) → non-atomic per-user limits (coupon/withdrawal double-spend). |
+| `workflow_probe` | **Step-skipping** on a multi-step flow — fetch each step cold (without its prerequisites) → order confirmed without payment, account active without verification. |
+| `jwt_jku_probe` | JWT `jku`/`x5u` **key-injection SSRF** — re-issues the token with a `jku` pointing at an OAST canary; a callback = the server fetched attacker key material (CVE-2018-0114). |
 | `vuln_scan` | Run a `nuclei` template scan (requires nuclei installed). |
+
+### 🗄️ Databases, data stores & advanced injection
+Detection-only DB attack-surface coverage. Every probe is a read-only fetch, a benign
+two-request differential, an error-string match, or an OAST callback — weaponization
+(dump, `--os-shell`, `CONFIG SET`/`SLAVEOF`/`MODULE LOAD`, gadget/JNDI chains) is
+delegated to **sqlmap** / **Strix** under human confirmation.
+| Tool | Purpose |
+| --- | --- |
+| `db_exposure` | **Unauthenticated datastore sweep** — speaks each store's minimal read-only handshake: Redis `PING`/`INFO`, memcached `version`, a hand-built MongoDB `listDatabases` OP_MSG, and HTTP reads for Elasticsearch/OpenSearch, CouchDB, InfluxDB, Hadoop YARN, TiDB. Intrusive. |
+| `nosqli_probe` | **NoSQL (MongoDB) operator injection** — sends an *object* where a string is expected (`$ne`/`$gt`/`$nin`, bracket **and** JSON forms) + a `$where` boolean oracle; flags a reproducible auth/record flip. Intrusive. |
+| `graphql_nosqli` | **GraphQL → Mongo/Mongoose operator injection** — after `graphql_check`, sends an operator object as a GraphQL **variable** vs a string baseline; flags a resolver data/auth flip or a Mongoose `CastError`. Intrusive. |
+| `second_order_sqli_probe` | **Stored / second-order SQLi** — seeds a tagged payload at a *write* endpoint, drives the *read* endpoints, correlates the SQL error/differential by tag (the sink is a different endpoint — invisible to any stateless matcher). Intrusive. |
+| `orm_leak_probe` | **ORM leak** (Django/Prisma/Rails) — injects a relational lookup (`<field>__startswith`) to filter by a hidden field (`password`, `reset_token`) via a true/false differential. Intrusive. |
+| `parser_diff_probe` | **HTTP parser-differential / WAF-bypass multiplier** — pairs a canonical request with quirk-twins (UTF-7 / overlong-UTF-8 **decode**, duplicate JSON keys / comments / BOM / bare-LF multipart **tolerance**) to find where the app and a fronting WAF parse differently. Intrusive. |
+| `fastjson_oast_probe` | **Java fastjson/Jackson autoType** — POSTs a benign `@type` OAST canary (`Inet4Address`/`URL`); a DNS/HTTP callback = the endpoint deserializes attacker-controlled `@type`. Intrusive, OAST. |
+| `ssrf_protocol_probe` | **SSRF → internal datastore** — scheme-deref OAST canaries (`gopher`/`dict`/`ftp`) + an internal-port reachability differential (`http://127.0.0.1:<db_port>/`). Intrusive. |
+| `stack_probe` | Fingerprint + unauth reads for **ClickHouse**, **Druid** (session-leak via `/druid/websession.json`), **vector stores** (Chroma/Weaviate/Qdrant), Nacos, ThinkPHP, Shiro, 1C-Bitrix. Intrusive. |
+| `cspp_probe` | **Client-side prototype pollution** — loads `__proto__`/`constructor` URL paths (query + hash) in MoonMCP's **own** headless browser and reads `Object.prototype[marker]` back. Safe by design — the pollution lands in our throwaway Chromium, never the target. Light active. |
+| `firebase_exposure` | **Open Firebase RTDB** — harvests the app's own `databaseURL`/`projectId` from its JS, then one shallow unauth read. Light active. |
+| `supabase_exposure` | **Supabase RLS-off** — harvests the public `anon` key, enumerates the PostgREST schema, then a per-table `limit=1` read with that key. Light active. |
+| `debug_exposure` | DB/admin **panels** by path→signature: Adminer (+ CVE-2021-21311 rogue-MySQL note), phpMyAdmin, Mongo-Express, pgAdmin, RedisInsight, ClickHouse `/play`. Light active. |
 
 ### 🧰 Interception (Burp-style, native — no external proxy)
 | Tool | Purpose |
@@ -128,7 +165,7 @@ MoonMCP exposes **120+ tools**, **11 resources** and **8 operator prompts**, gro
 | `passive_scan` | One benign GET → all passive analysers at once (header grade + issues, tech fingerprint, redacted secret hits). |
 | `confirm_finding` | **Prove a lead before reporting it:** baseline vs test request → weighs **reflection**, status/length/timing diff, **injection signatures**, and an **out-of-band callback** (OAST) into a verdict (`confirmed` / `likely` / `inconclusive` / `unconfirmed`). Optionally records a confirmed hit. |
 | `ssti_probe` | **SSTI** detector — arithmetic markers per engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor); reports which engine *evaluated* the expression. Intrusive. |
-| `sqli_probe` | **SQLi** detector — single-quote error signatures + a benign boolean pair (no data extraction). Reports the DBMS. Intrusive. |
+| `sqli_probe` | **SQLi** detector — error signatures + a reproducible boolean pair, plus opt-in lanes: `context` (ORDER BY / LIMIT), `oob` (per-DBMS OAST), `time_based` (monotonic-guarded), `waf_bypass` (JSON-operator), `multibyte` (Shift-JIS/EUC-KR/GBK), and header/cookie placement. Reports the DBMS; no data extraction (→ sqlmap). Intrusive. |
 | `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
 | `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
@@ -413,7 +450,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 120+ tools, 11 resources, 8 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 150 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
