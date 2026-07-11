@@ -62,6 +62,7 @@ from .recon import buckets as bucketsmod
 from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
+from .recon import datastores as datastoresmod
 from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
@@ -2262,6 +2263,63 @@ async def port_scan(
         grab_banner=grab_banner,
         limiter=ctx.governor.limiter,
     )
+    return to_dict(result)
+
+
+_DB_SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+async def _http_datastore(ctx, host: str, port: int, kind: str, timeout: float) -> dict | None:
+    """Fetch the datastore's read-only HTTP path and run its pure interpreter."""
+
+    url = f"http://{host}:{port}{datastoresmod.HTTP_PATHS[kind]}"
+    try:
+        r = await ctx.http.fetch(url, method="GET", follow_redirects=False,
+                                 timeout=timeout, scope_check=_scope_check())
+    except Exception:
+        return None
+    return datastoresmod.HTTP_INTERPRETERS[kind](r.status, r.headers_map(), r.text(20_000))
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def db_exposure(target: str, ports: str = "db", timeout: float = 4.0) -> dict:
+    """**Unauthenticated datastore exposure sweep** — speaks the minimal read-only
+    handshake for each data store and reports which answer with **no auth**. Raw-TCP:
+    Redis (`PING`/`INFO`), Memcached (`version`), MongoDB (`listDatabases` wire query).
+    HTTP: Elasticsearch/OpenSearch, CouchDB, InfluxDB (`/ping`), Hadoop YARN
+    (`/ws/v1/cluster/info`), TiDB status (`/status`). Non-destructive — no writes, no
+    dumps, no app submit; exploitation of an exposed store is handed to Strix. `ports`
+    is 'db' (the curated DB set), or a spec like '6379,27017' (a host:port target
+    probes just that port). Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and scope.
+    """
+
+    host, p = _split_host_port(target, 0)
+    explicit_port = p if p else None
+    ctx = get_context()
+    port_list = datastoresmod.ports_to_check(explicit_port, ports)
+    result = datastoresmod.DatastoreResult(host=host, checked=port_list)
+    sem = asyncio.Semaphore(min(20, max(1, ctx.settings.max_concurrency * 4)))
+    limiter = ctx.governor.limiter
+    to = max(0.5, min(timeout, 15.0))
+
+    async def _check(port: int) -> dict | None:
+        entry = datastoresmod.DB_PORTS.get(port)
+        if entry is None:
+            return None
+        service, kind = entry
+        async with sem:
+            if limiter is not None:
+                await limiter.acquire()
+            if kind in datastoresmod.RAW_PROBES:
+                hit = await datastoresmod.RAW_PROBES[kind](host, port, to)
+            else:
+                hit = await _http_datastore(ctx, host, port, kind, to)
+        return {"port": port, "service": service, **hit} if hit else None
+
+    checks = await asyncio.gather(*[_check(p) for p in port_list], return_exceptions=True)
+    result.findings = [c for c in checks if isinstance(c, dict)]
+    result.findings.sort(key=lambda f: (_DB_SEV_ORDER.get(f["severity"], 5), f["port"]))
     return to_dict(result)
 
 

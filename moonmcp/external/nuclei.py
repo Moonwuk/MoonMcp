@@ -63,6 +63,11 @@ NATIVE_EDGE: dict[str, str] = {
                             "(one-click ATO). A discovery→differential chain, not a template match",
     "jwt_jku_probe": "re-issue the target's OWN token with jku/x5u→OAST, replay, correlate the "
                      "callback — cross-request key-injection/SSRF nuclei can't derive from the token",
+    "db_exposure": "unauthenticated datastore sweep speaking each store's minimal read-only "
+                   "handshake (Redis PING/INFO, memcached version, MongoDB listDatabases wire "
+                   "query, ES/CouchDB/InfluxDB/YARN/TiDB HTTP) — nuclei's normalizing HTTP client "
+                   "cannot speak the raw Redis/memcached/Mongo binary protocols, and its port "
+                   "templates send no protocol handshake to differentiate unauth from protected",
     "nosqli_probe": "MongoDB operator-injection ($ne/$gt/$nin/$where) — sends an OBJECT where a "
                     "string is expected and diffs the auth/record outcome vs a plain-scalar "
                     "baseline; a stateless per-template matcher can only fuzz a scalar value, "

@@ -58,7 +58,7 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 | # | Capability | New/extends | Lane | Why first |
 |---|---|---|---|---|
 | 1 | `nosqli_probe` — Mongo operator (`$ne/$gt/$in`) auth-bypass + `$where` boolean | ✅ **SHIPPED** `web/nosqli.py` | native edge | `nosqli` existed only in the KB, never as a probe; lives on real login/search endpoints; nuclei can't express the object-injection differential; consensus #1 across 3 agents |
-| 2 | `db_exposure` — raw-socket + HTTP unauth datastore sweep | **new** `recon/datastores.py` | native edge | `port_scan` sends no protocol probe today; covers Redis/Mongo/ES/CouchDB/memcached/Zookeeper/Kafka/YARN/TiDB/InfluxDB/vector-DB in one scope-gated fan-out |
+| 2 | `db_exposure` — raw-socket + HTTP unauth datastore sweep | 🟡 **SHIPPED** `recon/datastores.py` | native edge | `port_scan` sent no protocol probe; now covers Redis/Mongo/memcached/ES/CouchDB/InfluxDB/YARN/TiDB in one scope-gated fan-out (Zookeeper/Kafka/vector-DB still to add) |
 | 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | extend `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
 | 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | **new**, model on `workflow_probe` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher; the workflow engine already exists |
 | 5 | `orm_leak_probe` — Django/Prisma/Rails relational-lookup + mass-assignment | **new** `web/ormleak.py` | native edge | hot 2023-25 class (elttam ORM Leak); fully nuclei-blind; RU Bitrix ORM variant folds in |
@@ -143,6 +143,15 @@ read-only handshake* for each service and returns an unauth verdict from a clean
 protocol differential. `port_scan` sends no protocol probe today; `stack_probe` is
 HTTP-only. This is squarely native-edge (stateful protocol read), does not overlap
 `stack_probe`, and reuses `net/ports.py` + `net/http.py`.
+
+> ✅ **SHIPPED** — `moonmcp/recon/datastores.py` + the `db_exposure` tool (intrusive):
+> raw-TCP handshakes for **Redis** (`PING`→`+PONG`, then `INFO` for version/role vs
+> `-NOAUTH`), **Memcached** (`version`), **MongoDB** (a hand-built `listDatabases`
+> OP_MSG wire query → unauth database-list vs an auth-required error), and HTTP metadata
+> reads for **Elasticsearch/OpenSearch**, **CouchDB**, **InfluxDB** (`/ping` +
+> `X-Influxdb-Version`), **Hadoop YARN** (`/ws/v1/cluster/info`) and **TiDB status**
+> (`/status`). Scope-gated, non-destructive, concurrency+rate-limited. Remaining below:
+> Zookeeper/Kafka handshakes and the vector-DB fingerprint family (B.7).
 
 ### B.1 Redis unauthenticated access ❌ — RANK 2/10
 Redis bound `0.0.0.0:6379` with no `requirepass` → full command access (→ SSH-key/cron
