@@ -100,6 +100,7 @@ from .web import stacks as stacksmod
 from .web import takeover as takeovermod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
+from .web import workflow as workflowmod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware bug-bounty & reconnaissance server.
@@ -1848,6 +1849,29 @@ async def race_probe(target: str, method: str = "POST", n: int = 20) -> dict:
     result = await logicmod.probe_race(ctx.http, url, method=method, n=n,
                                        scope_check=_scope_check())
     return {"target": url, "method": method.upper(), **result}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def workflow_probe(steps: list[dict]) -> dict:
+    """**Workflow / step-skipping** abuse on a multi-step flow. Pass the flow as an
+    ORDERED list of steps — each a dict `{"url", "method"?, "body"?, "success"?}`
+    (or a bare URL string) — e.g. cart→address→payment→confirm, or register→verify→
+    access. It fetches every step *after the first* cold (without completing the
+    prior steps): a flow that enforces its order redirects back / errors, a broken one
+    serves the step (order confirmed without payment, account activated without email
+    verification). `success` is an optional marker string that positively identifies a
+    step's completed content. Returns `review` leads (confirm the business effect).
+    Intrusive; in scope only — the steps' hosts are scope-checked.
+    """
+
+    ctx = get_context()
+    result = await workflowmod.probe_workflow_skip(ctx.http, steps, scope_check=_scope_check())
+    n = len(result.get("findings", []))
+    result["note"] = (f"{n} step-skipping lead(s) — confirm the business effect of reaching the step "
+                      "without its prerequisites" if n
+                      else "no step served cold — the flow appears to enforce its sequence")
+    return result
 
 
 @mcp.tool()

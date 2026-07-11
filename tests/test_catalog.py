@@ -57,7 +57,7 @@ def test_catalog_family_filter():
         "port_scan", "content_discovery", "http_methods",
         "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
         "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
-        "logic_probe", "race_probe",
+        "logic_probe", "race_probe", "workflow_probe",
     }
     assert all(t["intrusive"] for t in fam["tools"])
 

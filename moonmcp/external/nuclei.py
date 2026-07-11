@@ -51,6 +51,8 @@ NATIVE_EDGE: dict[str, str] = {
                    "state a stateless template engine cannot carry",
     "logic_probe": "business-logic param tampering + mass-assignment; depends on app intent, "
                    "not a static signature",
+    "workflow_probe": "multi-step flow step-skipping (force-browse to a later/terminal step "
+                      "without completing prerequisites) — needs the ordered flow + sequence state",
     "race_probe": "single-packet / N-parallel race; not expressible as a per-request template",
     "desync_probe": "CL.TE / obfuscated-TE framing indicators on RAW sockets",
     "desync_modern_probe": "0.CL/TE.0/Expect/chunk-ext via response-timeout deltas on raw sockets — "
