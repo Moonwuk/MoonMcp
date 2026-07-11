@@ -39,6 +39,11 @@ NUCLEI_DELEGATE: dict[str, str] = {
     "crlf_probe": "nuclei -dast fuzzing (crlf) — but our differential twin-set is a useful cross-check",
     "ssti_probe": "nuclei -dast fuzzing (ssti, OAST-backed)",
     "sqli_probe": "nuclei -dast fuzzing (sqli) — deep SQLi still needs sqlmap",
+    # Reclassified from native-edge by the cited coverage audit (docs/NUCLEI_COVERAGE.md):
+    # nuclei owns these, so they carry no hit-rate advantage — keep only as coverage.
+    "ssrf_metadata_probe": "cloud-metadata SSRF is response-signature matching + interactsh — "
+                           "nuclei's wheelhouse, with large existing template coverage",
+    "edge_map": "CDN/edge vendor detection from headers — matcher territory; nuclei has it built in",
 }
 
 # MoonMCP capabilities nuclei STRUCTURALLY cannot (or only clumsily) express — these
@@ -55,7 +60,9 @@ NATIVE_EDGE: dict[str, str] = {
                       "without completing prerequisites) — needs the ordered flow + sequence state",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
-    "race_probe": "single-packet / N-parallel race; not expressible as a per-request template",
+    "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "
+                  "complete within ~1ms, neutralizing jitter) — nuclei's race directive is gate-based "
+                  "and historically broken, and cannot do single-packet timing on its normalizing client",
     "desync_probe": "CL.TE / obfuscated-TE framing indicators on RAW sockets",
     "desync_modern_probe": "0.CL/TE.0/Expect/chunk-ext via response-timeout deltas on raw sockets — "
                            "nuclei's HTTP client normalises framing, so it cannot send these",
@@ -67,12 +74,9 @@ NATIVE_EDGE: dict[str, str] = {
                            "returned in-band — flow-stateful",
     "reset_poison_probe": "Host/X-Forwarded-Host reset poisoning; reflected-host differential across "
                           "the reset flow",
-    "ssrf_metadata_probe": "multi-cloud metadata response-diff for credential signatures (nuclei has "
-                           "ssrf+interactsh, but not this targeted response correlation)",
     "confirm_finding": "differential confirmation engine (baseline vs payload similarity)",
     "surface_diff": "cross-run attack-surface diff over time — stateful across snapshots",
     "origin_discovery": "behavioural: infer origin behind a CDN from response variance",
-    "edge_map": "behavioural: map the CDN/edge from response variance across a request series",
     "backend_probe": "behavioural: infer backend fleet / patch-drift from response variance",
     "tls_behavior": "behavioural TLS variance analysis",
     "http_behavior": "behavioural HTTP variance analysis",
