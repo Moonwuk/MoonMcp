@@ -63,6 +63,24 @@ NATIVE_EDGE: dict[str, str] = {
                             "(one-click ATO). A discovery→differential chain, not a template match",
     "jwt_jku_probe": "re-issue the target's OWN token with jku/x5u→OAST, replay, correlate the "
                      "callback — cross-request key-injection/SSRF nuclei can't derive from the token",
+    "orm_leak_probe": "ORM leak / relational-filter injection (Django __startswith, Prisma "
+                      "[field][startsWith], Ransack) — a filter differential over an injected ORM "
+                      "lookup, with NO raw SQL, so neither nuclei's -dast sqli fuzzing nor sqli_probe "
+                      "fires; the empty-prefix vs no-match reproducible diff is native-edge",
+    "second_order_sqli_probe": "stored SQLi where the sink is a DIFFERENT endpoint from the "
+                               "injection — seed a tagged payload at a write endpoint, then drive "
+                               "the read endpoints and correlate the SQL error/differential by the "
+                               "tag; the write→read state is exactly what a stateless per-template "
+                               "engine cannot carry (nor can sqlmap against the write endpoint alone)",
+    "db_exposure": "unauthenticated datastore sweep speaking each store's minimal read-only "
+                   "handshake (Redis PING/INFO, memcached version, MongoDB listDatabases wire "
+                   "query, ES/CouchDB/InfluxDB/YARN/TiDB HTTP) — nuclei's normalizing HTTP client "
+                   "cannot speak the raw Redis/memcached/Mongo binary protocols, and its port "
+                   "templates send no protocol handshake to differentiate unauth from protected",
+    "nosqli_probe": "MongoDB operator-injection ($ne/$gt/$nin/$where) — sends an OBJECT where a "
+                    "string is expected and diffs the auth/record outcome vs a plain-scalar "
+                    "baseline; a stateless per-template matcher can only fuzz a scalar value, "
+                    "never swap the value's TYPE for an operator document",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "

@@ -62,6 +62,7 @@ from .recon import buckets as bucketsmod
 from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
+from .recon import datastores as datastoresmod
 from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
@@ -91,12 +92,15 @@ from .web import inject as injectmod
 from .web import jwt as jwtmod
 from .web import logic as logicmod
 from .web import methods as methodsmod
+from .web import nosqli as nosqlimod
 from .web import oauth as oauthmod
+from .web import ormleak as ormmod
 from .web import params as paramsmod
 from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
 from .web import screenshot as screenshotmod
+from .web import secondorder as somod
 from .web import singlepacket as spmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import stacks as stacksmod
@@ -1981,6 +1985,114 @@ async def workflow_probe(steps: list[dict]) -> dict:
 
 
 @mcp.tool()
+@active_tool(self_scoped=True, intrusive=True)
+async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str = "comment",
+                                  oob: bool = False, wait: float = 3.0,
+                                  oast_token: str | None = None) -> dict:
+    """**Second-order (stored) SQL injection** — the sink is a DIFFERENT endpoint from
+    the injection (a stateless scanner sees nothing). Seed a uniquely-tagged value at
+    the `write` endpoint (`{"url","method"?,"body"?}` — inject into `param`, or use a
+    `body` template with a `{payload}` placeholder), then drive the `read` endpoint(s)
+    and look for a SQL **error** signature that only appears after the seed, or a
+    reflected-tag **boolean** differential (equal-length twins, so a verbatim echo gives
+    nothing). `oob=True` seeds a tagged OAST payload and polls for a callback. Returns
+    `review` leads; extraction → sqlmap `--second-url` / Strix. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    if not isinstance(write, dict) or not write.get("url"):
+        return {"error": "invalid_input", "detail": "write must be {'url':..., 'method'?, 'body'?}"}
+    w_raw = str(write["url"]).strip()
+    w_url = w_raw if "://" in w_raw else f"https://{w_raw}"
+    w_method = str(write.get("method") or "POST").upper()
+    w_body_tpl = write.get("body")
+    w_ctype = write.get("content_type")
+    reads = somod.normalize_reads(read)
+    for r in reads:
+        r["url"] = r["url"] if "://" in r["url"] else f"https://{r['url']}"
+    if not reads:
+        return {"error": "invalid_input", "detail": "read must be a URL or list of URLs"}
+
+    await _require_scope(w_url, intrusive=True, tool="second_order_sqli_probe")
+    for r in reads:
+        await _require_scope(r["url"], intrusive=True, tool="second_order_sqli_probe")
+    sc = _scope_check()
+
+    async def _write(value: str):
+        if isinstance(w_body_tpl, str) and "{payload}" in w_body_tpl:
+            hdr = {"Content-Type": w_ctype} if w_ctype else None
+            await ctx.http.fetch(w_url, method=w_method, body=w_body_tpl.replace("{payload}", value).encode(),
+                                 headers=hdr, follow_redirects=False, scope_check=sc)
+        else:
+            u, b = _with_param(w_url, param, value, w_method)
+            await ctx.http.fetch(u, method=w_method, body=b, follow_redirects=False, scope_check=sc)
+
+    async def _read_all() -> list:
+        obs = []
+        for r in reads:
+            resp = await ctx.http.fetch(r["url"], method=r["method"], follow_redirects=False, scope_check=sc)
+            obs.append(somod.ReadObs(resp.status, resp.text(50_000)))
+        return obs
+
+    async def _cycle(value: str) -> list:
+        await _write(value)
+        return await _read_all()
+
+    tag = somod.make_tag()
+    seeds = somod.seed_payloads(tag)
+    control = await _cycle(seeds["control"])
+    error = await _cycle(seeds["error"])
+    true_r = await _cycle(seeds["true"])
+    false_r = await _cycle(seeds["false"])
+
+    def _match(t: str) -> list:
+        return injmod.match_signatures(t, class_id="sqli")
+
+    findings: list[dict] = []
+    for i, r in enumerate(reads):
+        hit = somod.assess_read(tag, control[i], error[i], true_r[i], false_r[i], _match)
+        if hit:
+            findings.append({"read": r["url"], **hit})
+
+    oast_count = 0
+    oob_out: dict | None = None
+    if oob:
+        cb = ctx.oast.get(oast_token) if oast_token else None
+        if cb is None and ctx.oast.configured:
+            cb = ctx.oast.generate(label="second_order_sqli")
+        if cb is None:
+            oob_out = {"error": "oast_unconfigured"}
+        else:
+            await _cycle(somod.oob_seed(tag, cb.http_url, cb.canary_host))
+            await asyncio.sleep(max(0.0, min(wait, 8.0)))
+            if ctx.oast_server is not None and ctx.oast_server.running:
+                oh = ctx.oast_server.interactions(cb.token)
+            else:
+                poll = ctx.oast.poll_target(cb.token)
+                oh = []
+                if poll:
+                    try:
+                        rr = await ctx.http.fetch(poll, follow_redirects=True)
+                        oh = oastmod.parse_interactions(rr.text())
+                    except Exception:
+                        oh = []
+            oast_count = len(oh)
+            oob_out = {"canary": cb.http_url, "token": cb.token,
+                       "interaction_count": oast_count, "interactions": oh[:20]}
+
+    has_error = any(f["error_signatures"] for f in findings)
+    verdict = confirmmod.evaluate(
+        injection_hits=["sqli/second-order" for _ in findings] + (["sqli/second-order-oob"] if oast_count else []),
+        reflected=has_error, status_changed=any(f["boolean_differential"] for f in findings),
+        oast_count=oast_count)
+    out: dict[str, Any] = {"write": w_url, "reads": [r["url"] for r in reads], "tag": tag,
+                           **verdict, "findings": findings}
+    if oob_out is not None:
+        out["oob"] = oob_out
+    return out
+
+
+@mcp.tool()
 @active_tool(intrusive=True)
 async def value_probe(target: str, param: str | None = None, coupon_code: str | None = None,
                       method: str = "GET") -> dict:
@@ -2261,6 +2373,63 @@ async def port_scan(
         grab_banner=grab_banner,
         limiter=ctx.governor.limiter,
     )
+    return to_dict(result)
+
+
+_DB_SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+async def _http_datastore(ctx, host: str, port: int, kind: str, timeout: float) -> dict | None:
+    """Fetch the datastore's read-only HTTP path and run its pure interpreter."""
+
+    url = f"http://{host}:{port}{datastoresmod.HTTP_PATHS[kind]}"
+    try:
+        r = await ctx.http.fetch(url, method="GET", follow_redirects=False,
+                                 timeout=timeout, scope_check=_scope_check())
+    except Exception:
+        return None
+    return datastoresmod.HTTP_INTERPRETERS[kind](r.status, r.headers_map(), r.text(20_000))
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def db_exposure(target: str, ports: str = "db", timeout: float = 4.0) -> dict:
+    """**Unauthenticated datastore exposure sweep** — speaks the minimal read-only
+    handshake for each data store and reports which answer with **no auth**. Raw-TCP:
+    Redis (`PING`/`INFO`), Memcached (`version`), MongoDB (`listDatabases` wire query).
+    HTTP: Elasticsearch/OpenSearch, CouchDB, InfluxDB (`/ping`), Hadoop YARN
+    (`/ws/v1/cluster/info`), TiDB status (`/status`). Non-destructive — no writes, no
+    dumps, no app submit; exploitation of an exposed store is handed to Strix. `ports`
+    is 'db' (the curated DB set), or a spec like '6379,27017' (a host:port target
+    probes just that port). Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and scope.
+    """
+
+    host, p = _split_host_port(target, 0)
+    explicit_port = p if p else None
+    ctx = get_context()
+    port_list = datastoresmod.ports_to_check(explicit_port, ports)
+    result = datastoresmod.DatastoreResult(host=host, checked=port_list)
+    sem = asyncio.Semaphore(min(20, max(1, ctx.settings.max_concurrency * 4)))
+    limiter = ctx.governor.limiter
+    to = max(0.5, min(timeout, 15.0))
+
+    async def _check(port: int) -> dict | None:
+        entry = datastoresmod.DB_PORTS.get(port)
+        if entry is None:
+            return None
+        service, kind = entry
+        async with sem:
+            if limiter is not None:
+                await limiter.acquire()
+            if kind in datastoresmod.RAW_PROBES:
+                hit = await datastoresmod.RAW_PROBES[kind](host, port, to)
+            else:
+                hit = await _http_datastore(ctx, host, port, kind, to)
+        return {"port": port, "service": service, **hit} if hit else None
+
+    checks = await asyncio.gather(*[_check(p) for p in port_list], return_exceptions=True)
+    result.findings = [c for c in checks if isinstance(c, dict)]
+    result.findings.sort(key=lambda f: (_DB_SEV_ORDER.get(f["severity"], 5), f["port"]))
     return to_dict(result)
 
 
@@ -3514,40 +3683,271 @@ async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def sqli_probe(target: str, param: str, method: str = "GET") -> dict:
-    """**SQL injection** probe — non-destructive: a single-quote **error** trigger
-    (matched against MoonMCP's SQL error signatures) plus a **boolean** pair
-    (`'1'='1'` vs `'1'='2'`) whose differing responses indicate boolean-based SQLi.
-    No UNION/stacked/time-based data extraction. Reports the DBMS if a signature
-    fires. Intrusive; in scope only.
+async def sqli_probe(target: str, param: str, method: str = "GET",
+                     context: str = "value", placement: str = "param",
+                     name: str | None = None, oob: bool = False,
+                     time_based: bool = False, waf_bypass: bool = False,
+                     multibyte: bool = False, delay_s: float = 5.0,
+                     oast_token: str | None = None, wait: float = 3.0) -> dict:
+    """**SQL injection** probe — non-destructive, differential. Core: a single-quote
+    **error** trigger (matched vs MoonMCP's SQL error signatures) + a reproducible
+    **boolean** pair. Opt-in lanes for spots nuclei can't reach:
+    `context` = value|order_by|limit (CASE twins for non-parameterizable positions),
+    `placement` = param|header|cookie (with `name`), `oob` (per-DBMS DNS/HTTP **OAST**
+    callback — start `oast_selfhost` first), `time_based` (per-DBMS sleep, confirmed only
+    when the delay is proportional to `delay_s`), `waf_bypass` (JSON-operator + comment
+    twins — flags SQLi reachable only when the plain boolean is blocked), `multibyte`
+    (Shift-JIS/EUC-KR/GBK lead-byte charset bypass). No data extraction (→ sqlmap).
+    Intrusive; in scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
-    async def _get(value: str):
-        u, b = _with_param(url, param, value, m)
-        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=_scope_check())
 
+    def _build(value: str, is_raw: bool = False):
+        if placement in ("header", "cookie"):
+            bu, bb = _with_param(url, param, "1", m) if param else (url, None)
+            hdr = ({"Cookie": f"{name or 'sid'}={value}"} if placement == "cookie"
+                   else {name or "User-Agent": value})
+            return bu, bb, hdr
+        if is_raw:
+            return injectmod.inject_raw(url, param, value), None, {}
+        u, b = _with_param(url, param, value, m)
+        return u, b, {}
+
+    async def _get(value: str, is_raw: bool = False):
+        bu, bb, hh = _build(value, is_raw)
+        return await ctx.http.fetch(bu, method=m, body=bb, headers=(hh or None),
+                                    follow_redirects=False, scope_check=_scope_check())
+
+    def _diff(t1, t2, f1, f2) -> tuple[bool, bool]:
+        ts = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
+        fs = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
+        d = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
+        return bool(ts and fs), bool(ts and fs and d)
+
+    # --- core: error signatures + reproducible boolean (context-aware) ---
     er = await _get(probesmod.SQLI_ERROR)
     hits = injmod.match_signatures(er.text(200_000), class_id="sqli")
-    # Send each of TRUE/FALSE twice: a real boolean-based SQLi is REPRODUCIBLE
-    # (true==true, false==false, true!=false), which rejects inter-request noise.
-    t1, t2 = await _get(probesmod.SQLI_TRUE), await _get(probesmod.SQLI_TRUE)
-    f1, f2 = await _get(probesmod.SQLI_FALSE), await _get(probesmod.SQLI_FALSE)
-    true_stable = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
-    false_stable = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
-    differs = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
-    bool_diff = bool(true_stable and false_stable and differs)
+    true_p, false_p = probesmod.sqli_context_twins(context)
+    t1, t2 = await _get(true_p), await _get(true_p)
+    f1, f2 = await _get(false_p), await _get(false_p)
+    stable, bool_diff = _diff(t1, t2, f1, f2)
+
+    lanes: dict[str, Any] = {}
+    extra_hits: list[str] = []
+
+    # --- multibyte charset-mismatch lane (param placement only) ---
+    if multibyte and placement == "param":
+        plain = await _get(probesmod.SQLI_PLAIN_QUOTE, is_raw=True)
+        plain_hits = injmod.match_signatures(plain.text(200_000), class_id="sqli")
+        mb: list[dict] = []
+        for label, twin in probesmod.SQLI_MULTIBYTE_TWINS:
+            r = await _get(twin, is_raw=True)
+            sig = injmod.match_signatures(r.text(200_000), class_id="sqli")
+            if sig and not plain_hits:   # errors where the plain %27 was neutralised
+                mb.append({"charset": label, "technologies": [s["technology"] for s in sig][:3]})
+        lanes["multibyte"] = {"plain_errored": bool(plain_hits), "bypass_charsets": mb}
+        if mb:
+            extra_hits.append("sqli/charset-bypass")
+
+    # --- WAF-bypass lane: JSON-operator + comment twins ---
+    if waf_bypass:
+        wb: list[dict] = []
+        for label, tp, fp in probesmod.SQLI_JSON_TWINS + probesmod.SQLI_ENCODING_TWINS:
+            jt1, jt2 = await _get(tp), await _get(tp)
+            jf1, jf2 = await _get(fp), await _get(fp)
+            _s, jd = _diff(jt1, jt2, jf1, jf2)
+            if jd:
+                wb.append({"encoding": label})
+        lanes["waf_bypass"] = {"plain_differential": bool_diff, "encoded_differentials": wb,
+                               "bypass": bool(wb) and not bool_diff}
+        if wb:
+            extra_hits.append("sqli/waf-bypass-encoding" if not bool_diff else "sqli/encoded-differential")
+
+    # --- time-based blind lane (monotonic vs a 0s control) ---
+    if time_based:
+        req = max(0.0, min(delay_s, 15.0))
+        zero, delayed = probesmod.sqli_time_payloads(0), probesmod.sqli_time_payloads(req)
+        loop = asyncio.get_event_loop()
+        tb: list[dict] = []
+        for (dbms, zp), (_d, dp) in zip(zero, delayed, strict=True):
+            s0 = loop.time()
+            await _get(zp)
+            z_s = loop.time() - s0
+            s1 = loop.time()
+            await _get(dp)
+            d_s = loop.time() - s1
+            hit = probesmod.assess_timing(z_s, d_s, req)
+            if hit:
+                tb.append({"dbms": dbms, **hit})
+        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        if tb:
+            extra_hits.append("sqli/time-based")
+
+    # --- out-of-band (OAST) lane, per DBMS ---
+    oast_count = 0
+    if oob:
+        cb = ctx.oast.get(oast_token) if oast_token else None
+        if cb is None and ctx.oast.configured:
+            cb = ctx.oast.generate(label="sqli_oob")
+        if cb is None:
+            lanes["oob"] = {"error": "oast_unconfigured",
+                            "detail": "start oast_selfhost or oast_configure before an OOB SQLi probe"}
+        else:
+            for _lbl, pl in probesmod.sqli_oob_payloads(cb.canary_host, cb.http_url):
+                await _get(pl)
+            await asyncio.sleep(max(0.0, min(wait, 8.0)))
+            if ctx.oast_server is not None and ctx.oast_server.running:
+                oh = ctx.oast_server.interactions(cb.token)
+            else:
+                poll = ctx.oast.poll_target(cb.token)
+                oh = []
+                if poll:
+                    try:
+                        r = await ctx.http.fetch(poll, follow_redirects=True)
+                        oh = oastmod.parse_interactions(r.text())
+                    except Exception:
+                        oh = []
+            oast_count = len(oh)
+            lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
+                            "interaction_count": oast_count, "interactions": oh[:20]}
+            if oh:
+                extra_hits.append("sqli/oob-callback")
+
+    timing_ms = max((h["delta_s"] for h in lanes.get("time_based", {}).get("hits", [])),
+                    default=0.0) * 1000
     verdict = confirmmod.evaluate(
-        injection_hits=[f"{h['class']}/{h['technology']}" for h in hits],
+        injection_hits=[f"{h['class']}/{h['technology']}" for h in hits] + extra_hits,
         status_changed=bool_diff and (t1.status != f1.status),
-        length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0)
-    return {"target": url, "param": param, **verdict, "error_signatures": hits[:10],
-            "boolean_differential": bool_diff, "reproducible": bool(true_stable and false_stable),
-            "true_status": t1.status, "true_len": len(t1.body),
-            "false_status": f1.status, "false_len": len(f1.body)}
+        length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0,
+        oast_count=oast_count, timing_delta_ms=timing_ms)
+    out: dict[str, Any] = {
+        "target": url, "param": param, "context": context, "placement": placement,
+        **verdict, "error_signatures": hits[:10],
+        "boolean_differential": bool_diff, "reproducible": stable,
+        "true_status": t1.status, "true_len": len(t1.body),
+        "false_status": f1.status, "false_len": len(f1.body)}
+    if lanes:
+        out["lanes"] = lanes
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
+    """**NoSQL (MongoDB) operator-injection** probe — non-destructive. Sends an
+    *object* where the app expects a *string* — `$ne`/`$gt`/`$nin` in both the
+    bracket form (`param[$ne]=x`) and JSON form (`{"param":{"$ne":null}}`) — plus a
+    `$where` server-side-JS **boolean** pair (`return true` vs `return false`).
+    Confirmed when a *reproducible* operator twin flips the outcome vs a plain-string
+    baseline (auth bypass / more records), the `$where` boolean differs, or a MongoDB
+    error signature fires. No data extraction (no `$regex` char-oracle, no `sleep()` —
+    those go to NoSQLMap/Strix). Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    bodies: list[str] = []
+
+    async def _send(req, http_method):
+        u, b, h = req
+        r = await ctx.http.fetch(u, method=http_method, body=b, headers=(h or None),
+                                 follow_redirects=False, scope_check=_scope_check())
+        bodies.append(r.text(50_000))
+        return nosqlimod.Resp(status=r.status, length=len(r.body),
+                              session_cookie=nosqlimod.has_session_cookie(r.get_all("set-cookie")))
+
+    # Negative baseline: a plain scalar unlikely to match, sent twice.
+    c_req = nosqlimod.scalar_request(url, param, nosqlimod.CONTROL, m)
+    control = (await _send(c_req, m), await _send(c_req, m))
+
+    # Operator lane: bracket twins in the requested method + JSON twins as POST.
+    operator_hits: list[dict] = []
+    for label, op, val in nosqlimod.BRACKET_TWINS:
+        req = nosqlimod.bracket_request(url, param, op, val, m)
+        twin = (await _send(req, m), await _send(req, m))
+        hit = nosqlimod.assess_operator(control, twin)
+        if hit:
+            operator_hits.append({"variant": label, **hit})
+    for label, obj in nosqlimod.JSON_TWINS:
+        req = nosqlimod.json_request(url, param, obj)
+        twin = (await _send(req, "POST"), await _send(req, "POST"))
+        hit = nosqlimod.assess_operator(control, twin)
+        if hit:
+            operator_hits.append({"variant": label, **hit})
+
+    # $where server-side-JS boolean oracle (JSON body, boolean only).
+    wt = (await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_TRUE), "POST"),
+          await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_TRUE), "POST"))
+    wf = (await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_FALSE), "POST"),
+          await _send(nosqlimod.json_request(url, param, nosqlimod.WHERE_FALSE), "POST"))
+    where_hit = nosqlimod.assess_where(wt, wf)
+
+    # Error lane: MongoDB/BSON error signatures leaked by any twin.
+    sig_hits = injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+
+    strong_op = next((h for h in operator_hits if h["strong"]), None)
+    injection_hits = [f"nosqli/{h['variant']}" for h in operator_hits]
+    injection_hits += [f"{h['class']}/{h['technology']}" for h in sig_hits]
+    if where_hit:
+        injection_hits.append("nosqli/$where-js")
+    verdict = confirmmod.evaluate(
+        injection_hits=injection_hits,
+        status_changed=bool(strong_op) or bool(where_hit and where_hit["status_changed"]),
+        length_delta=(where_hit["length_delta"] if where_hit else 0))
+    return {"target": url, "param": param, "method": m, **verdict,
+            "operator_hits": operator_hits, "where_oracle": where_hit,
+            "error_signatures": sig_hits[:10],
+            "baseline": {"status": control[0].status, "length": control[0].length}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def orm_leak_probe(target: str, orm: str = "auto", base: str = "filter",
+                         method: str = "GET") -> dict:
+    """**ORM leak / relational-filter injection** — a filter differential nuclei and
+    `sqli_probe` both miss (no raw SQL). When an app spreads request params into an ORM
+    filter, an injected lookup filters by a hidden field (`password`, `reset_token`,
+    `is_superuser`). Injects each lookup as a new kwarg with an **empty prefix** (matches
+    all rows) vs an **unlikely prefix** (matches none): a reproducible differential means
+    the lookup is applied and the field is queryable. `orm` = auto|django|prisma|ransack;
+    Prisma/Ransack nest under `base` (the filter object's param name). Detection-only — no
+    value is read out (char-by-char extraction / mass-assignment → logic_probe / Strix).
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    sc = _scope_check()
+    m = method.upper()
+    cands = ormmod.candidates(orm, base)
+
+    async def _get(pname: str, value: str) -> tuple:
+        u, b = _with_param(url, pname, value, m)
+        r = await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
+        return (r.status, len(r.body))
+
+    findings: list[dict] = []
+    for family, label, pname in cands:
+        all_pair = (await _get(pname, ""), await _get(pname, ""))
+        none_pair = (await _get(pname, ormmod.CONTROL_NONE), await _get(pname, ormmod.CONTROL_NONE))
+        if ormmod.assess_lookup(all_pair, none_pair):
+            findings.append({
+                "orm": family, "field": label, "param": pname,
+                "severity": "high", "verdict": "review",
+                "detail": f"injected ORM lookup '{pname}' filters the result set (empty-prefix vs "
+                          f"no-match differ, reproducibly) — the hidden field '{label}' is queryable; "
+                          "it can be read char-by-char (weaponize via Strix, not here)"})
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"orm-injection/{f['field']}" for f in findings],
+        status_changed=bool(findings))
+    return {"target": url, "orm": orm, "tested": len(cands), **verdict, "findings": findings}
 
 
 @mcp.tool()

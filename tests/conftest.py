@@ -9,11 +9,83 @@ from moonmcp.context import build_context
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
-    _lb = 0   # /lb backend rotation counter
-    _rl = 0   # /rl rate-limit counter
+    _lb = 0    # /lb backend rotation counter
+    _rl = 0    # /rl rate-limit counter
+    _stored = ""   # /store last-written value, re-rendered by /render (second-order)
 
     def log_message(self, *args):  # silence
         pass
+
+    def _nosqli_reply(self, text: str, ctype: str):
+        # DELIBERATELY VULNERABLE login: a plain scalar `user` is denied (401), but
+        # an operator OBJECT ($ne/$gt/$nin, or $where returning true) bypasses auth
+        # (200 + a session cookie + a longer "records" body). $where:false stays 401,
+        # giving the boolean oracle its differential.
+        from urllib.parse import parse_qs
+        operator = where_false = False
+        if "json" in ctype:
+            import json as _json
+            try:
+                v = _json.loads(text).get("user")
+            except Exception:
+                v = None
+            if isinstance(v, dict):
+                where_false = v.get("$where") == "return false"
+                operator = not where_false
+        else:
+            operator = any("[$" in k for k in parse_qs(text))
+        if operator and not where_false:
+            body = (b"<html>welcome admin! records: alice bob carol dave "
+                    b"erin frank grace heidi ivan</html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Set-Cookie", "session=itsme; Path=/; HttpOnly")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            body = b"<html>invalid credentials</html>"
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def do_POST(self):
+        # drain the request body so the socket stays clean
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path.startswith("/store"):
+            # Phase 1 of a second-order flow: store the written value (safely) so a
+            # later /render call re-uses it in a query (the vulnerable sink).
+            from urllib.parse import parse_qs
+            ctype = self.headers.get("Content-Type", "")
+            if "json" in ctype:
+                import json as _json
+                try:
+                    v = str(_json.loads(raw.decode("utf-8", "replace")).get("comment", ""))
+                except Exception:
+                    v = ""
+            else:
+                v = (parse_qs(raw.decode("utf-8", "replace")).get("comment") or [""])[0]
+            type(self)._stored = v
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"saved")
+            return
+        if self.path.startswith("/nosqli-safe"):
+            # NOT vulnerable: identical 200 regardless of operator vs scalar.
+            body = b"<html>login page</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/nosqli"):
+            self._nosqli_reply(raw.decode("utf-8", "replace"),
+                               self.headers.get("Content-Type", ""))
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def do_GET(self):
         if self.path == "/echo":
@@ -51,7 +123,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html>hello " + out.encode("utf-8", "replace") + b"</html>")
             return
-        if self.path.startswith("/sqli"):
+        if self.path.startswith("/sqli?") or self.path == "/sqli":
             # DELIBERATELY VULNERABLE: a single quote yields a MySQL error; the
             # boolean pair yields different-length bodies.
             from urllib.parse import parse_qs, urlparse
@@ -62,6 +134,151 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 body = b"<html>results: alice bob carol dave erin frank grace</html>"
             else:
                 body = b"<html>results:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/sqli-order"):
+            # VULNERABLE ORDER BY: the injected CASE expression is evaluated as a
+            # sort key, so WHEN 1=1 vs WHEN 1=2 yields different-length row sets.
+            from urllib.parse import parse_qs, urlparse
+            s = (parse_qs(urlparse(self.path).query).get("sort") or [""])[0]
+            if "WHEN 1=1" in s:
+                body = b"<html>rows: alice bob carol dave erin frank grace</html>"
+            elif "WHEN 1=2" in s:
+                body = b"<html>rows: grace</html>"
+            else:
+                body = b"<html>rows: default</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/sqli-time"):
+            # VULNERABLE time-based: honours SLEEP/PG_SLEEP/WAITFOR delays.
+            import re
+            import time as _time
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            mt = re.search(r"(?:SLEEP|PG_SLEEP)\(([\d.]+)\)", q, re.I) or re.search(r"0:0:([\d.]+)", q)
+            if mt:
+                try:
+                    _time.sleep(min(float(mt.group(1)), 3.0))
+                except ValueError:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/sqli-mb"):
+            # VULNERABLE charset mismatch: a multibyte lead byte + quote breaks out
+            # of the (naive addslashes) escaping, so it errors where plain %27 doesn't.
+            p = self.path
+            if any(t in p for t in ("%bf%27", "%82%27", "%a1%27")):
+                body = b"Database error: You have an error in your SQL syntax; check the MySQL manual"
+            else:
+                body = b"<html>ok</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/sqli-waf"):
+            # A naive WAF blocks the classic tautology but not the JSON-operator form.
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            if "'1'='1" in q or "'1'='2" in q:
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"blocked by WAF")
+                return
+            if "jsonb" in q and "@>" in q:
+                is_true = '@> \'{"a":1}\'' in q
+                body = b"<html>rows: a b c d e f g h i</html>" if is_true else b"<html>rows:</html>"
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>ok</html>")
+            return
+        if self.path.startswith("/sqli-oob"):
+            # VULNERABLE OOB: the injected UTL_HTTP URL is fetched server-side.
+            import re
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            mm = re.search(r"https?://[^\s')]+", q)
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/sqli-hdr"):
+            # VULNERABLE header SQLi: the User-Agent value flows into a query.
+            ua = self.headers.get("User-Agent", "")
+            if "'" in ua and "'1'='1" not in ua and "'1'='2" not in ua:
+                body = b"Database error: You have an error in your SQL syntax; check the MySQL manual"
+            elif "'1'='1" in ua:
+                body = b"<html>rows: alice bob carol dave erin</html>"
+            else:
+                body = b"<html>rows:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/render"):
+            # Phase 2 (VULNERABLE sink): re-uses the /store'd value in a query, so a
+            # stored quote errors, a stored boolean twin diverges, and a stored OOB
+            # payload's URL is fetched server-side — all AWAY from the write endpoint.
+            v = type(self)._stored
+            import re
+            mm = re.search(r"https?://[^\s')]+", v)
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            vb = v.encode("utf-8", "replace")
+            if "'" in v and "AND '1'='1" not in v and "AND '1'='2" not in v:
+                body = (b"Database error: You have an error in your SQL syntax; check the MySQL "
+                        b"manual near '" + vb[:40] + b"'")
+            elif "AND '1'='1" in v:
+                body = b"<html>comment " + vb + b" -> rows: a b c d e f g h</html>"
+            elif "AND '1'='2" in v:
+                body = b"<html>comment " + vb + b" -> rows:</html>"
+            else:
+                body = b"<html>comment: " + vb + b"</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/orm-safe"):
+            # NOT vulnerable: ignores injected ORM lookups → constant result set.
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>users: alice bob carol dave erin frank</html>")
+            return
+        if self.path.startswith("/orm-search"):
+            # DELIBERATELY VULNERABLE: an injected ORM lookup (Django __startswith,
+            # Prisma [startsWith], Ransack _start) is applied as a filter — empty
+            # prefix matches all rows, an unlikely prefix matches none.
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            injected = None
+            for k, vals in qs.items():
+                kl = k.lower()
+                if kl.endswith("__startswith") or "startswith" in kl or k.endswith("_start]") or k.endswith("_start"):
+                    injected = vals[0]
+                    break
+            if injected is None or injected == "":
+                body = b"<html>users: alice bob carol dave erin frank grace heidi ivan</html>"
+            else:
+                body = b"<html>users:</html>"
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)
