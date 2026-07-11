@@ -62,7 +62,7 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 | 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | ✅ **SHIPPED** `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
 | 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | ✅ **SHIPPED** `web/secondorder.py` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher |
 | 5 | `orm_leak_probe` — Django/Prisma/Rails relational-lookup + mass-assignment | ✅ **SHIPPED** `web/ormleak.py` | native edge | hot 2023-25 class (elttam ORM Leak); fully nuclei-blind; mass-assignment half already in `logic_probe` |
-| 6 | `db_credential_scan` — managed-DB DSN + warehouse-token classifier | extend `recon/secrets.py` + `config_audit.py` | offline classifier | highest-confidence net-new; PlanetScale/Neon/Turso/Atlas-srv/Snowflake/Redis-Cloud/BigQuery = direct DB, zero traffic |
+| 6 | `db_credential_scan` — managed-DB DSN + warehouse-token classifier | ✅ **SHIPPED** `secrets.py` + `config_audit.py` | offline classifier | highest-confidence net-new; PlanetScale/Neon/Turso/Atlas-srv/Snowflake/Redis-Cloud/BigQuery = direct DB, zero traffic |
 | 7 | `firebase_exposure` + `supabase_exposure` (RLS-off anon-key) | **new** `recon/{firebase,supabase}.py` | passive active-GET | epidemic in vibe-coded apps; one safe GET with the app's own public key |
 | 8 | `fastjson_oast_probe` — benign `@type` → OAST DNS callback | **new**, reuse OAST | native edge | #1 CN Java-stack bug; KB describes it, nothing detects it |
 | 9 | `stack_probe` family extensions: Druid session-leak, CouchDB, ES, InfluxDB, vector-DB | extend `web/stacks.py` | native edge | reuse the `_probe_clickhouse` template; ChromaToast CVE-2026-45829 (CVSS 10, unpatched) auto-routes to Strix |
@@ -465,7 +465,14 @@ design (ships in the frontend) → full CRUD on every PostgREST-exposed table. C
   JWT → reuse `web/jwt.py` to confirm `role:"anon"`. Native-edge (key-discovery → schema
   → per-table differential). Redact rows.
 
-### E.3 Managed-DB DSN + warehouse-token classifier ❌ — RANK 6/3 (highest-confidence net-new)
+### E.3 Managed-DB DSN + warehouse-token classifier ✅ (SHIPPED) — RANK 6/3 (highest-confidence net-new)
+Implemented offline in `recon/secrets.py` (`_RAW_PATTERNS`: PlanetScale `pscale_pw_`/`pscale_tkn_`,
+Neon/Atlas-srv/Upstash/Redis-Cloud DSNs-with-creds, Turso libSQL) and `recon/config_audit.py`
+(a `_MANAGED_DB` value-pattern table + `classify_managed_db`, surfaced in
+`analyze_config` `summary.managed_db`; adds Snowflake/Databricks/Elastic-Cloud endpoints +
+BigQuery service-account JSON). Zero traffic; DSN-with-creds/token = `critical`, bare
+endpoint = `high`/`medium`. FP-guarded (a plain local/RDS DSN does not match).
+
 Serverless/managed connection strings and warehouse tokens leak in JS/`.env`/`.git`/
 sourcemaps → a direct path to the data with no exploit. Snowflake's 2024 UNC5537
 mega-breach (AT&T, Ticketmaster, 165 orgs) was *entirely* stolen-credential + no-MFA.

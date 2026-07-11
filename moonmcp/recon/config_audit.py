@@ -317,6 +317,61 @@ def classify_signing_secret(key: str, value: str) -> tuple[str, str, str] | None
     return _SIGNING_SECRETS.get(base)
 
 
+# Managed / serverless database & warehouse credentials. A leaked DSN-with-creds or a
+# provider token is a DIRECT path to the data — no exploit needed (the Snowflake UNC5537
+# breach was entirely stolen creds + no MFA). Matched on the VALUE format (keys vary),
+# ordered most-specific first. (service, value regex, severity, note). ``critical`` = the
+# value itself grants access (embedded creds / a standalone token); ``high``/``medium`` =
+# an endpoint that grants access once paired with a nearby password/token.
+_MANAGED_DB: list[tuple[str, re.Pattern[str], str, str]] = [
+    ("BigQuery service account",
+     re.compile(r'"type"\s*:\s*"service_account".*?"private_key"\s*:\s*"-----BEGIN (?:RSA )?PRIVATE KEY',
+                re.S), "critical",
+     "GCP service-account JSON with a private key — direct BigQuery / GCP data access"),
+    ("PlanetScale token",
+     re.compile(r"pscale_(?:pw|tkn|oauth)_[0-9A-Za-z._\-]{20,}"), "critical",
+     "PlanetScale password / service token — direct MySQL access"),
+    ("Neon Postgres DSN",
+     re.compile(r"(?i)postgres(?:ql)?://[^\s:@/]+:[^\s:@/]+@ep-[a-z0-9\-]+[a-z0-9.\-]*\.neon\.tech"),
+     "critical", "Neon Postgres DSN with embedded credentials — direct DB read/write"),
+    ("MongoDB Atlas DSN",
+     re.compile(r"(?i)mongodb\+srv://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-]+\.[a-z0-9]+\.mongodb\.net"),
+     "critical", "MongoDB Atlas SRV DSN with embedded credentials — direct DB read/write"),
+    ("Upstash Redis DSN",
+     re.compile(r"(?i)rediss?://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-]+\.upstash\.io"), "critical",
+     "Upstash Redis DSN with embedded credentials — direct cache/DB access"),
+    ("Redis Cloud DSN",
+     re.compile(r"(?i)rediss?://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-.]+\.redis-cloud\.com"), "critical",
+     "Redis Cloud DSN with embedded credentials — direct cache/DB access"),
+    ("Turso libSQL endpoint",
+     re.compile(r"(?i)libsql://[a-z0-9.\-]+\.turso\.io"), "high",
+     "Turso libSQL endpoint — with the TURSO_AUTH_TOKEN (a JWT) = full DB access"),
+    ("Elastic Cloud endpoint",
+     re.compile(r"(?i)https?://[a-z0-9\-]+\.(?:es|kb)\.[a-z0-9\-.]+\.(?:found\.io|elastic-cloud\.com|cloud\.es\.io)"),
+     "high", "Elastic Cloud endpoint — with ELASTIC_PASSWORD / an API key = cluster access"),
+    ("Snowflake account",
+     re.compile(r"(?i)\b[a-z0-9][a-z0-9_\-]*(?:\.[a-z0-9\-]+){0,3}\.snowflakecomputing\.com"), "medium",
+     "Snowflake account endpoint — with a leaked user/password or PAT = full warehouse "
+     "access (the UNC5537 pattern)"),
+    ("Databricks workspace",
+     re.compile(r"(?i)\b[a-z0-9\-]+\.(?:cloud\.databricks\.com|azuredatabricks\.net|gcp\.databricks\.com)"),
+     "medium", "Databricks workspace — with a dapi… PAT = full workspace / SQL access"),
+]
+
+
+def classify_managed_db(value: str) -> tuple[str, str, str] | None:
+    """If *value* is a managed-DB / warehouse DSN, token, or endpoint (not a
+    placeholder), return ``(service, note, severity)`` — else None."""
+
+    v = (value or "").strip()
+    if not v or _looks_placeholder(v):
+        return None
+    for service, rx, severity, note in _MANAGED_DB:
+        if rx.search(v):
+            return (service, note, severity)
+    return None
+
+
 def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
     k, v = key.lower(), (value or "").strip()
     vlow = v.lower()
@@ -393,6 +448,7 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
     audit = ConfigAudit(format=fmt, setting_count=len(pairs))
     findings: list[ConfigFinding] = []
     forge_chains: list[dict] = []
+    managed_db: list[dict] = []
     for key, value in pairs:
         cat = _categorize(key)
         rule_hits = _rule_checks(key, value)
@@ -407,7 +463,14 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
                 f"{framework}: {primitive}"))
             forge_chains.append({"key": key, "framework": framework,
                                  "primitive": primitive, "severity": severity})
-        sensitive = cat == "secret" or forge is not None or any(
+        # A managed-DB / warehouse DSN, token, or endpoint is a DIRECT path to the data
+        # (no exploit) — classify it explicitly so it isn't lost among generic secrets.
+        mdb = classify_managed_db(value)
+        if mdb is not None:
+            service, note, severity = mdb
+            rule_hits.append(ConfigFinding(severity, key, "managed database credential", f"{service}: {note}"))
+            managed_db.append({"key": key, "service": service, "note": note, "severity": severity})
+        sensitive = cat == "secret" or forge is not None or mdb is not None or any(
             f.issue in ("exposed credential", "credentials in connection string") for f in rule_hits)
         shown = _redact(value) if sensitive and value else value
         audit.settings.append(Setting(key=key, value=shown[:200], category=cat, sensitive=sensitive))
@@ -423,5 +486,5 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
         by_cat[s.category] = by_cat.get(s.category, 0) + 1
     audit.summary = {"by_severity": by_sev, "by_category": by_cat,
                      "sensitive_settings": sum(1 for s in audit.settings if s.sensitive),
-                     "forge_chains": forge_chains}
+                     "forge_chains": forge_chains, "managed_db": managed_db}
     return audit

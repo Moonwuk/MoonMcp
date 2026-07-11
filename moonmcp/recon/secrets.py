@@ -51,6 +51,14 @@ _RAW_PATTERNS: list[tuple[str, str, str, int]] = [
     ("PyPI Upload Token", r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_\-]{50,}", "low", 0),
     ("DigitalOcean PAT", r"dop_v1_[a-f0-9]{64}", "low", 0),
     ("Databricks PAT", r"\bdapi[a-f0-9]{32}\b", "medium", 0),
+    # Managed / serverless DB credentials — a DSN-with-creds or a provider token is a
+    # DIRECT path to the data (no exploit). See docs/DATABASE_RESEARCH.md E.3.
+    ("PlanetScale Password", r"pscale_pw_[0-9A-Za-z._\-]{20,}", "low", 0),
+    ("PlanetScale Service Token", r"pscale_tkn_[0-9A-Za-z._\-]{20,}", "low", 0),
+    ("Neon Postgres DSN", r"(?i)postgres(?:ql)?://[^\s:@/]+:[^\s:@/]+@ep-[a-z0-9\-]+[a-z0-9.\-]*\.neon\.tech", "low", 0),
+    ("MongoDB Atlas SRV DSN", r"(?i)mongodb\+srv://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-]+\.[a-z0-9]+\.mongodb\.net", "low", 0),
+    ("Upstash/Redis-Cloud DSN", r"(?i)rediss?://[^\s:@/]+:[^\s:@/]+@[a-z0-9\-.]+\.(?:upstash\.io|redis-cloud\.com)", "low", 0),
+    ("Turso libSQL URL", r"(?i)libsql://[a-z0-9.\-]+\.turso\.io", "medium", 0),
     ("New Relic API Key", r"NRAK-[A-Z0-9]{27}", "low", 0),
     ("Linear API Key", r"lin_api_[0-9A-Za-z]{40}", "low", 0),
     ("Age Secret Key", r"AGE-SECRET-KEY-1[0-9A-Z]{58}", "low", 0),
