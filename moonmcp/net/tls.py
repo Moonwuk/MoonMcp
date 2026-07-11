@@ -87,6 +87,23 @@ def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | N
     return result
 
 
+def origin_hostname_hints(target_host: str, sans: list[str]) -> list[str]:
+    """Hostnames on a DEFAULT / bogus-SNI certificate that name a host OTHER than the
+    target (and not a parent/child of it) — a sibling tenant on the same edge or the
+    origin's own hostname, i.e. an origin-exposure / lateral-surface lead. Wildcards
+    are unwrapped; duplicates and same-org sub/parent domains are dropped."""
+
+    t = (target_host or "").lower().strip().lstrip(".")
+    out: list[str] = []
+    for s in sans:
+        h = (s or "").lower().strip().lstrip("*.").lstrip(".")
+        if not h or h == t or (t and (t.endswith("." + h) or h.endswith("." + t))):
+            continue
+        if h not in out:
+            out.append(h)
+    return out
+
+
 async def inspect_certificate(
     host: str,
     port: int = 443,

@@ -107,6 +107,16 @@ async def test_dns_behavior_local(fresh_context):
 
 
 # -- edge_map / http_behavior / tls_behavior --------------------------------
+def test_origin_hostname_hints_from_default_cert():
+    from moonmcp.net import tls
+    sans = ["victim.com", "*.victim.com", "www.victim.com", "origin-prod.internal.net",
+            "othertenant.io", "origin-prod.internal.net"]
+    hints = tls.origin_hostname_hints("victim.com", sans)
+    # the target and its own sub/parent/wildcard forms are dropped; siblings/origin kept + deduped
+    assert hints == ["origin-prod.internal.net", "othertenant.io"]
+    assert tls.origin_hostname_hints("victim.com", ["victim.com", "*.victim.com"]) == []
+
+
 def test_edge_layers_detects_cloudflare_and_cache():
     r = infra.edge_layers({"Server": "cloudflare", "CF-RAY": "abc-FRA",
                            "CF-Cache-Status": "HIT", "Via": "1.1 varnish, 1.1 cloudflare",

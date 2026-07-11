@@ -80,7 +80,8 @@ NATIVE_EDGE: dict[str, str] = {
     "backend_probe": "behavioural: infer backend fleet from response variance — patch drift, "
                      "content drift (ETag/Last-Modified), clock skew, and header-name ordering "
                      "across a request series; nuclei matches one response, never compares samples",
-    "tls_behavior": "behavioural TLS variance analysis",
+    "tls_behavior": "bogus-SNI vs real cert diff + mining the DEFAULT cert's SANs for the origin/"
+                    "sibling hostnames — a two-handshake comparison nuclei's ssl protocol doesn't do",
     "http_behavior": "behavioural HTTP variance analysis",
     "vhost_probe": "Host-header routing inference",
     "ratelimit_probe": "rate-limit behaviour inference over a request series",
