@@ -39,7 +39,7 @@ Always start by asking the server what it can do here:
 
 - `server_status` — config, the **active program**, which external CLIs
   (nuclei/httpx/nmap/…) are on PATH, and whether intrusive/external are enabled.
-- `tool_catalog` — a grouped map of all ~90 tools with each one's purpose and its
+- `tool_catalog` — a grouped map of all ~150 tools with each one's purpose and its
   `scope_gated` / `intrusive` flags, plus the recommended `workflow`. Call this to
   pick the right tool instead of guessing. Pass a `family` to drill in
   (`setup`, `passive_osint`, `light_active`, `intrusive`, `orchestration`,

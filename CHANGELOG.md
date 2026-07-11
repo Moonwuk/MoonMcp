@@ -6,6 +6,23 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Database & data-store attack surface (detection-only).** A large multilingual
+  research synthesis (`docs/DATABASE_RESEARCH.md`) executed as ~14 probes:
+  `db_exposure` (raw-socket unauth sweep — Redis/Mongo/memcached/ES/CouchDB/InfluxDB/
+  YARN/TiDB), `nosqli_probe` (Mongo operator + `$where`), `second_order_sqli_probe`
+  (stored write→read SQLi), `orm_leak_probe` (Django/Prisma/Rails relational-lookup),
+  `fastjson_oast_probe` (Java autoType → OAST), `ssrf_protocol_probe` (gopher/dict →
+  internal datastore), six opt-in `sqli_probe` lanes (context/oob/time/json-waf/
+  multibyte/header), `firebase_exposure` + `supabase_exposure` (cloud DBaaS),
+  `stack_probe` vector-DB/Druid-session extensions, `debug_exposure` DB panels, a
+  managed-DB DSN/token classifier in `extract_secrets`/`analyze_config`, and regional
+  KB packs (KR/JP/CN DBMS error signatures + APAC WAF fingerprints).
+- **WAF-bypass & advanced injection detectors.** `parser_diff_probe` (HTTP
+  parser-differential / WAF-bypass multiplier — UTF-7/overlong decode + duplicate-key/
+  comment/BOM/bare-LF-multipart tolerance), `graphql_nosqli` (GraphQL resolver → Mongo/
+  Mongoose operator injection via the variables transport), and `cspp_probe` (client-side
+  prototype pollution, tested safely in MoonMCP's own headless browser — never mutates
+  the target). Each hardened by an adversarial multi-agent verification pass.
 - **Behavioural infrastructure detectors.** Infer the infra's shape from response
   *variance*: `backend_probe` (cluster N responses → backend fleet behind an LB +
   **patch drift** across nodes + clock skew), `dns_behavior` (wildcard DNS, DNS
@@ -25,6 +42,22 @@ All notable changes to MoonMCP are documented here. The format loosely follows
   (`tests/test_eval_detectors.py` + deliberately-vulnerable endpoints) asserts each
   probe detects its class and doesn't false-positive. `moonmcp/web/probes.py`,
   `moonmcp/intel/oast_server.py`.
+
+### Fixed
+- **Security & correctness hardening — 21 verified bugs from a whole-project audit**
+  (partitioned multi-agent finders → independent per-finding verification; each fix
+  pinned by a regression test in `tests/test_bugfixes.py`). Scope/SSRF guard: an
+  IPv4-mapped IPv6 literal no longer defeats IPv4 CIDR allow/deny matching; the HTTP
+  redirect follower refuses `file://`/`ftp://`/`data:` (opener drops File/FTP/Data
+  handlers); `sourcemaps` re-checks an attacker-controlled cross-origin
+  `sourceMappingURL`; `run_scanner` scope-checks comma/space-delimited arg tokens
+  (no IMDS smuggling); credentials are stripped on cross-origin redirects; the
+  connect-guard fails closed on a resolver error; `jwt_jku_probe`/`workflow_probe`
+  scope the right parameter; safety env flags keep their safe default on an
+  unrecognised value. Correctness: `tls_inspect` decodes the raw DER (getpeercert()
+  is `{}` under CERT_NONE, so SAN extraction was silently dead); plus FP/FN fixes in
+  `nosqli`/`logic`/`redirect`/`behavior`/`firebase`/`oast`/`desync`/`config_audit`
+  and a memory trust-downgrade fix.
 
 ## [Released — v0.1.x, PR #1]
 
