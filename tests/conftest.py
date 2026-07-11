@@ -104,7 +104,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html>hello " + out.encode("utf-8", "replace") + b"</html>")
             return
-        if self.path.startswith("/sqli"):
+        if self.path.startswith("/sqli?") or self.path == "/sqli":
             # DELIBERATELY VULNERABLE: a single quote yields a MySQL error; the
             # boolean pair yields different-length bodies.
             from urllib.parse import parse_qs, urlparse
@@ -115,6 +115,98 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 body = b"<html>results: alice bob carol dave erin frank grace</html>"
             else:
                 body = b"<html>results:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/sqli-order"):
+            # VULNERABLE ORDER BY: the injected CASE expression is evaluated as a
+            # sort key, so WHEN 1=1 vs WHEN 1=2 yields different-length row sets.
+            from urllib.parse import parse_qs, urlparse
+            s = (parse_qs(urlparse(self.path).query).get("sort") or [""])[0]
+            if "WHEN 1=1" in s:
+                body = b"<html>rows: alice bob carol dave erin frank grace</html>"
+            elif "WHEN 1=2" in s:
+                body = b"<html>rows: grace</html>"
+            else:
+                body = b"<html>rows: default</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/sqli-time"):
+            # VULNERABLE time-based: honours SLEEP/PG_SLEEP/WAITFOR delays.
+            import re
+            import time as _time
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            mt = re.search(r"(?:SLEEP|PG_SLEEP)\(([\d.]+)\)", q, re.I) or re.search(r"0:0:([\d.]+)", q)
+            if mt:
+                try:
+                    _time.sleep(min(float(mt.group(1)), 3.0))
+                except ValueError:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/sqli-mb"):
+            # VULNERABLE charset mismatch: a multibyte lead byte + quote breaks out
+            # of the (naive addslashes) escaping, so it errors where plain %27 doesn't.
+            p = self.path
+            if any(t in p for t in ("%bf%27", "%82%27", "%a1%27")):
+                body = b"Database error: You have an error in your SQL syntax; check the MySQL manual"
+            else:
+                body = b"<html>ok</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/sqli-waf"):
+            # A naive WAF blocks the classic tautology but not the JSON-operator form.
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            if "'1'='1" in q or "'1'='2" in q:
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"blocked by WAF")
+                return
+            if "jsonb" in q and "@>" in q:
+                is_true = '@> \'{"a":1}\'' in q
+                body = b"<html>rows: a b c d e f g h i</html>" if is_true else b"<html>rows:</html>"
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>ok</html>")
+            return
+        if self.path.startswith("/sqli-oob"):
+            # VULNERABLE OOB: the injected UTL_HTTP URL is fetched server-side.
+            import re
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            mm = re.search(r"https?://[^\s')]+", q)
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/sqli-hdr"):
+            # VULNERABLE header SQLi: the User-Agent value flows into a query.
+            ua = self.headers.get("User-Agent", "")
+            if "'" in ua and "'1'='1" not in ua and "'1'='2" not in ua:
+                body = b"Database error: You have an error in your SQL syntax; check the MySQL manual"
+            elif "'1'='1" in ua:
+                body = b"<html>rows: alice bob carol dave erin</html>"
+            else:
+                body = b"<html>rows:</html>"
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)

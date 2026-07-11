@@ -59,7 +59,7 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 |---|---|---|---|---|
 | 1 | `nosqli_probe` — Mongo operator (`$ne/$gt/$in`) auth-bypass + `$where` boolean | ✅ **SHIPPED** `web/nosqli.py` | native edge | `nosqli` existed only in the KB, never as a probe; lives on real login/search endpoints; nuclei can't express the object-injection differential; consensus #1 across 3 agents |
 | 2 | `db_exposure` — raw-socket + HTTP unauth datastore sweep | 🟡 **SHIPPED** `recon/datastores.py` | native edge | `port_scan` sent no protocol probe; now covers Redis/Mongo/memcached/ES/CouchDB/InfluxDB/YARN/TiDB in one scope-gated fan-out (Zookeeper/Kafka/vector-DB still to add) |
-| 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | extend `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
+| 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | ✅ **SHIPPED** `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
 | 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | **new**, model on `workflow_probe` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher; the workflow engine already exists |
 | 5 | `orm_leak_probe` — Django/Prisma/Rails relational-lookup + mass-assignment | **new** `web/ormleak.py` | native edge | hot 2023-25 class (elttam ORM Leak); fully nuclei-blind; RU Bitrix ORM variant folds in |
 | 6 | `db_credential_scan` — managed-DB DSN + warehouse-token classifier | extend `recon/secrets.py` + `config_audit.py` | offline classifier | highest-confidence net-new; PlanetScale/Neon/Turso/Atlas-srv/Snowflake/Redis-Cloud/BigQuery = direct DB, zero traffic |
@@ -251,7 +251,16 @@ just Postgres (ordinary SQLi) — the vector-specific risk is *exposure*.
 nuclei-blind lanes bolt onto its existing reproducible-differential harness. Full
 extraction stays **delegated to sqlmap**.
 
-### C.1 Out-of-band / OAST SQLi (per-DBMS DNS/HTTP) ❌ — RANK 3/HIGH
+> ✅ **SHIPPED** — `sqli_probe` now takes opt-in lanes (default behaviour unchanged):
+> `context=value|order_by|limit` (CASE twins for non-parameterizable positions),
+> `placement=param|header|cookie` (with `name`), `oob` (per-DBMS DNS/HTTP OAST callback,
+> reusing the `ssrf_probe` OAST plumbing), `time_based` (per-DBMS sleep confirmed only
+> when the delay is proportional to `delay_s` — monotonic guard), `waf_bypass`
+> (JSON-operator + comment twins → flags "SQLi reachable only when the plain boolean is
+> blocked"), and `multibyte` (Shift-JIS/EUC-KR/GBK lead-byte charset bypass via raw
+> injection). Payloads/analysers in `web/probes.py`; verdict via `confirm.evaluate`.
+
+### C.1 Out-of-band / OAST SQLi (per-DBMS DNS/HTTP) ✅ (SHIPPED) — RANK 3/HIGH
 When there's no in-band result and timing is unreliable, force the DB to make an
 outbound DNS/HTTP request to a MoonMCP OAST canary: MSSQL `xp_dirtree`/`xp_fileexist` →
 UNC → DNS; Oracle `UTL_HTTP`/`UTL_INADDR`/`DBMS_LDAP`; MySQL `LOAD_FILE('\\\\<oast>\\x')`;
@@ -267,7 +276,7 @@ reliable blind-confirm channel.
   pattern applied to SQL; `confirm.evaluate(oast_count=…)`. DNS **data** exfil →
   sqlmap `--dns-domain`.
 
-### C.2 JSON-based SQLi — WAF bypass via JSON operators (Claroty Team82) ❌ — RANK 3/HIGH
+### C.2 JSON-based SQLi — WAF bypass via JSON operators (Claroty Team82) ✅ (SHIPPED) — RANK 3/HIGH
 Team82 showed all five leading WAFs fail to tokenize JSON SQL syntax, so appending JSON
 operators/casts blinds the WAF while PG/MySQL/MSSQL/SQLite still execute: PG `@>`,`->`,
 `::jsonb`,`?|`; MySQL `JSON_EXTRACT`,`->>`; MSSQL `JSON_VALUE`.
@@ -281,7 +290,7 @@ operators/casts blinds the WAF while PG/MySQL/MSSQL/SQLite still execute: PG `@>
   when `waf_detect` reports a WAF, `sqli_probe` runs both lanes and flags "SQLi reachable
   only via JSON-operator encoding (WAF bypass)". Extraction → sqlmap JSON tamper.
 
-### C.3 Boolean/time-blind + non-fuzzable positions (ORDER BY / LIMIT / identifier) ❌ — RANK 3/MED-HIGH
+### C.3 Boolean/time-blind + non-fuzzable positions (ORDER BY / LIMIT / identifier) ✅ (SHIPPED) — RANK 3/MED-HIGH
 Identifier positions can't be parameterized, so they're disproportionately vulnerable
 *and* missed by value-only fuzzers. This is the **top JP/KR pick**: Korean gov/finance
 runs on **eGovFramework (전자정부 표준프레임워크)** = MyBatis, and `mybatis-generator` emits
@@ -299,7 +308,7 @@ often doesn't error and the `'1'='1'` pair is meaningless there, so `sqli_probe`
   placement-specific twins; time-blind mode via `confirm.evaluate(timing_delta_ms)` with
   the monotonic-across-N guard. Deep extraction → sqlmap `--technique T -p sort`.
 
-### C.4 Multibyte charset-mismatch SQLi (Shift-JIS 0x5C / EUC-KR CP949 / GBK) ❌ — RANK 3/JP-KR
+### C.4 Multibyte charset-mismatch SQLi (Shift-JIS 0x5C / EUC-KR CP949 / GBK) ✅ (SHIPPED) — RANK 3/JP-KR
 The signature Japanese technique (Tokumaru/IPA `安全なSQLの呼び出し方`). When the DB
 connection charset ≠ the app charset, `addslashes`/quote-doubling is bypassed because a
 multibyte lead byte swallows the escaping backslash — SJIS `ソ`(0x95 0x5C), EUC-KR/CP949
@@ -315,7 +324,7 @@ twin.
   (so raw `%bf%27` bytes aren't re-encoded) + the existing reproducible differential vs a
   plain-`%27` control.
 
-### C.5 Header / cookie SQLi + WAF-bypass encodings ❌ — RANK 7/9
+### C.5 Header / cookie SQLi + WAF-bypass encodings ✅ (SHIPPED) — RANK 7/9
 `User-Agent`/`Referer`/`X-Forwarded-For`/`Cookie` values logged or queried unsafely — a
 documented bounty seam (DoD blind SQLi via UA; XFF SQLi) that value fuzzers skip.
 WAF-bypass encoding twins (versioned comments `/*!50000UNION*/`, inline `/**/`,

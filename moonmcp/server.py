@@ -3573,40 +3573,156 @@ async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def sqli_probe(target: str, param: str, method: str = "GET") -> dict:
-    """**SQL injection** probe — non-destructive: a single-quote **error** trigger
-    (matched against MoonMCP's SQL error signatures) plus a **boolean** pair
-    (`'1'='1'` vs `'1'='2'`) whose differing responses indicate boolean-based SQLi.
-    No UNION/stacked/time-based data extraction. Reports the DBMS if a signature
-    fires. Intrusive; in scope only.
+async def sqli_probe(target: str, param: str, method: str = "GET",
+                     context: str = "value", placement: str = "param",
+                     name: str | None = None, oob: bool = False,
+                     time_based: bool = False, waf_bypass: bool = False,
+                     multibyte: bool = False, delay_s: float = 5.0,
+                     oast_token: str | None = None, wait: float = 3.0) -> dict:
+    """**SQL injection** probe — non-destructive, differential. Core: a single-quote
+    **error** trigger (matched vs MoonMCP's SQL error signatures) + a reproducible
+    **boolean** pair. Opt-in lanes for spots nuclei can't reach:
+    `context` = value|order_by|limit (CASE twins for non-parameterizable positions),
+    `placement` = param|header|cookie (with `name`), `oob` (per-DBMS DNS/HTTP **OAST**
+    callback — start `oast_selfhost` first), `time_based` (per-DBMS sleep, confirmed only
+    when the delay is proportional to `delay_s`), `waf_bypass` (JSON-operator + comment
+    twins — flags SQLi reachable only when the plain boolean is blocked), `multibyte`
+    (Shift-JIS/EUC-KR/GBK lead-byte charset bypass). No data extraction (→ sqlmap).
+    Intrusive; in scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
-    async def _get(value: str):
-        u, b = _with_param(url, param, value, m)
-        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=_scope_check())
 
+    def _build(value: str, is_raw: bool = False):
+        if placement in ("header", "cookie"):
+            bu, bb = _with_param(url, param, "1", m) if param else (url, None)
+            hdr = ({"Cookie": f"{name or 'sid'}={value}"} if placement == "cookie"
+                   else {name or "User-Agent": value})
+            return bu, bb, hdr
+        if is_raw:
+            return injectmod.inject_raw(url, param, value), None, {}
+        u, b = _with_param(url, param, value, m)
+        return u, b, {}
+
+    async def _get(value: str, is_raw: bool = False):
+        bu, bb, hh = _build(value, is_raw)
+        return await ctx.http.fetch(bu, method=m, body=bb, headers=(hh or None),
+                                    follow_redirects=False, scope_check=_scope_check())
+
+    def _diff(t1, t2, f1, f2) -> tuple[bool, bool]:
+        ts = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
+        fs = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
+        d = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
+        return bool(ts and fs), bool(ts and fs and d)
+
+    # --- core: error signatures + reproducible boolean (context-aware) ---
     er = await _get(probesmod.SQLI_ERROR)
     hits = injmod.match_signatures(er.text(200_000), class_id="sqli")
-    # Send each of TRUE/FALSE twice: a real boolean-based SQLi is REPRODUCIBLE
-    # (true==true, false==false, true!=false), which rejects inter-request noise.
-    t1, t2 = await _get(probesmod.SQLI_TRUE), await _get(probesmod.SQLI_TRUE)
-    f1, f2 = await _get(probesmod.SQLI_FALSE), await _get(probesmod.SQLI_FALSE)
-    true_stable = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
-    false_stable = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
-    differs = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
-    bool_diff = bool(true_stable and false_stable and differs)
+    true_p, false_p = probesmod.sqli_context_twins(context)
+    t1, t2 = await _get(true_p), await _get(true_p)
+    f1, f2 = await _get(false_p), await _get(false_p)
+    stable, bool_diff = _diff(t1, t2, f1, f2)
+
+    lanes: dict[str, Any] = {}
+    extra_hits: list[str] = []
+
+    # --- multibyte charset-mismatch lane (param placement only) ---
+    if multibyte and placement == "param":
+        plain = await _get(probesmod.SQLI_PLAIN_QUOTE, is_raw=True)
+        plain_hits = injmod.match_signatures(plain.text(200_000), class_id="sqli")
+        mb: list[dict] = []
+        for label, twin in probesmod.SQLI_MULTIBYTE_TWINS:
+            r = await _get(twin, is_raw=True)
+            sig = injmod.match_signatures(r.text(200_000), class_id="sqli")
+            if sig and not plain_hits:   # errors where the plain %27 was neutralised
+                mb.append({"charset": label, "technologies": [s["technology"] for s in sig][:3]})
+        lanes["multibyte"] = {"plain_errored": bool(plain_hits), "bypass_charsets": mb}
+        if mb:
+            extra_hits.append("sqli/charset-bypass")
+
+    # --- WAF-bypass lane: JSON-operator + comment twins ---
+    if waf_bypass:
+        wb: list[dict] = []
+        for label, tp, fp in probesmod.SQLI_JSON_TWINS + probesmod.SQLI_ENCODING_TWINS:
+            jt1, jt2 = await _get(tp), await _get(tp)
+            jf1, jf2 = await _get(fp), await _get(fp)
+            _s, jd = _diff(jt1, jt2, jf1, jf2)
+            if jd:
+                wb.append({"encoding": label})
+        lanes["waf_bypass"] = {"plain_differential": bool_diff, "encoded_differentials": wb,
+                               "bypass": bool(wb) and not bool_diff}
+        if wb:
+            extra_hits.append("sqli/waf-bypass-encoding" if not bool_diff else "sqli/encoded-differential")
+
+    # --- time-based blind lane (monotonic vs a 0s control) ---
+    if time_based:
+        req = max(0.0, min(delay_s, 15.0))
+        zero, delayed = probesmod.sqli_time_payloads(0), probesmod.sqli_time_payloads(req)
+        loop = asyncio.get_event_loop()
+        tb: list[dict] = []
+        for (dbms, zp), (_d, dp) in zip(zero, delayed, strict=True):
+            s0 = loop.time()
+            await _get(zp)
+            z_s = loop.time() - s0
+            s1 = loop.time()
+            await _get(dp)
+            d_s = loop.time() - s1
+            hit = probesmod.assess_timing(z_s, d_s, req)
+            if hit:
+                tb.append({"dbms": dbms, **hit})
+        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        if tb:
+            extra_hits.append("sqli/time-based")
+
+    # --- out-of-band (OAST) lane, per DBMS ---
+    oast_count = 0
+    if oob:
+        cb = ctx.oast.get(oast_token) if oast_token else None
+        if cb is None and ctx.oast.configured:
+            cb = ctx.oast.generate(label="sqli_oob")
+        if cb is None:
+            lanes["oob"] = {"error": "oast_unconfigured",
+                            "detail": "start oast_selfhost or oast_configure before an OOB SQLi probe"}
+        else:
+            for _lbl, pl in probesmod.sqli_oob_payloads(cb.canary_host, cb.http_url):
+                await _get(pl)
+            await asyncio.sleep(max(0.0, min(wait, 8.0)))
+            if ctx.oast_server is not None and ctx.oast_server.running:
+                oh = ctx.oast_server.interactions(cb.token)
+            else:
+                poll = ctx.oast.poll_target(cb.token)
+                oh = []
+                if poll:
+                    try:
+                        r = await ctx.http.fetch(poll, follow_redirects=True)
+                        oh = oastmod.parse_interactions(r.text())
+                    except Exception:
+                        oh = []
+            oast_count = len(oh)
+            lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
+                            "interaction_count": oast_count, "interactions": oh[:20]}
+            if oh:
+                extra_hits.append("sqli/oob-callback")
+
+    timing_ms = max((h["delta_s"] for h in lanes.get("time_based", {}).get("hits", [])),
+                    default=0.0) * 1000
     verdict = confirmmod.evaluate(
-        injection_hits=[f"{h['class']}/{h['technology']}" for h in hits],
+        injection_hits=[f"{h['class']}/{h['technology']}" for h in hits] + extra_hits,
         status_changed=bool_diff and (t1.status != f1.status),
-        length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0)
-    return {"target": url, "param": param, **verdict, "error_signatures": hits[:10],
-            "boolean_differential": bool_diff, "reproducible": bool(true_stable and false_stable),
-            "true_status": t1.status, "true_len": len(t1.body),
-            "false_status": f1.status, "false_len": len(f1.body)}
+        length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0,
+        oast_count=oast_count, timing_delta_ms=timing_ms)
+    out: dict[str, Any] = {
+        "target": url, "param": param, "context": context, "placement": placement,
+        **verdict, "error_signatures": hits[:10],
+        "boolean_differential": bool_diff, "reproducible": stable,
+        "true_status": t1.status, "true_len": len(t1.body),
+        "false_status": f1.status, "false_len": len(f1.body)}
+    if lanes:
+        out["lanes"] = lanes
+    return out
 
 
 @mcp.tool()
