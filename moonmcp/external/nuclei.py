@@ -53,6 +53,8 @@ NATIVE_EDGE: dict[str, str] = {
                    "not a static signature",
     "workflow_probe": "multi-step flow step-skipping (force-browse to a later/terminal step "
                       "without completing prerequisites) — needs the ordered flow + sequence state",
+    "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
+                   "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet / N-parallel race; not expressible as a per-request template",
     "desync_probe": "CL.TE / obfuscated-TE framing indicators on RAW sockets",
     "desync_modern_probe": "0.CL/TE.0/Expect/chunk-ext via response-timeout deltas on raw sockets — "

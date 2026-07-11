@@ -98,6 +98,7 @@ from .web import screenshot as screenshotmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
+from .web import value as valuemod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
 from .web import workflow as workflowmod
@@ -1872,6 +1873,43 @@ async def workflow_probe(steps: list[dict]) -> dict:
                       "without its prerequisites" if n
                       else "no step served cold — the flow appears to enforce its sequence")
     return result
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def value_probe(target: str, param: str | None = None, coupon_code: str | None = None,
+                      method: str = "GET") -> dict:
+    """**Value / financial-logic** manipulation on money fields. Auto-targets value
+    params in the URL (amount/price/balance/discount/coupon/points/currency…) — or
+    pass `param` — and sends the manipulations a correct server must reject: **negative**
+    amounts, **zero**, integer **overflow**, sub-cent **precision**, **>100 % discount**,
+    and **currency swap/downgrade**. If `coupon_code` is given, also tests single-use
+    **coupon/gift-card reuse** (apply the same code repeatedly). Accepted-like-baseline =
+    a value-logic lead (verdict `review`; confirm the charged/credited amount). Intrusive;
+    in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sc = _scope_check()
+    keys = logicmod.query_keys(url)
+    money = [param] if param else valuemod.money_fields(keys)
+    findings: list[dict] = []
+    for f in money:
+        findings.extend(await valuemod.probe_value_tampering(ctx.http, url, f, method=method, scope_check=sc))
+    for f in valuemod.currency_fields(keys):
+        findings.extend(await valuemod.probe_currency_swap(ctx.http, url, f, method=method, scope_check=sc))
+    out: dict = {"target": url, "tested_fields": money, "findings": findings}
+    if coupon_code:
+        cfields = valuemod.coupon_fields(keys)
+        field = cfields[0] if cfields else (param or "coupon")
+        out["coupon_reuse"] = await valuemod.probe_coupon_reuse(
+            ctx.http, url, field, coupon_code, method=(method if method != "GET" else "POST"), scope_check=sc)
+    n = len(findings) + (1 if out.get("coupon_reuse", {}).get("verdict") == "review" else 0)
+    out["note"] = (f"{n} value-logic lead(s) — confirm the real charged/credited amount"
+                   if n else "no value manipulation accepted; drive the money flow per business_logic_hunt")
+    return out
 
 
 @mcp.tool()
