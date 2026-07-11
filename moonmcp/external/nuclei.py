@@ -111,6 +111,9 @@ def coverage_report() -> dict:
             "shared cross-agent memory hub (SQLite + FTS + provenance)",
             "offline knowledge bases (injection/technique/privesc/root-cause/WAF)",
             "orchestration of the Strix autonomous pentest agent under human confirmation",
+            "the lead→PoC pipeline (promote_lead): classify an edge lead → route it to "
+            "confirm_finding / side-effect re-observation / a Strix PoC brief, and track it in "
+            "findings + shared memory — the bridge that turns review-leads into proven bugs",
         ],
         "recommendation": ("Run nuclei (via vuln_scan) for the commodity pass, then ALWAYS run the "
                            "native-edge probes — that is where bugs survive the nuclei crowd."),
