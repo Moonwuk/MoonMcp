@@ -61,7 +61,6 @@ _SIGNATURES: list[tuple[str, str, str, str]] = [
     ("Java", "language", "cookie", r"jsessionid"),
     ("Ruby on Rails", "framework", "cookie", r"_rails|_session_id"),
     ("Django", "framework", "cookie", r"csrftoken|django"),
-    ("Django", "framework", "header:x-frame-options", r"^$"),  # weak; ignored below
     ("Laravel", "framework", "cookie", r"laravel_session"),
     ("Flask", "framework", "cookie", r"session=eyj"),
     # CMS
@@ -74,7 +73,8 @@ _SIGNATURES: list[tuple[str, str, str, str]] = [
     ("Shopify", "ecommerce", "header:x-shopify-stage", r".+"),
     ("Magento", "ecommerce", "cookie", r"frontend=|mage-"),
     # Front-end
-    ("React", "js-framework", "body", r"__reactcontainer|react-root|data-reactroot"),
+    ("React", "js-framework", "body",
+     r"__reactcontainer|react-root|data-reactroot|data-reactid|react-dom|react\.(?:production|development)"),
     ("Vue.js", "js-framework", "body", r"data-v-[0-9a-f]{8}|__vue__"),
     ("Angular", "js-framework", "body", r"ng-version|ng-app|angular"),
     ("Next.js", "js-framework", "body", r"/_next/|__next_data__"),
@@ -116,8 +116,6 @@ def fingerprint(result: HttpResult, ip: str | None = None) -> Fingerprint:
 
     by_name: dict[str, Technology] = {}
     for name, category, where, pattern in _SIGNATURES:
-        if pattern in ("^$",):  # skip intentionally-inert placeholder rules
-            continue
         haystack = ""
         label = where
         if where.startswith("header:"):

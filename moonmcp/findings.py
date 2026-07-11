@@ -27,6 +27,10 @@ def _signature(f: Finding) -> tuple[str, str, str]:
     return (_norm(f.type), _norm(f.target), _norm(f.title))
 
 
+# Operator verdicts on whether a recorded finding/lead was real (drives precision).
+OUTCOMES = ("true_positive", "false_positive", "duplicate", "wont_fix", "unknown")
+
+
 @dataclass
 class Finding:
     id: int
@@ -38,6 +42,7 @@ class Finding:
     evidence: str = ""
     source: str = ""
     created_at: str = ""
+    outcome: str = ""  # set by label_finding once triaged (see OUTCOMES)
 
 
 @dataclass
@@ -58,6 +63,18 @@ class FindingsStore:
         if len(self._items) > self.cap:
             self._items = self._items[-self.cap:]
         return f
+
+    def set_outcome(self, finding_id: int, outcome: str) -> Finding | None:
+        """Label a finding's real-world outcome (true/false positive, …) for metrics."""
+
+        oc = str(outcome).strip().lower()
+        if oc not in OUTCOMES:
+            oc = "unknown"
+        for f in self._items:
+            if f.id == finding_id:
+                f.outcome = oc
+                return f
+        return None
 
     def unique(self) -> list[Finding]:
         """Deduplicated findings — one representative per type+target+title,

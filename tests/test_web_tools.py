@@ -82,6 +82,14 @@ def test_secret_scan_filters_placeholders():
     assert hits == []  # placeholders filtered by the generic high-FP gate
 
 
+def test_secret_scan_ignores_asset_filename_hash():
+    h = "a" * 32
+    # a Mailgun-shaped token that is really a cache-busting filename hash → suppressed…
+    assert scan_text(f'<script src="/assets/key-{h}.js"></script>') == []
+    # …but the same token NOT followed by an asset extension is still reported.
+    assert any(x.type == "Mailgun Key" for x in scan_text(f'MAILGUN="key-{h}"'))
+
+
 # --- local server integration -------------------------------------------
 class _WebHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):

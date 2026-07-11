@@ -58,6 +58,11 @@ NATIVE_EDGE: dict[str, str] = {
                    "not a static signature",
     "workflow_probe": "multi-step flow step-skipping (force-browse to a later/terminal step "
                       "without completing prerequisites) — needs the ordered flow + sequence state",
+    "oauth_redirect_probe": "OAuth redirect_uri allow-list bypass: discover the authorization "
+                            "endpoint → replay attacker redirect_uri twins → flag a 3xx to the canary "
+                            "(one-click ATO). A discovery→differential chain, not a template match",
+    "jwt_jku_probe": "re-issue the target's OWN token with jku/x5u→OAST, replay, correlate the "
+                     "callback — cross-request key-injection/SSRF nuclei can't derive from the token",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "

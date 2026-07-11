@@ -35,6 +35,7 @@ from . import confirm as confirmmod
 from . import cvss as cvssmod
 from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
+from . import metrics as metricsmod
 from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
@@ -1725,6 +1726,88 @@ async def oauth_probe(target: str) -> dict:
 
 
 @mcp.tool()
+@active_tool()
+async def oauth_redirect_probe(target: str, client_id: str | None = None,
+                               authorization_endpoint: str | None = None) -> dict:
+    """**OAuth `redirect_uri` bypass chain** — a one-click-ATO class nuclei can't reason
+    about. Discovers the `authorization_endpoint` (or pass `authorization_endpoint=`),
+    then replays attacker `redirect_uri` variants (attacker-host, subdomain/suffix,
+    `@`-host, path-traversal, backslash) at it with **redirects disabled** — a 3xx whose
+    `Location` lands on the canary proves the allow-list is bypassable, so an attacker
+    steals the auth code/token → account takeover. Supply a known public `client_id`
+    for the strongest signal. Benign GETs; the canary is never contacted. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    sc = _scope_check()
+    ep = authorization_endpoint
+    if not ep:
+        oidc = await oauthmod.probe_oidc(ctx.http, url, scope_check=sc)
+        ep = oidc.endpoints.get("authorization_endpoint")
+    if not ep:
+        return {"target": url, "error": "no authorization_endpoint — pass authorization_endpoint= "
+                "or a base URL that serves an OIDC discovery document"}
+    findings = await oauthmod.probe_redirect_uri_bypass(ctx.http, ep, client_id=client_id, scope_check=sc)
+    return {
+        "target": url, "authorization_endpoint": ep, "client_id": client_id,
+        "vulnerable": bool(findings), "findings": findings,
+        "note": ("attacker redirect_uri accepted — confirm the code/token is delivered to it (ATO)"
+                 if findings else "no redirect_uri variant landed on the canary"),
+    }
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
+                        oast_token: str | None = None, wait: float = 2.0) -> dict:
+    """**JWT `jku`/`x5u` key-injection (SSRF) probe.** Re-issues `token` with a `jku`
+    (or `x5u`) header pointing at a MoonMCP **OAST canary**, replays it to `target` (an
+    authed endpoint that verifies the JWT) as `Authorization: Bearer`, and polls for a
+    callback — a callback means the server fetched attacker-controlled key material =
+    key-injection / SSRF (CVE-2018-0114), a path to full token forgery. Start
+    `oast_selfhost`/`oast_configure` first. **Callback-only** — never hosts a valid JWKS;
+    weaponization → Strix. Intrusive; in scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return {"error": "oast_unconfigured",
+                    "detail": "start oast_selfhost or oast_configure before probing jku/x5u SSRF"}
+        cb = ctx.oast.generate(label="jwt_jku")
+    param = "x5u" if header_param.lower() == "x5u" else "jku"
+    try:
+        forged = jwtmod.forge_remote_key_header(token, cb.http_url, param=param)
+    except ValueError:
+        return {"error": "invalid_token", "detail": "the supplied token is not a JWT"}
+    await ctx.http.fetch(url, method="GET", headers={"Authorization": f"Bearer {forged}"},
+                         follow_redirects=False, scope_check=_scope_check())
+    await asyncio.sleep(max(0.0, min(wait, 5.0)))
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(cb.token)
+    else:
+        poll = ctx.oast.poll_target(cb.token)
+        hits = []
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, follow_redirects=True)
+                hits = oastmod.parse_interactions(r.text())
+            except Exception:
+                hits = []
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "header_param": param, "canary": cb.http_url, "token_id": cb.token,
+           **verdict, "interactions": hits[:20]}
+    if not hits:
+        out["note"] = "no callback yet — the server may fetch the key later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
 @active_tool(intrusive=True)
 async def cache_deception_probe(target: str) -> dict:
     """Test an authenticated page for **web cache deception** — the cache storing
@@ -2191,7 +2274,9 @@ async def content_discovery(
     """Probe an in-scope host for common sensitive paths (admin panels, API docs,
     .git/.env, backups, config files, ...) using a compact built-in wordlist or a
     caller-supplied one. Reports each path's status, size and content type.
-    Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and the host to be in scope.
+    **Auto-calibrates a soft-404 baseline first** (fetches random paths) and suppresses
+    catch-all/SPA echoes, so a hit is a real resource — see `suppressed`/`calibrated` in
+    the result. Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and the host to be in scope.
     """
 
     host, port = _split_host_port(target, 443)
@@ -2201,6 +2286,7 @@ async def content_discovery(
     result = await contentmod.probe_paths(
         ctx.http, host, scheme=scheme, port=port, wordlist=wordlist,
         concurrency=min(concurrency, ctx.settings.max_concurrency),
+        scope_check=_scope_check(),
     )
     return to_dict(result)
 
@@ -2340,6 +2426,41 @@ async def promote_lead(target: str, kind: str, detail: str = "", evidence: str =
                              created_at=ts)
         out["recorded"] = {"finding_id": f.id, "memory_id": mid}
     return out
+
+
+@mcp.tool()
+@safe_tool
+async def label_finding(finding_id: int, outcome: str) -> dict:
+    """Label a recorded finding's real-world **outcome** — `true_positive`,
+    `false_positive`, `duplicate`, `wont_fix`, or `unknown` — so `metrics` can compute
+    detection precision on the live target. Use it after you verify (or refute) a lead
+    on a real app. Offline; no traffic.
+    """
+
+    f = get_context().findings.set_outcome(finding_id, outcome)
+    if f is None:
+        return {"error": "not_found", "finding_id": finding_id,
+                "hint": "call list_findings to see recorded ids"}
+    return {"labelled": to_dict(f)}
+
+
+@mcp.tool()
+@safe_tool
+async def metrics(known_positives: int | None = None) -> dict:
+    """**Detection scorecard** for this session — measure how the probes actually do
+    on a real target. Aggregates recorded findings by type / severity / source tool /
+    outcome, computes **precision** (overall + per source tool) from the outcomes you
+    set with `label_finding`, and reports per-tool run counts. Pass `known_positives`
+    (your count of real bugs on the target) for a recall figure. Offline; no traffic.
+    """
+
+    ctx = get_context()
+    runs: dict[str, int] = {}
+    for e in ctx.audit.recent(0):  # a gated tool logs an allow'd scope_check per run
+        if e.get("decision") == "allow" and e.get("tool"):
+            runs[e["tool"]] = runs.get(e["tool"], 0) + 1
+    return metricsmod.compute_metrics(ctx.findings.list(), runs=runs,
+                                      known_positives=known_positives)
 
 
 @mcp.tool()
@@ -2921,6 +3042,17 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     host = normalize_target(domain)
     ctx = get_context()
     report: dict[str, Any] = {"target": host}
+
+    # RECALL: surface what this (or another) agent already learned about the target so
+    # the caller can build on it instead of re-deriving — the shared-memory payoff.
+    prior = ctx.memory.search("", target=host, limit=10)
+    if prior:
+        report["prior_memory"] = {
+            "count": len(prior),
+            "items": [{"kind": p["kind"], "title": p["title"], "trust": p["trust"],
+                       "severity": p.get("severity")} for p in prior],
+            "note": "already-known facts/findings for this target — build on these, don't re-derive",
+        }
 
     if include_subdomains:
         subs = await submod.enumerate_subdomains(ctx.http, host)

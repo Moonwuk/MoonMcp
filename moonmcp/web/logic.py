@@ -34,6 +34,11 @@ NUMERIC_PARAM_RE = re.compile(
 # values a correct money/quantity field should reject.
 TAMPER_VALUES = ["-1", "0", "-0.01", "999999999", "9e9", "1e10", "0x10", "'"]
 
+# A garbage value a field that VALIDATES its input must reject. If the server accepts
+# this like the baseline, the field isn't validated at all — so "accepting -1" is
+# meaningless and every tamper flag would be a false positive. Used as a negative control.
+_INVALID_CONTROL = "moonmcp_zzz_invalid"
+
 # privileged fields that should never be client-settable (mass assignment / autobind).
 PRIVILEGED_FIELDS: dict[str, str] = {
     "role": "admin", "is_admin": "true", "isAdmin": "true", "admin": "true",
@@ -76,6 +81,13 @@ async def probe_parameter_tampering(client: HttpClient, url: str, param: str, *,
     if base.status is None:
         return []
     base_len = len(base.body)
+    # Negative control: if a garbage value is accepted like the baseline, the field
+    # isn't validated at all → every tamper flag would be a false positive → bail.
+    cu, cb = with_param(url, param, _INVALID_CONTROL, m)
+    ctrl = await client.fetch(cu, method=m, body=cb, follow_redirects=False,
+                              timeout=12.0, scope_check=scope_check)
+    if assess_tamper(base.status, base_len, ctrl.status, len(ctrl.body)):
+        return []
     findings: list[dict] = []
     for val in TAMPER_VALUES:
         tu, tb = with_param(url, param, val, m)

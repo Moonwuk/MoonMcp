@@ -73,6 +73,17 @@ def test_header_audit_grades_and_flags():
     assert len(audit2.cookie_issues) == 3
 
 
+def test_header_audit_skips_hsts_over_http():
+    # HSTS is meaningless over plain HTTP → not flagged missing there…
+    http_audit = audit_headers(make_result([("X-Content-Type-Options", "nosniff")],
+                                           url="http://t.example"))
+    assert not any(f.header == "strict-transport-security" for f in http_audit.missing)
+    # …but it IS flagged over HTTPS.
+    https_audit = audit_headers(make_result([("X-Content-Type-Options", "nosniff")],
+                                            url="https://t.example"))
+    assert any(f.header == "strict-transport-security" for f in https_audit.missing)
+
+
 # --- subdomain cleaning --------------------------------------------------
 def test_subdomain_clean():
     assert _clean("API.Example.com", "example.com") == "api.example.com"

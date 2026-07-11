@@ -58,7 +58,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "debug_exposure",
             "screenshot", "browser_open", "browser_eval", "browser_interact",
             "analyze_binary", "analyze_config", "jwt_analyze", "jwt_crack",
-            "oauth_probe",
+            "oauth_probe", "oauth_redirect_probe",
         ],
     )),
     ("intrusive", (
@@ -69,7 +69,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "port_scan", "content_discovery", "http_methods",
             "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
             "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
-            "logic_probe", "race_probe", "workflow_probe", "value_probe",
+            "logic_probe", "race_probe", "workflow_probe", "value_probe", "jwt_jku_probe",
         ],
     )),
     ("orchestration", (
@@ -110,7 +110,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Record findings, export (SARIF/JSON/Obsidian), and diff the attack "
         "surface across runs.",
         [
-            "add_finding", "promote_lead", "list_findings", "clear_findings", "triage_findings",
+            "add_finding", "promote_lead", "label_finding", "metrics",
+            "list_findings", "clear_findings", "triage_findings",
             "cvss_score", "export_findings", "export_obsidian",
             "surface_diff", "surface_snapshots",
         ],
@@ -132,15 +133,20 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
 # The recommended order of operations for a fresh engagement.
 WORKFLOW: list[str] = [
     "server_status — see config, the active program and which external CLIs are present.",
+    "RECALL — memory_search(target=…) first: build on prior/other-agents' work, skip recon "
+    "already done (recon_target/report also surface a prior_memory block).",
     "program_add / scope_add — authorise the target and set the program's bug-bounty header.",
     "Passive OSINT — web_search, enumerate_subdomains, wayback_urls, cve_search, host_intel.",
     "Light active — recon_target for a one-shot sweep, then http_probe / fingerprint / "
     "analyze_headers / well_known / tls_inspect.",
     "Web-app — crawl, analyze_js, discover_parameters, cors_audit, graphql_check, "
-    "extract_secrets; access_control_check after auth_set for IDOR.",
+    "extract_secrets; access_control_check / authz_probe after auth_set for IDOR/BOLA.",
     "Intrusive (only with explicit consent + MOONMCP_ALLOW_INTRUSIVE) — port_scan, "
-    "content_discovery, vuln_scan.",
-    "Record & report — add_finding as you go, then report / export_findings / export_obsidian.",
+    "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe / value_probe.",
+    "Confirm — turn a probe's review lead into a proof: promote_lead(kind=…) routes it to "
+    "confirm_finding / side-effect re-observation / a Strix PoC brief.",
+    "Record & report — add_finding / promote_lead as you go (both mirror to shared memory), "
+    "triage_findings to dedupe, then report / export_findings / export_obsidian.",
 ]
 
 # Which family a tool name belongs to (inverted from FAMILIES).

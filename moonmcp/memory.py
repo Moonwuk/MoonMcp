@@ -102,6 +102,33 @@ class MemoryStore:
         vetted knowledge."""
 
         with self._lock:
+            # Dedup/upsert on an exact content signature (kind + target + title). The
+            # store is persistent and write-heavy (every add_finding/promote_lead/
+            # confirm_finding mirrors here), so re-running a target would otherwise fill
+            # it with near-identical rows and drown retrieval. An exact-signature match
+            # folds the new body/source into the existing row instead of inserting.
+            existing = self._db.execute(
+                "SELECT id FROM memory WHERE kind=? AND lower(COALESCE(target,''))=? "
+                "AND lower(title)=? ORDER BY id LIMIT 1",
+                (str(kind), (target or "").lower(), str(title).lower()),
+            ).fetchone()
+            if existing is not None:
+                existing_id = int(existing["id"])
+                if self._fts:  # remove the stale FTS entry using its CURRENT stored values
+                    self._db.execute(
+                        "INSERT INTO memory_fts(memory_fts,rowid,title,body,tags) "
+                        "SELECT 'delete', id, title, body, tags FROM memory WHERE id=?", (existing_id,))
+                self._db.execute(
+                    "UPDATE memory SET body=?, severity=COALESCE(?,severity), source=?, "
+                    "trust=?, provenance=?, tags=?, session=?, created_at=? WHERE id=?",
+                    (str(body), severity, str(source), _norm_trust(trust), _norm_prov(provenance),
+                     str(tags), str(session), str(created_at), existing_id))
+                if self._fts:
+                    self._db.execute(
+                        "INSERT INTO memory_fts(rowid,title,body,tags) VALUES(?,?,?,?)",
+                        (existing_id, str(title), str(body), str(tags)))
+                self._db.commit()
+                return existing_id
             cur = self._db.execute(
                 "INSERT INTO memory(kind,target,title,body,severity,source,trust,"
                 "provenance,tags,session,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",

@@ -76,10 +76,15 @@ def audit_headers(result: HttpResult) -> HeaderAudit:
     headers_lc = {k.lower(): v for k, v in result.headers}
     audit = HeaderAudit(url=result.final_url or result.url, status=result.status)
 
+    is_https = (result.final_url or result.url or "").startswith("https")
     max_score = 0
     got = 0
     for header, (severity, explanation) in _SECURITY_HEADERS.items():
         weight = {"high": 3, "medium": 2, "low": 1}[severity]
+        # HSTS over plain HTTP is meaningless (browsers ignore it) — don't grade it there,
+        # so an http:// endpoint isn't dinged for a header that couldn't help it anyway.
+        if header == "strict-transport-security" and not is_https:
+            continue
         max_score += weight
         if header in headers_lc:
             audit.present[header] = headers_lc[header]
