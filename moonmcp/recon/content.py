@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import secrets
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 from ..net.http import HttpClient, HttpResult
 
@@ -67,6 +69,58 @@ class ContentScan:
     tested: int
     hits: list[PathHit] = field(default_factory=list)
     duration_ms: float = 0.0
+    calibrated: bool = False           # a stable soft-404 baseline was established
+    baseline_status: int | None = None  # the status random paths return (e.g. 200 catch-all)
+    suppressed: int = 0                # hits dropped as matching the soft-404 baseline
+
+
+@dataclass
+class _NotFound:
+    """The response fingerprint a nonexistent path returns (the soft-404 baseline)."""
+
+    status: int
+    length: int
+    sample: bytes
+
+
+def _similar(a: bytes, b: bytes) -> float:
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a[:512], b[:512]).ratio()
+
+
+def _matches_notfound(status: int | None, body: bytes, nf: _NotFound) -> bool:
+    """A probed path is a soft-404 (catch-all) if it looks like the not-found baseline:
+    same status, similar length, similar body — so it isn't a real resource."""
+
+    if status != nf.status:
+        return False
+    if abs(len(body) - nf.length) > max(64, nf.length // 10):
+        return False
+    return _similar(body, nf.sample) >= 0.9
+
+
+async def _calibrate(client: HttpClient, base: str, scope_check) -> _NotFound | None:
+    """Fetch two random nonexistent paths; return a soft-404 baseline only if they
+    AGREE (a stable catch-all). If they diverge, calibration is inconclusive → None
+    (so a genuinely dynamic 404 page never suppresses real hits)."""
+
+    ctrls = []
+    for _ in range(2):
+        rp = f"moonmcp-nf-{secrets.token_hex(8)}"
+        r = await client.fetch(f"{base}/{rp}", method="GET", timeout=10.0,
+                               follow_redirects=False, max_body=2048, scope_check=scope_check)
+        ctrls.append(r)
+    a, b = ctrls
+    if a.status is None or a.status != b.status:
+        return None
+    if abs(len(a.body) - len(b.body)) > max(64, len(a.body) // 10):
+        return None
+    if _similar(a.body, b.body) < 0.9:
+        return None
+    return _NotFound(status=a.status, length=len(a.body), sample=a.body[:512])
 
 
 def _base_url(host: str, scheme: str, port: int | None) -> str:
@@ -115,6 +169,7 @@ async def probe_paths(
     wordlist: list[str] | None = None,
     concurrency: int = 15,
     positive_statuses: tuple[int, ...] = (200, 201, 202, 203, 204, 301, 302, 307, 308, 401, 403, 405),
+    scope_check=None,
 ) -> ContentScan:
     base = _base_url(host, scheme, port)
     words = wordlist or DEFAULT_WORDLIST
@@ -122,11 +177,24 @@ async def probe_paths(
     loop = asyncio.get_event_loop()
     start = loop.time()
 
+    # Auto-calibrate a soft-404 baseline first (ffuf/gobuster-style). On an SPA or any
+    # catch-all handler every path returns 200 index.html; without this every wordlist
+    # entry is a bogus "hit". A hard signal (401/403/redirect, or a differently-sized
+    # 200) never matches the baseline, so real resources always survive.
+    baseline = await _calibrate(client, base, scope_check)
+    suppressed = 0
+
     async def check(path: str) -> PathHit | None:
+        nonlocal suppressed
         async with sem:
             url = f"{base}/{path.lstrip('/')}"
-            r: HttpResult = await client.fetch(url, method="GET", timeout=10.0, follow_redirects=False, max_body=2048)
+            r: HttpResult = await client.fetch(url, method="GET", timeout=10.0,
+                                               follow_redirects=False, max_body=2048,
+                                               scope_check=scope_check)
             if r.status in positive_statuses:
+                if baseline is not None and _matches_notfound(r.status, r.body, baseline):
+                    suppressed += 1
+                    return None  # soft-404 / catch-all echo — not a real resource
                 return PathHit(
                     path=path,
                     url=url,
@@ -144,4 +212,7 @@ async def probe_paths(
         tested=len(words),
         hits=hits,
         duration_ms=round((loop.time() - start) * 1000, 1),
+        calibrated=baseline is not None,
+        baseline_status=baseline.status if baseline else None,
+        suppressed=suppressed,
     )

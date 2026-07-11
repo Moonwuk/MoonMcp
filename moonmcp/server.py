@@ -2192,7 +2192,9 @@ async def content_discovery(
     """Probe an in-scope host for common sensitive paths (admin panels, API docs,
     .git/.env, backups, config files, ...) using a compact built-in wordlist or a
     caller-supplied one. Reports each path's status, size and content type.
-    Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and the host to be in scope.
+    **Auto-calibrates a soft-404 baseline first** (fetches random paths) and suppresses
+    catch-all/SPA echoes, so a hit is a real resource — see `suppressed`/`calibrated` in
+    the result. Intrusive: requires MOONMCP_ALLOW_INTRUSIVE and the host to be in scope.
     """
 
     host, port = _split_host_port(target, 443)
@@ -2202,6 +2204,7 @@ async def content_discovery(
     result = await contentmod.probe_paths(
         ctx.http, host, scheme=scheme, port=port, wordlist=wordlist,
         concurrency=min(concurrency, ctx.settings.max_concurrency),
+        scope_check=_scope_check(),
     )
     return to_dict(result)
 
