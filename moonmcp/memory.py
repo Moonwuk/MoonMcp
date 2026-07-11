@@ -120,7 +120,8 @@ class MemoryStore:
                         "SELECT 'delete', id, title, body, tags FROM memory WHERE id=?", (existing_id,))
                 self._db.execute(
                     "UPDATE memory SET body=?, severity=COALESCE(?,severity), source=?, "
-                    "trust=?, provenance=?, tags=?, session=?, created_at=? WHERE id=?",
+                    "trust=CASE WHEN trust='curated' THEN 'curated' ELSE ? END, "
+                    "provenance=?, tags=?, session=?, created_at=? WHERE id=?",
                     (str(body), severity, str(source), _norm_trust(trust), _norm_prov(provenance),
                      str(tags), str(session), str(created_at), existing_id))
                 if self._fts:

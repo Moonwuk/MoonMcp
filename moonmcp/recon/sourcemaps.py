@@ -97,6 +97,12 @@ async def _fetch_map(client: HttpClient, url: str, scope_check) -> tuple[str | N
     map_url = urljoin(r.final_url or url, maps[0]) if maps else (url.split("?", 1)[0] + ".map")
     if map_url.startswith("data:"):
         return None, None
+    # sourceMappingURL is attacker-controllable (it comes from the remote JS body) and
+    # can point cross-origin. fetch() only scope-checks REDIRECT hops, not the initial
+    # one, so re-check the derived URL here or we would fetch out-of-scope and leak the
+    # engagement auth headers to a third-party host.
+    if scope_check is not None and not scope_check(map_url):
+        return None, None
     m = await client.fetch(map_url, method="GET", follow_redirects=True, timeout=15.0,
                            scope_check=scope_check)
     if m.status is None or not m.body:

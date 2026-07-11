@@ -65,8 +65,11 @@ def _with_param(url: str, param: str, value: str) -> str:
 
 
 def _points_to_canary(value: str) -> bool:
-    v = value.strip().lower()
-    return _CANARY in v and (v.startswith(("http://", "https://", "//")) or v.startswith(("https:/", "http:/")))
+    # Normalise backslashes to slashes first — browsers treat `\` as `/` in URLs, so a
+    # reflected `/\canary/` or `https:\\canary` backslash-confusion payload IS an
+    # off-site redirect and must be recognised (it is in _PAYLOADS).
+    v = value.strip().lower().replace("\\", "/")
+    return _CANARY in v and v.startswith(("http://", "https://", "//", "https:/", "http:/"))
 
 
 async def check_open_redirect(

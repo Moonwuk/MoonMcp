@@ -280,7 +280,14 @@ def _redact(value: str) -> str:
 
 def _looks_placeholder(v: str) -> bool:
     low = v.strip().lower()
-    return low in _PLACEHOLDER or any(low.startswith(p) or p in low for p in _PLACEHOLDER if len(p) > 2)
+    if low in _PLACEHOLDER:
+        return True
+    # A short generic token (null/none/todo/xxxx) must only match at the start — never
+    # as an unanchored substring, or a real secret that merely CONTAINS it (e.g.
+    # "aZnullQ2p9Kx8vT") would be wrongly suppressed. Substring match is reserved for
+    # long, specific markers (changeme / placeholder / example / undefined).
+    return any(low.startswith(p) or (len(p) >= 6 and p in low)
+               for p in _PLACEHOLDER if len(p) > 2)
 
 
 # Framework signing secrets: a leaked value here is not merely "a secret" — it is the

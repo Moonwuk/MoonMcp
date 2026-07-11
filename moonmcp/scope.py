@@ -175,19 +175,21 @@ class ScopeManager:
         self._raw_deny: list[str] = []
 
     def _resolve(self, host: str) -> list[str]:
-        """Resolve *host* to a list of IP strings (empty on failure — fail closed
-        at the caller only for *blocked* answers, open for unresolvable ones since
-        an unresolvable host cannot be connected to anyway)."""
+        """Resolve *host* to a list of IP strings.
+
+        A genuinely *unresolvable* host (NXDOMAIN / bad name) returns ``[]`` — that
+        is safe to allow because the caller cannot connect to it either. But a
+        resolver that raises an **unexpected** error (a custom resolver, a transient
+        failure) must NOT be silently treated as "no addresses" — the caller might
+        still resolve+connect to a private IP — so that propagates and the SSRF
+        guard fails **closed** on it."""
 
         if self._resolver is not None:
-            try:
-                return list(self._resolver(host))
-            except Exception:
-                return []
+            return list(self._resolver(host))  # let unexpected errors propagate → fail closed
         try:
             infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-        except (OSError, UnicodeError):
-            return []
+        except (socket.gaierror, UnicodeError):
+            return []  # unresolvable / malformed host → cannot be connected to → safe
         return [str(ai[4][0]) for ai in infos]
 
     def blocked_connect_reason(self, target: str) -> str | None:
@@ -211,7 +213,15 @@ class ScopeManager:
             if _ip_is_blocked(ip):
                 return f"{host} is a private/reserved address ({ip}) blocked by the SSRF guard"
             return None
-        for raw in self._resolve(host):
+        try:
+            resolved = self._resolve(host)
+        except Exception:
+            # We could not verify where this host points; fail closed rather than
+            # let a resolver error open a private-IP path (defence against a resolver
+            # that disagrees with the one urllib/socket will use at connect time).
+            return (f"{host} could not be resolved for the SSRF guard — blocked (fail-closed; "
+                    "set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)")
+        for raw in resolved:
             try:
                 addr = ipaddress.ip_address(raw)
             except ValueError:
@@ -296,7 +306,12 @@ class ScopeManager:
             addr = ipaddress.ip_address(target)
         except ValueError:
             return False
-        return any(addr in net for net in nets)
+        # Canonicalise an IPv4-mapped IPv6 literal (::ffff:198.51.100.9) to its
+        # embedded IPv4 so it matches IPv4 allow/deny CIDRs — otherwise a mapped
+        # address silently defeats an explicit IPv4 exclusion (cross-version
+        # membership is always False), the same un-mapping _ip_is_blocked does.
+        addr = getattr(addr, "ipv4_mapped", None) or addr
+        return any(addr in net for net in nets if net.version == addr.version)
 
     def evaluate(self, target: str) -> tuple[bool, str]:
         """Return ``(in_scope, reason)`` for a raw target string.

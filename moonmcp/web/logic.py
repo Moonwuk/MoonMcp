@@ -116,7 +116,11 @@ async def probe_mass_assignment(client: HttpClient, url: str, *, method: str = "
     text = r.text(limit=50_000)
     findings: list[dict] = []
     for field, value in PRIVILEGED_FIELDS.items():
-        if f'"{field}"' in text and value.strip('"') in text:
+        # Require the field and our value to be an ADJACENT JSON pair — two independent
+        # substring hits (the field name from one key, "true"/"0" from an unrelated key)
+        # are not evidence the server echoed our value.
+        v = re.escape(str(value).strip('"'))
+        if re.search(rf'"{re.escape(field)}"\s*:\s*"?{v}"?', text):
             findings.append({
                 "kind": "mass_assignment", "field": field, "value": value,
                 "severity": "high", "verdict": "review",

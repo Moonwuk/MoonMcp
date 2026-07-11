@@ -15,7 +15,14 @@ def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    v = raw.strip().lower()
+    if v in {"1", "true", "yes", "on", "y", "t", "enable", "enabled"}:
+        return True
+    if v in {"0", "false", "no", "off", "n", "f", "disable", "disabled", ""}:
+        return False
+    # An unrecognised value must NOT silently disable a safety flag (enforce_scope /
+    # block_private default True) — fall back to the default rather than flip to False.
+    return default
 
 
 def _env_float(name: str, default: float) -> float:

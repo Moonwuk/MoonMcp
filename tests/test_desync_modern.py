@@ -90,13 +90,19 @@ def test_expect_divergence_flagged():
 
 def test_chunk_ext_divergence_flagged():
     # the extension-bearing request was ACCEPTED (<400) but routed differently (301) than
-    # the control (200) — a chunk-extension parsing divergence
+    # a PLAIN chunked-POST baseline (200) — a chunk-extension parsing divergence, not a
+    # mere method difference (so the baseline must be chunk_control, not the GET control)
     probes = {
         "control": _resp(200), "te0_incomplete": _timeout(), "cl_partial": _timeout(),
-        "expect_100": _timeout(), "expect_malformed": _timeout(), "chunk_ext": _resp(301),
+        "expect_100": _timeout(), "expect_malformed": _timeout(),
+        "chunk_control": _resp(200), "chunk_ext": _resp(301),
     }
     ind, risk = d.interpret_modern(probes)
     assert any("chunk-extension" in i for i in ind)
+    # a POST-vs-GET method difference alone (no plain-chunked baseline divergence) is NOT flagged
+    probes2 = dict(probes, chunk_control=_resp(301))   # baseline now matches chunk_ext
+    ind2, _ = d.interpret_modern(probes2)
+    assert not any("chunk-extension" in i for i in ind2)
 
 
 # -- registration -----------------------------------------------------------
