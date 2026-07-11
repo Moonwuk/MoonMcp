@@ -46,6 +46,9 @@ NUCLEI_DELEGATE: dict[str, str] = {
 NATIVE_EDGE: dict[str, str] = {
     "access_control_check": "compares TWO authenticated identities against the same object "
                             "(IDOR/BOLA) — nuclei is single-template, no cross-identity diff",
+    "authz_probe": "multi-step BOLA chain: read the owner's response, extract the object ids it "
+                   "exposes, then access them as another identity — cross-request + cross-identity "
+                   "state a stateless template engine cannot carry",
     "logic_probe": "business-logic param tampering + mass-assignment; depends on app intent, "
                    "not a static signature",
     "race_probe": "single-packet / N-parallel race; not expressible as a per-request template",

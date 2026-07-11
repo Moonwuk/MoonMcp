@@ -75,6 +75,7 @@ from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
 from .web import authflow as authflowmod
+from .web import authz as authzmod
 from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
@@ -1210,6 +1211,34 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
     return {"target": url, "method": m, "identities": identities,
             "comparisons": comparisons, "concerns": concerns,
             "verdict": "review" if concerns else "no_obvious_idor", "hint": hint}
+
+
+@mcp.tool()
+@active_tool()
+async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
+                      max_refs: int = 8) -> dict:
+    """**Multi-step BOLA / IDOR chain** — the object-level authorization test a
+    stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
+    `second_headers` (a lower-priv user B); this runs three GET-only signals:
+    (1) **direct** — B/anon get the *same* object from the same URL; (2) **sibling
+    sweep** — walk the id space (id±1, low ids) as B/anon and flag any object they
+    read; (3) **multi-step chain** — extract the object ids the owner's response
+    exposes, then fetch each as B/anon (owner response → cross-identity access).
+    Read-only (never mutates — state change → Strix). Findings are `review` leads.
+    In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
+                                       max_refs=max_refs, scope_check=_scope_check())
+    result["hint"] = (None if ctx.auth.is_set()
+                      else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
+    n = len(result.get("findings", []))
+    result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
+                      "object" if n else "no cross-identity object access observed")
+    return result
 
 
 @mcp.tool()
