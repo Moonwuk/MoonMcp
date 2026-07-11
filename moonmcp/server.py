@@ -99,6 +99,7 @@ from .web import nosqli as nosqlimod
 from .web import oauth as oauthmod
 from .web import ormleak as ormmod
 from .web import params as paramsmod
+from .web import parserdiff as parserdiffmod
 from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
@@ -4045,6 +4046,103 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],
             "baseline": {"status": control[0].status, "length": control[0].length}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def parser_diff_probe(target: str, param: str, method: str = "POST") -> dict:
+    """**HTTP parser-differential** probe — a WAF-bypass *multiplier*, detection-only.
+    A fronting WAF and the app behind it often parse the same request differently;
+    that disagreement is the primitive behind most modern WAF bypasses. Sends benign
+    canonical-vs-quirk twins carrying an inert canary and reports where the app **(a)
+    decoded** an encoded-only canary — UTF-7 (`+AG0-`) or overlong UTF-8 (`%C1%AD`)
+    reflected back as plain text (strong: a proven transform) — or **(b) accepted and
+    parsed** a form a *standard* parser rejects — JSON comments / trailing commas / a
+    leading UTF-8 BOM, or bare-LF multipart line endings — while an echo-everything
+    endpoint is excluded (medium: a real lax-parser surface). Duplicate JSON keys /
+    multipart fields are RFC-permitted, so they are reported only as a `precedence`
+    lead (which value wins) and never raise the verdict. Delivers nothing executable
+    and extracts nothing; smuggling a real payload through a confirmed differential is
+    Strix's job. Best against an endpoint that echoes `param`. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+
+    async def _send(req, http_method):
+        u, b, h = req
+        r = await ctx.http.fetch(u, method=http_method, body=b, headers=(h or None),
+                                 follow_redirects=False, scope_check=_scope_check())
+        body = r.text(50_000).lower()
+        return parserdiffmod.Resp(
+            status=r.status, length=len(r.body),
+            has_canary=parserdiffmod.CANARY in body,
+            has_decoy=parserdiffmod.DECOY in body)
+
+    C, D = parserdiffmod.CANARY, parserdiffmod.DECOY
+    lanes: list[dict] = []
+
+    # --- decode lanes (strong): sent encoded-only; a plain-canary reflection proves
+    #     the app applied the transform.
+    utf7_base = await _send(parserdiffmod.form_canonical(url, param, C, "POST"), "POST")
+    utf7_quirk = await _send(parserdiffmod.utf7_form(url, param, C), "POST")
+    hit = parserdiffmod.assess_decode(utf7_base, utf7_quirk)
+    if hit:
+        lanes.append({"lane": "charset_utf7", **hit})
+
+    ov_base = await _send(parserdiffmod.form_canonical(url, param, C, "GET"), "GET")
+    ov_quirk = await _send(parserdiffmod.overlong_query(url, param, C), "GET")
+    hit = parserdiffmod.assess_decode(ov_base, ov_quirk)
+    if hit:
+        lanes.append({"lane": "overlong_utf8", **hit})
+
+    # --- JSON tolerance lanes (standard-parser-rejected → scored): canonical + a
+    #     reject-control that gates out echo-everything endpoints.
+    j_base = await _send(parserdiffmod.json_canonical(url, param, C), "POST")
+    j_invalid = await _send(parserdiffmod.json_invalid(url, param, C), "POST")
+    json_quirks = [
+        ("json_comment", parserdiffmod.json_comment(url, param, C)),
+        ("json_trailing", parserdiffmod.json_trailing(url, param, C)),
+        ("json_bom", parserdiffmod.json_bom(url, param, C)),
+    ]
+    for label, req in json_quirks:
+        hit = parserdiffmod.assess_tolerance(j_base, await _send(req, "POST"), j_invalid)
+        if hit:
+            lanes.append({"lane": label, **hit})
+
+    # --- multipart tolerance lane (bare-LF line endings a strict CRLF parser rejects).
+    mp_base = await _send(parserdiffmod.multipart_canonical(url, param, C), "POST")
+    mp_invalid = await _send(parserdiffmod.multipart_invalid(url, param, C), "POST")
+    hit = parserdiffmod.assess_tolerance(
+        mp_base, await _send(parserdiffmod.multipart_lf(url, param, C), "POST"), mp_invalid)
+    if hit:
+        lanes.append({"lane": "multipart_lf", **hit})
+
+    # --- precedence leads (RFC-permitted duplicate keys / fields → informational
+    #     only, never scored: acceptance is standard, only *which value wins* matters).
+    precedence: list[dict] = []
+    p = parserdiffmod.assess_precedence(
+        j_base, await _send(parserdiffmod.json_dupkey(url, param, D, C), "POST"))
+    if p:
+        precedence.append({"lane": "json_dupkey", **p})
+    p = parserdiffmod.assess_precedence(
+        mp_base, await _send(parserdiffmod.multipart_dup(url, param, D, C), "POST"))
+    if p:
+        precedence.append({"lane": "multipart_dup", **p})
+
+    decode_hit = any(x["strong"] for x in lanes)
+    injection_hits = [f"parser-diff/{x['lane']}" for x in lanes]
+    verdict = confirmmod.evaluate(
+        injection_hits=injection_hits,
+        reflected=decode_hit,
+        status_changed=False)
+    return {"target": url, "param": param, "method": m, **verdict,
+            "lanes": lanes, "precedence": precedence,
+            "reflective": utf7_base.has_canary or j_base.has_canary,
+            "note": None if lanes else
+            "no scored parser differential observed (or endpoint does not echo the parameter)"}
 
 
 @mcp.tool()

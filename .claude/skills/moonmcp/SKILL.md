@@ -82,7 +82,10 @@ Two ways, pick based on the user's situation:
    - **Active detectors** (intrusive, on a discovered param): `ssti_probe`,
      `sqli_probe` (context/oob/time-based/json-waf/multibyte/header lanes),
      `cache_probe`, and `ssrf_probe` (start `oast_selfhost` first for
-     blind-callback confirmation).
+     blind-callback confirmation). When a WAF blocks a payload, `parser_diff_probe`
+     is the **bypass multiplier** — it finds where the app decodes UTF-7 / overlong
+     UTF-8 or accepts duplicate JSON keys / comments / duplicate multipart fields
+     that the WAF's stricter parser rejects (the smuggling primitive; weaponise via Strix).
    - **Databases & data stores:** `db_exposure` sweeps unauth Redis/Mongo/
      Elasticsearch/CouchDB/memcached/InfluxDB/YARN/TiDB; `stack_probe` fingerprints
      ClickHouse/Druid + vector stores (Chroma/Weaviate/Qdrant). On a param:

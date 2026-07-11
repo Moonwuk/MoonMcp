@@ -95,6 +95,13 @@ NATIVE_EDGE: dict[str, str] = {
                     "string is expected and diffs the auth/record outcome vs a plain-scalar "
                     "baseline; a stateless per-template matcher can only fuzz a scalar value, "
                     "never swap the value's TYPE for an operator document",
+    "parser_diff_probe": "HTTP parser-differential / WAF-bypass multiplier — pairs a canonical "
+                         "request against quirk-twins (UTF-7/overlong-UTF-8 decode, duplicate JSON "
+                         "keys, JSON comments/trailing commas, duplicate multipart fields) carrying "
+                         "one unique canary, and correlates which transform the app APPLIED / which "
+                         "non-standard form it ACCEPTED vs a rejected invalid control; a stateless "
+                         "per-template engine sends one fixed request and has no notion of 'same "
+                         "logical input, two encodings, compare the decode/precedence'",
     "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
                    "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "

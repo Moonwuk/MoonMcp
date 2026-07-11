@@ -51,6 +51,80 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
+    def _pd_write(self, code: int, val: str):
+        body = f"<html>p={val}</html>".encode("utf-8", "replace")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _parserdiff(self, raw: bytes, ctype: str, safe: bool):
+        # DELIBERATELY VULNERABLE (unless safe): a lax parser that decodes UTF-7 form
+        # bodies and accepts JSON comments / trailing commas / a leading BOM and
+        # bare-LF multipart — forms a STANDARD parser rejects — while still rejecting
+        # blatantly-broken input. The safe twin is a *standard* parser: it accepts
+        # only RFC-permitted quirks (duplicate keys/fields, last-wins) and rejects the
+        # rest, so the tolerance lanes correctly stay silent on it.
+        import json as _json
+        import re
+        from urllib.parse import parse_qs
+        txt = raw.decode("utf-8", "replace")
+        low = ctype.lower()
+        if "multipart" in low:
+            m = re.search(r"boundary=([^\s;]+)", ctype)
+            bnd = m.group(1) if m else ""
+            if not bnd or ("--" + bnd) not in txt:          # declared boundary absent → malformed
+                return self._pd_write(400, "bad")
+            if safe and ("--" + bnd + "\r\n") not in txt:   # strict: CRLF required → reject bare-LF
+                return self._pd_write(400, "lf")
+            vals = re.findall(r'name="p"\r?\n\r?\n(.*?)(?=\r?\n--)', txt, re.S)
+            if not vals:
+                return self._pd_write(400, "bad")
+            return self._pd_write(200, vals[-1])            # last field wins (both routes)
+        if "json" in low:
+            body = txt if safe else txt.lstrip("\ufeff")  # lax: silently skip a leading BOM
+            if not safe:
+                body = re.sub(r"//[^\n]*", "", body)        # strip // comments
+                body = re.sub(r",(\s*[}\]])", r"\1", body)  # strip trailing commas
+            try:
+                v = str(_json.loads(body).get("p", ""))     # duplicate keys → last wins (both)
+            except Exception:
+                return self._pd_write(400, "bad")
+            return self._pd_write(200, v)
+        # urlencoded form (utf7 lane + baseline)
+        val = (parse_qs(txt).get("p") or [""])[0]
+        if not safe and "utf-7" in low:
+            try:
+                val = val.encode("latin-1", "replace").decode("utf-7")
+            except Exception:
+                pass
+        return self._pd_write(200, val)
+
+    def _parserdiff_get(self, safe: bool):
+        # GET lane: overlong-UTF-8 normalisation in the query (vulnerable) vs a
+        # strict decode that leaves the overlong bytes as replacement chars (safe).
+        import re
+        from urllib.parse import unquote_to_bytes
+        rawq = self.path.split("?", 1)[1] if "?" in self.path else ""
+        m = re.search(r"(?:^|&)p=([^&]*)", rawq)
+        bs = unquote_to_bytes(m.group(1)) if m else b""
+        if safe:
+            val = bs.decode("utf-8", "replace")
+        else:
+            out = bytearray()
+            i = 0
+            while i < len(bs):
+                b = bs[i]
+                if b in (0xC0, 0xC1) and i + 1 < len(bs) and 0x80 <= bs[i + 1] <= 0xBF:
+                    out.append((((b & 0x1F) << 6) | (bs[i + 1] & 0x3F)) & 0x7F)
+                    i += 2
+                else:
+                    out.append(b)
+                    i += 1
+            val = out.decode("latin-1", "replace")
+        return self._pd_write(200, val)
+
     def do_POST(self):
         # drain the request body so the socket stays clean
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -98,6 +172,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/nosqli"):
             self._nosqli_reply(raw.decode("utf-8", "replace"),
                                self.headers.get("Content-Type", ""))
+            return
+        if self.path.startswith("/parserdiff-safe"):
+            self._parserdiff(raw, self.headers.get("Content-Type", ""), safe=True)
+            return
+        if self.path.startswith("/parserdiff"):
+            self._parserdiff(raw, self.headers.get("Content-Type", ""), safe=False)
             return
         self.send_response(404)
         self.end_headers()
@@ -535,6 +615,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(payload)
+            return
+        if self.path.startswith("/parserdiff-safe"):
+            self._parserdiff_get(safe=True)
+            return
+        if self.path.startswith("/parserdiff"):
+            self._parserdiff_get(safe=False)
             return
         if self.path.rstrip("/") in ("/admin",):
             self.send_response(403)
