@@ -25,6 +25,28 @@ def test_cluster_backends_single():
     r = infra.cluster_backends([{"server": "nginx", "date_epoch": 1.0, "elapsed_ms": 5}])
     assert r["distinct_backends"] == 1 and r["load_balanced"] is False
     assert r["patch_drift"] is False
+    assert r["content_drift"] is False
+
+
+def test_cluster_backends_flags_content_drift():
+    # same product/version, but two nodes serve a different ETag for the same URL
+    samples = [
+        {"server": "nginx", "backend": "a", "etag": "v1", "date_epoch": 1.0, "elapsed_ms": 5},
+        {"server": "nginx", "backend": "b", "etag": "v2", "date_epoch": 1.0, "elapsed_ms": 5},
+    ]
+    r = infra.cluster_backends(samples)
+    assert r["content_drift"] is True and len(r["content_versions"]) == 2
+    assert any("content/build drift" in c for c in r["concerns"])
+
+
+def test_cluster_backends_header_order_discriminates_backends():
+    # identical Server, but different response header ORDER → two distinct backends
+    samples = [
+        {"server": "nginx", "header_order": ("server", "date", "etag"), "date_epoch": 1.0, "elapsed_ms": 5},
+        {"server": "nginx", "header_order": ("date", "server", "etag"), "date_epoch": 1.0, "elapsed_ms": 5},
+    ]
+    r = infra.cluster_backends(samples)
+    assert r["distinct_backends"] == 2 and r["load_balanced"] is True
 
 
 def test_parse_http_date():

@@ -77,7 +77,9 @@ NATIVE_EDGE: dict[str, str] = {
     "confirm_finding": "differential confirmation engine (baseline vs payload similarity)",
     "surface_diff": "cross-run attack-surface diff over time — stateful across snapshots",
     "origin_discovery": "behavioural: infer origin behind a CDN from response variance",
-    "backend_probe": "behavioural: infer backend fleet / patch-drift from response variance",
+    "backend_probe": "behavioural: infer backend fleet from response variance — patch drift, "
+                     "content drift (ETag/Last-Modified), clock skew, and header-name ordering "
+                     "across a request series; nuclei matches one response, never compares samples",
     "tls_behavior": "behavioural TLS variance analysis",
     "http_behavior": "behavioural HTTP variance analysis",
     "vhost_probe": "Host-header routing inference",
