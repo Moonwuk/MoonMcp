@@ -60,12 +60,23 @@ async def audit_cors(client: HttpClient, url: str, *,
 
     for test, origin in _probe_origins(host).items():
         r = await client.fetch(
-            url, method="GET", headers={"Origin": origin}, follow_redirects=False, timeout=12.0
+            url, method="GET", headers={"Origin": origin}, follow_redirects=False,
+            timeout=12.0, scope_check=scope_check,
         )
-        if r.status is None:
-            continue
-        acao = r.header("Access-Control-Allow-Origin")
+        acao = r.header("Access-Control-Allow-Origin") if r.status is not None else None
         acac = (r.header("Access-Control-Allow-Credentials") or "").strip().lower() == "true"
+        # Many non-simple / credentialed CORS setups only echo the headers on the
+        # PREFLIGHT (OPTIONS + Access-Control-Request-Method), not on a bare GET.
+        if not acao:
+            pr = await client.fetch(
+                url, method="OPTIONS", follow_redirects=False, timeout=12.0,
+                scope_check=scope_check,
+                headers={"Origin": origin, "Access-Control-Request-Method": "GET",
+                         "Access-Control-Request-Headers": "authorization"},
+            )
+            if pr.status is not None and pr.header("Access-Control-Allow-Origin"):
+                acao = pr.header("Access-Control-Allow-Origin")
+                acac = (pr.header("Access-Control-Allow-Credentials") or "").strip().lower() == "true"
         if not acao:
             continue
 

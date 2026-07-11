@@ -61,6 +61,10 @@ _RAW_PATTERNS: list[tuple[str, str, str, int]] = [
 
 _PATTERNS = [(name, re.compile(pat), risk, grp) for name, pat, risk, grp in _RAW_PATTERNS]
 
+# A prefix+hex "secret" (Twilio SK…, Mailgun key-…, Databricks dapi…) immediately
+# followed by an asset extension is a cache-busting FILENAME hash, not a credential.
+_ASSET_TAIL_RE = re.compile(r"\.(?:js|css|map|png|jpe?g|gif|svg|ico|woff2?|webp|mp4|pdf|json)\b", re.I)
+
 _PLACEHOLDERS = {
     "xxxxxxxx", "your_api_key", "yourapikey", "changeme", "example", "test",
     "password", "secret", "null", "undefined", "none", "todo", "placeholder",
@@ -122,6 +126,10 @@ def scan_text(text: str, source: str = "") -> list[SecretHit]:
             if risk == "high":
                 if _looks_placeholder(value) or _shannon_entropy(value) < 3.0:
                     continue
+            # A medium hex-family token that's immediately followed by an asset
+            # extension is a filename hash (e.g. /assets/key-<md5>.js), not a secret.
+            if risk == "medium" and _ASSET_TAIL_RE.match(text, m.end()):
+                continue
             key = (name, value)
             if key in seen:
                 continue
