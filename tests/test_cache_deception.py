@@ -15,6 +15,21 @@ def test_deception_variants_shapes():
     assert "https://x.test/account%2fwcd.js" in urls
 
 
+def test_deception_variants_cover_all_families_and_dedupe():
+    pairs = cd.deception_variants("https://x.test/account")
+    urls = [u for _, u in pairs]
+    assert len(urls) == len(set(urls))                    # deduped
+    assert "https://x.test/account" not in urls           # never the original
+    labels = " ".join(lbl for lbl, _ in pairs)
+    for family in ("path-append", "encoded-slash", "delimiter", "traversal", "exact-file"):
+        assert family in labels
+    # richer than the original 5-variant set; covers extensions + delimiters + traversal
+    assert len(urls) >= 18
+    assert any(u.endswith("/account/wcd.png") for u in urls)         # more extensions
+    assert any(u.endswith("/account/robots.txt") for u in urls)      # exact-file family
+    assert any("%2e%2e/static/wcd.css" in u for u in urls)           # static-dir traversal
+
+
 def test_assess_variant_confirmed_on_cached_private_leak():
     r = cd.assess_variant(auth_len=650, anon_len=5, var_status=200, var_len=650,
                           var_headers={"Age": "42", "Cache-Control": "public, max-age=60"})

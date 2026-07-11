@@ -22,9 +22,18 @@ from urllib.parse import urlsplit, urlunsplit
 from ..net.http import HttpClient
 from .probes import cacheable
 
-# Static-looking suffixes that commonly hit a CDN "cache by extension / path" rule
-# while the origin still resolves them to the private page.
-_VARIANTS = ("/wcd.css", "/wcd.js", ";wcd.css", "%2fwcd.js", "/%2e%2e/wcd.css")
+# The path-confusion families that create a CDN↔origin cache-key discrepancy
+# ("Gotta cache 'em all", BH-USA-2024, + follow-up research):
+_MARK = "wcd"
+# CDN "cache by static extension" rule — the origin still resolves to the private page.
+_EXTENSIONS = (".css", ".js", ".png", ".ico", ".svg", ".txt")
+# Delimiters the origin may treat as a path/param terminator while the CDN keys the
+# full path (so it caches the private page under the extension-bearing key).
+_DELIMITERS = (";", ",", "%3b", "%2c", "%00", "%0a", "%09", "%23", "%3f", "%2e")
+# Static directories the origin's router may map back to the private handler.
+_STATIC_DIRS = ("static", "assets", "public")
+# Exact filenames a CDN caches unconditionally that some routers map to the parent.
+_EXACT_FILES = ("/robots.txt", "/favicon.ico", "/index.css")
 
 
 @dataclass
@@ -37,13 +46,36 @@ class CacheDeceptionResult:
 
 
 def deception_variants(url: str) -> list[tuple[str, str]]:
-    """Given a private URL, return ``(label, variant_url)`` path-confusion variants."""
+    """Given a private URL, return deduped ``(label, variant_url)`` path-confusion
+    variants across every documented WCD cache-key-discrepancy family."""
 
     s = urlsplit(url)
     base = (s.path or "/").rstrip("/")
     out: list[tuple[str, str]] = []
-    for suf in _VARIANTS:
-        out.append((suf, urlunsplit((s.scheme, s.netloc, base + suf, "", ""))))
+    seen: set[str] = set()
+
+    def add(label: str, path: str) -> None:
+        u = urlunsplit((s.scheme, s.netloc, path, "", ""))
+        if u != url and u not in seen:
+            seen.add(u)
+            out.append((label, u))
+
+    # 1) static-extension append (CDN caches by suffix; origin ignores the extra segment)
+    for ext in _EXTENSIONS:
+        add(f"path-append {ext}", f"{base}/{_MARK}{ext}")
+    # 2) encoded slash before the static file (%2f parser discrepancy)
+    for ext in (".css", ".js"):
+        add(f"encoded-slash {ext}", f"{base}%2f{_MARK}{ext}")
+    # 3) delimiter + static suffix (origin truncates at the delimiter, CDN keys the whole path)
+    for d in _DELIMITERS:
+        add(f"delimiter {d}", f"{base}{d}{_MARK}.css")
+    # 4) traversal into a cached static directory
+    for d in _STATIC_DIRS:
+        add(f"traversal /{d}", f"{base}/%2e%2e/{d}/{_MARK}.css")
+    add("dotdot", f"{base}/%2e%2e/{_MARK}.css")
+    # 5) exact-match static files a router may resolve back to the private handler
+    for f in _EXACT_FILES:
+        add(f"exact-file {f}", f"{base}{f}")
     return out
 
 
