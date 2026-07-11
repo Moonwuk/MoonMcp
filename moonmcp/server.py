@@ -94,6 +94,7 @@ from .web import logic as logicmod
 from .web import methods as methodsmod
 from .web import nosqli as nosqlimod
 from .web import oauth as oauthmod
+from .web import ormleak as ormmod
 from .web import params as paramsmod
 from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
@@ -3903,6 +3904,50 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],
             "baseline": {"status": control[0].status, "length": control[0].length}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def orm_leak_probe(target: str, orm: str = "auto", base: str = "filter",
+                         method: str = "GET") -> dict:
+    """**ORM leak / relational-filter injection** — a filter differential nuclei and
+    `sqli_probe` both miss (no raw SQL). When an app spreads request params into an ORM
+    filter, an injected lookup filters by a hidden field (`password`, `reset_token`,
+    `is_superuser`). Injects each lookup as a new kwarg with an **empty prefix** (matches
+    all rows) vs an **unlikely prefix** (matches none): a reproducible differential means
+    the lookup is applied and the field is queryable. `orm` = auto|django|prisma|ransack;
+    Prisma/Ransack nest under `base` (the filter object's param name). Detection-only — no
+    value is read out (char-by-char extraction / mass-assignment → logic_probe / Strix).
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    sc = _scope_check()
+    m = method.upper()
+    cands = ormmod.candidates(orm, base)
+
+    async def _get(pname: str, value: str) -> tuple:
+        u, b = _with_param(url, pname, value, m)
+        r = await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
+        return (r.status, len(r.body))
+
+    findings: list[dict] = []
+    for family, label, pname in cands:
+        all_pair = (await _get(pname, ""), await _get(pname, ""))
+        none_pair = (await _get(pname, ormmod.CONTROL_NONE), await _get(pname, ormmod.CONTROL_NONE))
+        if ormmod.assess_lookup(all_pair, none_pair):
+            findings.append({
+                "orm": family, "field": label, "param": pname,
+                "severity": "high", "verdict": "review",
+                "detail": f"injected ORM lookup '{pname}' filters the result set (empty-prefix vs "
+                          f"no-match differ, reproducibly) — the hidden field '{label}' is queryable; "
+                          "it can be read char-by-char (weaponize via Strix, not here)"})
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"orm-injection/{f['field']}" for f in findings],
+        status_changed=bool(findings))
+    return {"target": url, "orm": orm, "tested": len(cands), **verdict, "findings": findings}
 
 
 @mcp.tool()

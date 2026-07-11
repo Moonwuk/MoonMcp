@@ -61,7 +61,7 @@ Legend: **Status** = ❌ not covered · 🟡 partial · ✅ covered.
 | 2 | `db_exposure` — raw-socket + HTTP unauth datastore sweep | 🟡 **SHIPPED** `recon/datastores.py` | native edge | `port_scan` sent no protocol probe; now covers Redis/Mongo/memcached/ES/CouchDB/InfluxDB/YARN/TiDB in one scope-gated fan-out (Zookeeper/Kafka/vector-DB still to add) |
 | 3 | `sqli_probe` sharpenings: OOB/OAST, JSON-operator WAF-bypass, time-based, ORDER-BY/context, multibyte, header/cookie | ✅ **SHIPPED** `web/probes.py` + `sqli_probe` | native edge | six structurally-nuclei-blind lanes bolted onto the existing reproducible-differential harness |
 | 4 | `second_order_sqli_probe` — write-then-read stateful SQLi | ✅ **SHIPPED** `web/secondorder.py` | native edge | the sink is a *different* endpoint; impossible for any stateless matcher |
-| 5 | `orm_leak_probe` — Django/Prisma/Rails relational-lookup + mass-assignment | **new** `web/ormleak.py` | native edge | hot 2023-25 class (elttam ORM Leak); fully nuclei-blind; RU Bitrix ORM variant folds in |
+| 5 | `orm_leak_probe` — Django/Prisma/Rails relational-lookup + mass-assignment | ✅ **SHIPPED** `web/ormleak.py` | native edge | hot 2023-25 class (elttam ORM Leak); fully nuclei-blind; mass-assignment half already in `logic_probe` |
 | 6 | `db_credential_scan` — managed-DB DSN + warehouse-token classifier | extend `recon/secrets.py` + `config_audit.py` | offline classifier | highest-confidence net-new; PlanetScale/Neon/Turso/Atlas-srv/Snowflake/Redis-Cloud/BigQuery = direct DB, zero traffic |
 | 7 | `firebase_exposure` + `supabase_exposure` (RLS-off anon-key) | **new** `recon/{firebase,supabase}.py` | passive active-GET | epidemic in vibe-coded apps; one safe GET with the app's own public key |
 | 8 | `fastjson_oast_probe` — benign `@type` → OAST DNS callback | **new**, reuse OAST | native edge | #1 CN Java-stack bug; KB describes it, nothing detects it |
@@ -368,7 +368,14 @@ rendered in admin/receipt/report views).
 
 ## Theme D — ORM leak, mass-assignment & Java-stack → DB 🌐🇨🇳🇷🇺
 
-### D.1 ORM leak / relational-filter injection (Django/Prisma/Rails) ❌ — RANK 5/TOP
+### D.1 ORM leak / relational-filter injection (Django/Prisma/Rails) ✅ (SHIPPED) — RANK 5/TOP
+Implemented in `moonmcp/web/ormleak.py` + the `orm_leak_probe` tool (intrusive): injects
+each ORM lookup as a new kwarg — Django `<field>__startswith` / `<rel>__<field>__startswith`,
+Prisma `<base>[<field>][startsWith]`, Ransack `<base>[<field>_start]` — with an empty prefix
+(matches all) vs an unlikely prefix (matches none), and flags a reproducible differential
+(the lookup is applied ⇒ the hidden field is queryable). Detection-only; char-by-char
+extraction / the mass-assignment→privilege spread (already in `logic_probe`) → Strix.
+
 Apps spread untrusted params straight into an ORM filter (Django
 `filter(**request.data)`, Prisma `where: req.query.filter`, Rails/Ransack). With no raw
 SQL and zero classic SQLi, an attacker injects ORM lookups/relational traversals to

@@ -257,6 +257,32 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/orm-safe"):
+            # NOT vulnerable: ignores injected ORM lookups → constant result set.
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>users: alice bob carol dave erin frank</html>")
+            return
+        if self.path.startswith("/orm-search"):
+            # DELIBERATELY VULNERABLE: an injected ORM lookup (Django __startswith,
+            # Prisma [startsWith], Ransack _start) is applied as a filter — empty
+            # prefix matches all rows, an unlikely prefix matches none.
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            injected = None
+            for k, vals in qs.items():
+                kl = k.lower()
+                if kl.endswith("__startswith") or "startswith" in kl or k.endswith("_start]") or k.endswith("_start"):
+                    injected = vals[0]
+                    break
+            if injected is None or injected == "":
+                body = b"<html>users: alice bob carol dave erin frank grace heidi ivan</html>"
+            else:
+                body = b"<html>users:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/ssrf"):
             # DELIBERATELY VULNERABLE: fetches the ?url= param server-side.
             from urllib.parse import parse_qs, urlparse

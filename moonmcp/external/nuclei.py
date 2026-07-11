@@ -63,6 +63,10 @@ NATIVE_EDGE: dict[str, str] = {
                             "(one-click ATO). A discovery→differential chain, not a template match",
     "jwt_jku_probe": "re-issue the target's OWN token with jku/x5u→OAST, replay, correlate the "
                      "callback — cross-request key-injection/SSRF nuclei can't derive from the token",
+    "orm_leak_probe": "ORM leak / relational-filter injection (Django __startswith, Prisma "
+                      "[field][startsWith], Ransack) — a filter differential over an injected ORM "
+                      "lookup, with NO raw SQL, so neither nuclei's -dast sqli fuzzing nor sqli_probe "
+                      "fires; the empty-prefix vs no-match reproducible diff is native-edge",
     "second_order_sqli_probe": "stored SQLi where the sink is a DIFFERENT endpoint from the "
                                "injection — seed a tagged payload at a write endpoint, then drive "
                                "the read endpoints and correlate the SQL error/differential by the "
