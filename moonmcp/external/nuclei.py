@@ -67,6 +67,10 @@ NATIVE_EDGE: dict[str, str] = {
                       "[field][startsWith], Ransack) — a filter differential over an injected ORM "
                       "lookup, with NO raw SQL, so neither nuclei's -dast sqli fuzzing nor sqli_probe "
                       "fires; the empty-prefix vs no-match reproducible diff is native-edge",
+    "fastjson_oast_probe": "Fastjson/Jackson autoType deserialization via a benign @type OAST "
+                           "canary (java.net.Inet4Address/URL) correlated to MoonMCP's own callback "
+                           "server — the request→callback correlation across MoonMCP's OAST is "
+                           "state nuclei's stateless matcher can't carry; deep gadget/JNDI → Strix",
     "firebase_exposure": "Firebase RTDB open-rules — harvest the app's OWN databaseURL from its "
                          "JS firebaseConfig, then a shallow unauth read of the derived backend; a "
                          "config-discovery→backend-differential chain across two hosts, not a template match",

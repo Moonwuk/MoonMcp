@@ -89,6 +89,7 @@ from .web import crlf as crlfmod
 from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
 from .web import exposure as exposuremod
+from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
@@ -4129,6 +4130,59 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
            **verdict, "interactions": hits[:20]}
     if not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def fastjson_oast_probe(target: str, method: str = "POST",
+                              oast_token: str | None = None, wait: float = 3.0) -> dict:
+    """**Fastjson / Jackson autoType** deserialization probe (the #1 CN Java-stack bug).
+    POSTs benign `@type` OAST canaries (`java.net.Inet4Address` / `java.net.URL`, plus the
+    Jackson array form) to a JSON endpoint — their ONLY effect is a DNS/HTTP lookup to the
+    canary. A callback proves the endpoint deserializes attacker-controlled `@type` (the
+    vuln class is confirmed) with no JNDI gadget and no code landed. Start `oast_selfhost`
+    (or `oast_configure`) first. Weaponization → Strix. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return {"error": "oast_unconfigured",
+                    "detail": "start oast_selfhost or oast_configure before a Fastjson OAST probe"}
+        cb = ctx.oast.generate(label="fastjson_oast")
+    m = method.upper()
+    host = cb.canary_host or cb.http_url
+    sent: list[str] = []
+    for label, body in fastjsonmod.fastjson_payloads(host, cb.http_url):
+        await ctx.http.fetch(url, method=m, body=body,
+                             headers={"Content-Type": fastjsonmod.JSON_CT},
+                             follow_redirects=False, scope_check=_scope_check())
+        sent.append(label)
+    await asyncio.sleep(max(0.0, min(wait, 8.0)))
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        hits = ctx.oast_server.interactions(cb.token)
+    else:
+        poll = ctx.oast.poll_target(cb.token)
+        hits = []
+        if poll:
+            try:
+                r = await ctx.http.fetch(poll, follow_redirects=True)
+                hits = oastmod.parse_interactions(r.text())
+            except Exception:
+                hits = []
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "canary": cb.http_url, "token": cb.token, "payloads_sent": sent,
+           **verdict, "interactions": hits[:20]}
+    if not hits:
+        out["note"] = ("no callback yet — the sink may not deserialize @type, or it calls back later; "
+                       "re-check with oast_poll")
+    else:
+        out["detail"] = ("the endpoint resolved our benign @type canary — Fastjson/Jackson autoType "
+                         "deserialization is reachable; hand gadget selection + the JNDI server to Strix")
     return out
 
 

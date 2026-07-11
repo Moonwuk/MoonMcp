@@ -80,6 +80,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/fastjson"):
+            # DELIBERATELY VULNERABLE: "deserializes" the @type body by fetching the
+            # URL it carries (simulates java.net.URL autoType → outbound lookup).
+            import re
+            mm = re.search(r"https?://[^\s\"'}\]]+", raw.decode("utf-8", "replace"))
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if self.path.startswith("/nosqli"):
             self._nosqli_reply(raw.decode("utf-8", "replace"),
                                self.headers.get("Content-Type", ""))

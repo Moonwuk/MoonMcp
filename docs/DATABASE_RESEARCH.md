@@ -396,7 +396,13 @@ Bitrix ORM/`filter[]` injection.
   mass-assignment→privilege check to `logic_probe`. Fingerprint fuel:
   `recover_sourcemaps`/`stack_probe` reveal Django/Prisma/Rails/Bitrix to pick the suffix set.
 
-### D.2 Fastjson / Jackson autoType → JNDI (pre-auth RCE) ❌ — RANK 8/CN-S
+### D.2 Fastjson / Jackson autoType → JNDI (pre-auth RCE) ✅ (SHIPPED) — RANK 8/CN-S
+Implemented in `web/fastjson.py` + the `fastjson_oast_probe` tool (intrusive, OAST-correlated):
+POSTs benign `@type` OAST canaries (`java.net.Inet4Address`/`java.net.URL` fastjson forms +
+the Jackson array form) whose only effect is a DNS/HTTP lookup, then polls OAST — a callback
+= the endpoint deserializes attacker-controlled `@type` (vuln class confirmed), no JNDI
+gadget named. Weaponization → Strix.
+
 The #1 CN Java-stack bug. JSON binders that embed `@type` instantiate the class and fire
 setters during parse; `JdbcRowSetImpl`/`BasicDataSource` turn a setter into a JNDI lookup
 → LDAP/RMI → RCE (CVE-2017-18349, CVE-2022-25845, 1.2.24/47/68 chains). Documented
