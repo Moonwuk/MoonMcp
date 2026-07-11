@@ -91,6 +91,7 @@ from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
+from .web import graphqli as gqlimod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
 from .web import logic as logicmod
@@ -4046,6 +4047,79 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],
             "baseline": {"status": control[0].status, "length": control[0].length}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def graphql_nosqli(target: str, query: str, variable: str = "moon") -> dict:
+    """**GraphQL → NoSQL operator-injection** — detection only. After `graphql_check`
+    finds an endpoint, this tests whether a resolver forwards a client object straight
+    into a Mongo/Mongoose filter. Give a GraphQL `query` referencing `$<variable>`
+    declared as a JSON/Object scalar (e.g. `query($moon:JSON){login(filter:$moon){token}}`);
+    the tool sends the variable as a plain-string baseline vs operator objects
+    (`$ne`/`$gt`/`$in`/`$nin`) and flags a *reproducible* flip (a resolver returns data /
+    more records where the scalar did not) or a Mongoose `CastError` in `errors[]`. If the
+    server rejects the object with a GraphQL type error the variable is strictly typed →
+    not injectable via it (reported, not a hit). Detection-only — no `$regex` extraction /
+    `sleep()` (→ NoSQLMap/Strix). Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    # Detection-only: refuse a write. The operator twins are match-everything filters,
+    # so running them through a mutation/subscription could drive a mass write.
+    op_head = re.sub(r"#[^\n]*", "", query).lstrip("﻿ \t\r\n")
+    kw = re.match(r"[A-Za-z]+", op_head)
+    first = kw.group(0).lower() if kw else ""
+    if first in ("mutation", "subscription"):
+        return {"target": url, "error": "invalid_input",
+                "detail": f"graphql_nosqli is detection-only and refuses a {first} operation "
+                          "(the operator twins broaden the filter to match all records, which "
+                          "could drive a mass write). Supply a read `query`; mutation-based "
+                          "validation is Strix's job."}
+    ctx = get_context()
+    bodies: list[str] = []
+
+    async def _send(value):
+        r = await ctx.http.fetch(
+            url, method="POST", headers={"Content-Type": "application/json"},
+            body=gqlimod.build_body(query, variable, value),
+            follow_redirects=False, scope_check=_scope_check())
+        full = r.text()                       # data/rejected need the WHOLE body, not a slice
+        bodies.append(full[:50_000])
+        return gqlimod.Resp(
+            status=r.status, length=len(r.body),
+            data=gqlimod.data_present(full), rejected=gqlimod.is_rejected(full),
+            session=nosqlimod.has_session_cookie(r.get_all("set-cookie")))
+
+    # String baseline (sent twice) vs each operator object (sent twice).
+    control = (await _send(gqlimod.CONTROL), await _send(gqlimod.CONTROL))
+    operator_hits: list[dict] = []
+    any_rejected = False
+    for label, obj in gqlimod.OPERATOR_TWINS:
+        twin = (await _send(obj), await _send(obj))
+        any_rejected = any_rejected or twin[0].rejected
+        hit = gqlimod.assess_operator(control, twin)
+        if hit:
+            operator_hits.append({"operator": label, **hit})
+
+    sig_hits = injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+    # A type rejection (independent of status) means the variable is strictly typed —
+    # not injectable via it. Reported as its own state, never scored as a hit.
+    strictly_typed = any_rejected and not operator_hits and not sig_hits
+
+    strong_op = next((h for h in operator_hits if h["strong"]), None)
+    injection_hits = [f"graphql-nosqli/{h['operator']}" for h in operator_hits]
+    injection_hits += [f"{h['class']}/{h['technology']}" for h in sig_hits]
+    verdict = confirmmod.evaluate(injection_hits=injection_hits, status_changed=bool(strong_op))
+    return {"target": url, "variable": variable, **verdict,
+            "operator_hits": operator_hits, "error_signatures": sig_hits[:10],
+            "strictly_typed_variable": strictly_typed,
+            "note": ("the operator object was rejected by GraphQL validation — the variable is "
+                     "strictly typed (String); try an arg typed as a JSON/Object scalar"
+                     if strictly_typed else None),
+            "baseline": {"status": control[0].status, "length": control[0].length,
+                         "data": control[0].data}}
 
 
 @mcp.tool()

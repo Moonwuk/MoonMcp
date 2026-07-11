@@ -60,6 +60,7 @@ def test_catalog_family_filter():
         "logic_probe", "race_probe", "workflow_probe", "value_probe", "jwt_jku_probe",
         "nosqli_probe", "db_exposure", "second_order_sqli_probe", "orm_leak_probe",
         "fastjson_oast_probe", "ssrf_protocol_probe", "parser_diff_probe",
+        "graphql_nosqli",
     }
     assert all(t["intrusive"] for t in fam["tools"])
 

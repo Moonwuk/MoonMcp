@@ -111,10 +111,21 @@ reproducible boolean differential (never `sleep()`).
 - Source: https://www.acunetix.com/vulnerabilities/web/mongodb-where-operator-javascript-injection/ · https://www.objectrocket.com/blog/mongodb/code-injection-in-mongodb/
 - **Mapping:** fold into `nosqli_probe` as a distinct payload family; enrich KB `nosqli` with `$where` signatures.
 
-### A.3 GraphQL / ORM → NoSQL operator injection ❌ — RANK 2
+### A.3 GraphQL / ORM → NoSQL operator injection ✅ (SHIPPED) — RANK 2
+Implemented in `moonmcp/web/graphqli.py` + the `graphql_nosqli` tool (intrusive): after
+`graphql_check` finds an endpoint, the caller supplies a `query` referencing `$<variable>`
+(a JSON/Object scalar); the tool sends the variable as a plain-string baseline vs operator
+objects (`$ne`/`$gt`/`$in`/`$nin`) via the GraphQL **variables** transport and flags a
+*reproducible* resolver flip (data/auth/record appears where the scalar did not, or more
+records) or a Mongoose `CastError` in `errors[]` (KB signature added). A GraphQL type
+rejection is reported as `strictly_typed_variable` (not a hit). Detection-only; `$regex`
+char-extraction → NoSQLMap/Strix.
+
 GraphQL resolvers and ODM layers (Mongoose `populate()`/filter) pass client-controlled
-objects into Mongo filters. Live ODM CVEs: Mongoose **CVE-2024-53900** (<8.8.3) and its
-bypass **CVE-2025-23061** (<8.9.5).
+objects into Mongo filters. (Note: the operator-object auth-bypass this probe tests is a
+*distinct* class from Mongoose **CVE-2024-53900** / **CVE-2025-23061**, which are
+`$where`-in-`populate().match` server-side-JS RCE — deferred to NoSQLMap/Strix; this probe
+never sends `$where`.)
 - **SAFE signal:** after `graphql_check` confirms an endpoint, re-send a query/mutation
   arg once as a nested operator object (`{"$ne":null}`) vs the literal; confirm on a
   benign differential (auth/count change, or a `"$ne"` type-coercion error in

@@ -95,6 +95,12 @@ NATIVE_EDGE: dict[str, str] = {
                     "string is expected and diffs the auth/record outcome vs a plain-scalar "
                     "baseline; a stateless per-template matcher can only fuzz a scalar value, "
                     "never swap the value's TYPE for an operator document",
+    "graphql_nosqli": "GraphQL resolver → Mongo/Mongoose operator-injection — sends an operator "
+                      "OBJECT ($ne/$gt/$in/$nin) as a GraphQL VARIABLE value where a scalar is "
+                      "expected and diffs the resolver's data/auth/record outcome vs a string "
+                      "baseline (plus a Mongoose CastError leak); nuclei's -dast fuzzes scalar "
+                      "values in a fixed request and cannot swap a variable's TYPE for an operator "
+                      "document across a two-state GraphQL differential",
     "parser_diff_probe": "HTTP parser-differential / WAF-bypass multiplier — pairs a canonical "
                          "request against quirk-twins (UTF-7/overlong-UTF-8 decode, duplicate JSON "
                          "keys, JSON comments/trailing commas, duplicate multipart fields) carrying "

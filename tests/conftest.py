@@ -173,6 +173,55 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._nosqli_reply(raw.decode("utf-8", "replace"),
                                self.headers.get("Content-Type", ""))
             return
+        if self.path.startswith("/gqlnosqli"):
+            import json as _json
+            try:
+                v = _json.loads(raw.decode("utf-8", "replace")).get("variables", {}).get("moon")
+            except Exception:
+                v = None
+            obj = isinstance(v, dict)
+            p = self.path
+            code, cookie = 200, None
+            if p.startswith("/gqlnosqli-safe"):
+                # strictly-typed String variable: a spec-compliant server returns HTTP 400
+                # for the variable-coercion error (must NOT be scored as an injection).
+                if obj:
+                    code = 400
+                    body = (b'{"data":null,"errors":[{"message":"Variable \\"$moon\\" got invalid '
+                            b'value {}; Expected type String to be a string."}]}')
+                else:
+                    body = b'{"data":{"login":null}}'
+            elif p.startswith("/gqlnosqli-big"):
+                # winning body is LARGER than the 50k slice → the data flag must come from
+                # the full body, not a truncated read.
+                if obj:
+                    rows = ",".join(
+                        f'{{"id":{i},"email":"user{i}@example.com","name":"User Number {i}"}}'
+                        for i in range(1500))
+                    body = ('{"data":{"users":[' + rows + ']}}').encode()
+                else:
+                    body = b'{"data":{"users":[]}}'
+            elif p.startswith("/gqlnosqli-cookie"):
+                # auth flip signalled ONLY by Set-Cookie; the body shape is unchanged.
+                if obj:
+                    body, cookie = b'{"data":{"login":{"ok":true}}}', "session=abc123; Path=/; HttpOnly"
+                else:
+                    body = b'{"data":{"login":{"ok":false}}}'
+            else:
+                # DELIBERATELY VULNERABLE: the object flows into find() -> auth bypass
+                if obj:
+                    body = (b'{"data":{"login":{"id":1,"role":"admin",'
+                            b'"token":"eyJhbGciOiJIUzI1NiJ9.moonadmin.sig"}}}')
+                else:
+                    body = b'{"data":{"login":null}}'   # scalar control: auth fails
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/parserdiff-safe"):
             self._parserdiff(raw, self.headers.get("Content-Type", ""), safe=True)
             return

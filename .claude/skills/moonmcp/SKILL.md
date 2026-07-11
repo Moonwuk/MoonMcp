@@ -91,8 +91,9 @@ Two ways, pick based on the user's situation:
      ClickHouse/Druid + vector stores (Chroma/Weaviate/Qdrant). On a param:
      `nosqli_probe` (Mongo operator/`$where`), `orm_leak_probe` (Django/Prisma/Rails
      relational lookups), `second_order_sqli_probe` (write→read stored SQLi),
-     `fastjson_oast_probe` (Java autoType, OAST). `ssrf_protocol_probe` reaches
-     internal datastores via gopher/dict. Cloud (safe GET, light-active):
+     `fastjson_oast_probe` (Java autoType, OAST). After `graphql_check`, run
+     `graphql_nosqli` (operator object as a GraphQL variable → Mongo/Mongoose filter).
+     `ssrf_protocol_probe` reaches internal datastores via gopher/dict. Cloud (safe GET, light-active):
      `firebase_exposure` (open RTDB), `supabase_exposure` (RLS-off anon read);
      `extract_secrets` / `analyze_config` classify managed-DB DSNs & tokens.
    - **Behavioural infrastructure** (infer the infra from response variance):
