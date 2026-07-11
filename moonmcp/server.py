@@ -35,6 +35,7 @@ from . import confirm as confirmmod
 from . import cvss as cvssmod
 from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
+from . import metrics as metricsmod
 from . import obsidian as obsidianmod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
@@ -2340,6 +2341,41 @@ async def promote_lead(target: str, kind: str, detail: str = "", evidence: str =
                              created_at=ts)
         out["recorded"] = {"finding_id": f.id, "memory_id": mid}
     return out
+
+
+@mcp.tool()
+@safe_tool
+async def label_finding(finding_id: int, outcome: str) -> dict:
+    """Label a recorded finding's real-world **outcome** — `true_positive`,
+    `false_positive`, `duplicate`, `wont_fix`, or `unknown` — so `metrics` can compute
+    detection precision on the live target. Use it after you verify (or refute) a lead
+    on a real app. Offline; no traffic.
+    """
+
+    f = get_context().findings.set_outcome(finding_id, outcome)
+    if f is None:
+        return {"error": "not_found", "finding_id": finding_id,
+                "hint": "call list_findings to see recorded ids"}
+    return {"labelled": to_dict(f)}
+
+
+@mcp.tool()
+@safe_tool
+async def metrics(known_positives: int | None = None) -> dict:
+    """**Detection scorecard** for this session — measure how the probes actually do
+    on a real target. Aggregates recorded findings by type / severity / source tool /
+    outcome, computes **precision** (overall + per source tool) from the outcomes you
+    set with `label_finding`, and reports per-tool run counts. Pass `known_positives`
+    (your count of real bugs on the target) for a recall figure. Offline; no traffic.
+    """
+
+    ctx = get_context()
+    runs: dict[str, int] = {}
+    for e in ctx.audit.recent(0):  # a gated tool logs an allow'd scope_check per run
+        if e.get("decision") == "allow" and e.get("tool"):
+            runs[e["tool"]] = runs.get(e["tool"], 0) + 1
+    return metricsmod.compute_metrics(ctx.findings.list(), runs=runs,
+                                      known_positives=known_positives)
 
 
 @mcp.tool()

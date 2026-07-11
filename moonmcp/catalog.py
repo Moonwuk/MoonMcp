@@ -110,7 +110,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Record findings, export (SARIF/JSON/Obsidian), and diff the attack "
         "surface across runs.",
         [
-            "add_finding", "promote_lead", "list_findings", "clear_findings", "triage_findings",
+            "add_finding", "promote_lead", "label_finding", "metrics",
+            "list_findings", "clear_findings", "triage_findings",
             "cvss_score", "export_findings", "export_obsidian",
             "surface_diff", "surface_snapshots",
         ],
