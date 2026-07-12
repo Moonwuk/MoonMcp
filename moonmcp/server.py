@@ -2088,6 +2088,36 @@ async def jwt_crack(token: str, wordlist: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
+@safe_tool
+async def jwt_alg_confusion(token: str, public_key_pem: str, alg: str = "HS256") -> dict:
+    """**JWT algorithm-confusion forgery.** Re-signs `token` as HS256/384/512 using the
+    RSA/EC **public key's exact PEM text** as the HMAC secret — the classic
+    "verifier doesn't pin the algorithm family" bug, and the highest-impact JWT
+    attack after `alg:none`. If the server's JWT library accepts whatever `alg` the
+    token declares and reuses the SAME key material to verify both RS*-signed and
+    HS*-signed tokens, the forged token validates under the public key alone — full
+    forgery without ever touching the private key. Supply `public_key_pem` (the exact
+    PEM the server verifies against — fetch it from the JWKS `jwks_uri` `oauth_probe`
+    reports, or a captured cert); the original header's `kid` (if any) is preserved so
+    a key-by-`kid` lookup still resolves correctly. Offline — never replays the forged
+    token itself; do that yourself (or via `http_repeater`) against the protected
+    endpoint to confirm. No traffic, no scope needed.
+    """
+
+    try:
+        forged = jwtmod.forge_alg_confusion(token, public_key_pem, alg=alg)
+    except ValueError as exc:
+        return {"error": "invalid_input", "detail": str(exc)}
+    return {
+        "forged_token": forged,
+        "algorithm": alg.upper(),
+        "note": ("replay this as `Authorization: Bearer <forged_token>` against a protected "
+                 "endpoint — acceptance confirms alg-confusion (the verifier reused the public "
+                 "key as an HMAC secret)"),
+    }
+
+
+@mcp.tool()
 @active_tool()
 async def oauth_probe(target: str) -> dict:
     """Fetch the OIDC/OAuth discovery document (`/.well-known/openid-configuration`

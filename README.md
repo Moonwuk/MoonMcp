@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **159 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **160 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -79,6 +79,7 @@ MoonMCP exposes **159 tools**, **11 resources** and **9 operator prompts**, grou
 | `cloud_buckets` | Enumerate cloud storage buckets (S3 / GCS / Azure Blob): permutate names from a keyword and probe which exist and which are anonymously **listable**. |
 | `email_security` | SPF / DMARC / DKIM / CAA posture with an A–F grade (DNS-based). |
 | `jwt_analyze` | Decode a JWT and flag `alg:none`, weak HS*, missing expiry, key-injection (no traffic). |
+| `jwt_alg_confusion` | **JWT algorithm-confusion forgery** — re-signs a captured RS/ES token as HS256/384/512 using the **public key's PEM text** as the HMAC secret (`kid` preserved). If the verifier reuses the same key material for both algorithm families, the forged token validates under the public key alone — full forgery without the private key. No traffic, offline. |
 
 ### 🟡 Active — light (benign, in-scope requests)
 | Tool | Purpose |

