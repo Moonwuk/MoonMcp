@@ -6,6 +6,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **WebSocket detection (`ws_probe`).** The WebSocket surface that most scanners
+  skip. Speaks the RFC 6455 handshake by hand (stdlib — no `websockets` dependency)
+  to confirm an endpoint (HTTP 101 + a valid `Sec-WebSocket-Accept`) and run the
+  flagship **Cross-Site WebSocket Hijacking (CSWSH)** check: a repeat handshake with
+  a foreign `Origin` that still upgrades proves the server doesn't validate Origin, so
+  a cookie-authenticated socket is hijackable cross-site. Reports a **lead** (confirm
+  the socket is cookie-authed and sensitive before reporting; weaponise via Strix).
+  `probe_message` (opt-in, off by default) additionally sends one clearly-marked
+  benign text frame to detect echo/reflection. Scope-gated. `moonmcp/web/websocket.py`.
 - **Web-research toolkit (OSINT).** `web_read(url)` — fetch a public page and return
   clean readable content (title, meta description, main text with scripts/styles/nav
   stripped, outbound links, word count); the reader that pairs with search. Not

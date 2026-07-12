@@ -118,6 +118,7 @@ from .web import takeover as takeovermod
 from .web import value as valuemod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
+from .web import websocket as wsmod
 from .web import workflow as workflowmod
 
 _INSTRUCTIONS = """\
@@ -1456,6 +1457,35 @@ async def graphql_check(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     result = await graphqlmod.discover_graphql(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def ws_probe(target: str, probe_message: bool = False,
+                   subprotocol: str | None = None) -> dict:
+    """**WebSocket detection** — the surface most scanners skip. Speaks the RFC 6455
+    handshake by hand (stdlib) to (1) confirm the URL is a real WebSocket endpoint
+    (HTTP 101 + a valid `Sec-WebSocket-Accept`), and (2) run the flagship
+    **Cross-Site WebSocket Hijacking (CSWSH)** check: repeat the handshake with a
+    *foreign* `Origin` — if the server still upgrades, it doesn't validate Origin, so
+    a cookie-authenticated socket is hijackable cross-site. Reports a **lead** (confirm
+    the socket is cookie-authenticated and carries sensitive actions before reporting);
+    weaponisation is routed to `promote_lead` / Strix.
+
+    Accepts `ws://` / `wss://` (or http(s)/bare host — wss assumed). The handshake is
+    as benign as an HTTP GET. `probe_message=True` (opt-in) additionally sends ONE
+    clearly-marked benign text frame to check for echo/reflection — off by default so
+    nothing is ever delivered into a live socket without consent. In scope only.
+    """
+
+    host, port, path, tls = wsmod.split_ws_url(target)
+    if not host:
+        return {"error": "invalid_target", "detail": f"no host in {target!r}"}
+    result = await wsmod.probe_websocket(
+        target, host=host, port=port, path=path, tls=tls,
+        timeout=max(4.0, get_context().settings.timeout),
+        probe_message=probe_message, subprotocol=subprotocol)
     return to_dict(result)
 
 

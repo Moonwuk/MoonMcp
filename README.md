@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **155 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **156 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -101,6 +101,7 @@ MoonMCP exposes **155 tools**, **11 resources** and **9 operator prompts**, grou
 | `oauth_redirect_probe` | OAuth **`redirect_uri` validation bypass** (prefix/suffix/subdomain/open-redirect chaining). |
 | `recover_sourcemaps` | Recover the original app source from exposed `.js.map` **sourcemaps** and scan the recovered code for secrets. |
 | `graphql_check` | Discover GraphQL endpoints and test whether **introspection** is enabled. |
+| `ws_probe` | **WebSocket detection** (the surface most scanners skip): RFC 6455 handshake by hand (stdlib) to confirm the endpoint, then the flagship **Cross-Site WebSocket Hijacking (CSWSH)** check — a foreign `Origin` still upgrading means Origin isn't validated, so a cookie-authed socket is hijackable. Reports a lead; `probe_message` (opt-in) sends one benign frame to check echo/reflection. |
 | `discover_parameters` | Brute a wordlist of param names → flag hidden params the app reacts to: `reflected` (XSS/SSRF/injection entry point) or behavioural `status`/`length` change. |
 | `waf_detect` | Fingerprint WAF/CDN (Cloudflare, Akamai, Imperva, AWS WAF, Sucuri, F5, …). |
 | `takeover_check` | Subdomain-takeover detection over a 40+ provider fingerprint DB (S3, GH Pages, Heroku, Azure, …). |
