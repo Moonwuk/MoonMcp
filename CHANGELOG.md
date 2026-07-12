@@ -6,6 +6,16 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Deserialization-format fingerprint (`deserialize_fingerprint`, Freddy-lite).**
+  Detection-only, gap #4/8 from the Burp technique research pass: 100% passive
+  byte/base64 signature scan over an already-captured cookie/header/hidden-field
+  value — Java native serialization (`ACED0005` raw or base64 `rO0AB...`), .NET
+  ViewState (LosFormatter `FF01` header — also flags whether it looks encrypted vs.
+  plaintext), PHP `serialize()` objects (`O:<len>:"Class":`), Python pickle
+  (protocol 2-5 markers), Ruby `Marshal.dump`, and Fastjson/Jackson polymorphic
+  JSON (`@type`/`@class`). No new network traffic, no forged gadget chain, never
+  invokes ysoserial/PHPGGC/ViewGen itself — reports the format as a lead for the
+  caller to hand to the right tool via Strix. `moonmcp/recon/deserialize.py`.
 - **Path traversal / LFI content-disclosure (`lfi_probe`).** Detection-only, gap
   #3/8 from the Burp technique research pass: depth-escalating `../` (x1/3/6/8),
   null-byte, double-URL-encoded, and Windows-style traversal variants at a param,
