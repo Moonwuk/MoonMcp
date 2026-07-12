@@ -35,7 +35,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Queries third-party datasets / search engines about the target — no "
         "packets to the target itself.",
         [
-            "web_search", "search_dorks",
+            "web_search", "web_read", "search_dorks",
             "enumerate_subdomains", "wayback_urls",
             "cve_lookup", "cve_search",
             "host_intel", "ip_intel", "reverse_ip",
@@ -123,8 +123,11 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
     ("memory", (
         "Shared memory hub",
         "Persistent, cross-agent, provenance/trust-tagged memory (SQLite + FTS) "
-        "so agents build on each other's work instead of re-deriving context.",
-        ["memory_add", "memory_search", "memory_get", "memory_stats"],
+        "so agents build on each other's work instead of re-deriving context. A "
+        "typed knowledge graph (entities + relations) structures findings, and "
+        "cross-target lessons carry tradecraft forward between sessions.",
+        ["memory_add", "memory_search", "memory_get", "memory_stats",
+         "memory_link", "memory_graph", "memory_brief", "memory_lesson"],
     )),
     ("external", (
         "External CLIs",
@@ -137,10 +140,12 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
 # The recommended order of operations for a fresh engagement.
 WORKFLOW: list[str] = [
     "server_status — see config, the active program and which external CLIs are present.",
-    "RECALL — memory_search(target=…) first: build on prior/other-agents' work, skip recon "
-    "already done (recon_target/report also surface a prior_memory block).",
+    "RECALL — memory_brief(target) / memory_search(target=…) first: build on prior/other-agents' "
+    "work, skip recon already done (recon_target/report also surface a prior_memory block); "
+    "memory_lesson(action=recall) to apply past tradecraft.",
     "program_add / scope_add — authorise the target and set the program's bug-bounty header.",
-    "Passive OSINT — web_search, enumerate_subdomains, wayback_urls, cve_search, host_intel.",
+    "Passive OSINT — web_search (multi-engine) then web_read a promising result, "
+    "enumerate_subdomains, wayback_urls, cve_search, host_intel.",
     "Light active — recon_target for a one-shot sweep, then http_probe / fingerprint / "
     "analyze_headers / well_known / tls_inspect.",
     "Web-app — crawl, analyze_js, discover_parameters, cors_audit, graphql_check, "

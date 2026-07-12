@@ -20,12 +20,14 @@ PASSIVE = {
     "auth_set", "auth_clear",
     "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
     # keyless OSINT (queries a third party, never the target)
-    "web_search", "search_dorks", "cve_lookup", "cve_search", "dependency_confusion",
+    "web_search", "web_read", "search_dorks", "cve_lookup", "cve_search",
+    "dependency_confusion",
     "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze", "jwt_crack",
     # interception history (reads the in-memory log; no traffic)
     "http_history",
     # shared memory hub (local store; no traffic)
     "memory_add", "memory_search", "memory_get", "memory_stats",
+    "memory_link", "memory_graph", "memory_brief", "memory_lesson",
     # findings / reporting / monitoring
     "add_finding", "promote_lead", "label_finding", "metrics",
     "list_findings", "clear_findings", "triage_findings", "cvss_score",

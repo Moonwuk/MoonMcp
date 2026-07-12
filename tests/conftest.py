@@ -601,6 +601,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/article":
+            # A rich page for the OSINT reader: title, meta description, boilerplate
+            # to strip (script/style/nav), readable prose, and outbound links.
+            body = (b"<!doctype html><html><head><title>CVE-2021-44228 Analysis</title>"
+                    b"<meta name=\"description\" content=\"Log4Shell deep dive\">"
+                    b"<style>.x{color:red}</style>"
+                    b"<script>var tracker='should-not-appear';</script></head>"
+                    b"<body><nav><a href=\"/home\">Home</a></nav>"
+                    b"<h1>Log4Shell</h1>"
+                    b"<p>The JNDI lookup enabled remote code execution.</p>"
+                    b"<p>See <a href=\"https://nvd.nist.gov/vuln/detail/CVE-2021-44228\">the NVD entry</a>"
+                    b" for details.</p>"
+                    b"<script>console.log('nope');</script></body></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/static/app.js":
             body = (b"const base='/api/internal/config';"
                     b"fetch('/api/v1/admin/users?id=1');\n"

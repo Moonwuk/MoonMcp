@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **150 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **155 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -60,7 +60,8 @@ MoonMCP exposes **150 tools**, **11 resources** and **9 operator prompts**, grou
 ### 🔵 Passive OSINT (never touches the target)
 | Tool | Purpose |
 | --- | --- |
-| `web_search` | Search the internet (keyless, via DuckDuckGo) → structured title / URL / snippet results. Passive — queries a search engine, not the target. |
+| `web_search` | Search the internet (keyless) → structured title / URL / snippet results. **Multi-engine & resilient**: tries DuckDuckGo HTML → DDG Lite → Bing and returns the first that answers (so one engine failing doesn't blind the search); dedupes by URL; `site=` scopes to one domain. Passive — queries a search engine, not the target. |
+| `web_read` | Fetch a **public** page and return clean readable content — title, description, main text (scripts/styles/nav stripped), outbound links, word count. The OSINT *reader* that pairs with `web_search`. Not target-scoped (reads third-party research), but the block-private SSRF guard still refuses internal/metadata IPs and no engagement auth is sent; returned text is **untrusted**. |
 | `search_dorks` | Generate ready-to-run **Google/Bing dorks** for a target (exposed files, login panels, config/secrets, dir listings, code leaks, SSRF params). |
 | `enumerate_subdomains` | Passive subdomain enum via crt.sh, HackerTarget, AnubisDB, AlienVault OTX. |
 | `wayback_urls` | Historical URLs from the Internet Archive (flags interesting endpoints). |
@@ -200,6 +201,9 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `memory_add` | Store an item in a **shared, persistent** knowledge store (SQLite; persists via `MOONMCP_STATE_DIR`) so multiple agents/sessions build on each other's work. Every item is **trust-tagged** — `untrusted` (scraped/observed content — a prompt-injection vector) vs `curated` (a vetted conclusion). |
 | `memory_search` | Full-text search (bm25 via SQLite **FTS5**, LIKE fallback) over the hub; filter by `kind` / `target` / `trust` (`trust=curated` returns only vetted knowledge). Also on `memory://recent`. |
 | `memory_get` / `memory_stats` | Fetch one item; summarise the hub (counts by kind/trust). `add_finding` auto-mirrors findings into the hub as `curated`. |
+| `memory_brief` | **What do we know about TARGET?** — one-shot rollup for orienting before/resuming work: graph entities by kind, confirmed findings, open leads, applicable lessons, counts. Call it first on a target. |
+| `memory_graph` / `memory_link` | Read / build the **knowledge graph** — typed entities (host / endpoint / param / technology / service / cve / …) and typed relations (`affects` / `on` / `uses` / `caused_by` / …) between them and findings. `add_finding` auto-links a finding to its host + endpoint, turning flat findings into a queryable structure. |
+| `memory_lesson` | The **learning loop** — record (`action=add`) and recall (`action=recall`) durable, cross-target **lessons** (tradecraft, false-positive traps, tool quirks) so mistakes and wins carry forward between sessions and agents. |
 
 ### 🛠️ External tools
 | Tool | Purpose |
@@ -450,7 +454,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 150 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 155 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
@@ -473,7 +477,7 @@ moonmcp/
 │   └── ratelimit.py #   token-bucket + concurrency governor
 ├── recon/           # subdomains, fingerprint, headers, wayback, content, crawl, secrets, binary, favicon, origin, config_audit
 ├── web/             # cors, graphql, waf(+efficacy), jwt, methods, takeover, redirect, exposure, screenshot, behavior
-├── intel/           # cve (NVD), shodan, email (SPF/DMARC/DKIM/CAA), asn (ASN/cloud/reverse-IP)
+├── intel/           # cve (NVD), shodan, email (SPF/DMARC/DKIM/CAA), asn (ASN/cloud/reverse-IP), search (multi-engine), reader (OSINT page reader)
 ├── reporting.py     # pure Markdown report renderer
 ├── findings.py      # session findings store (findings:// resource)
 ├── knowledge/       # injection KB + techniques/PoC catalog (injections:// / techniques:// resources)

@@ -6,6 +6,25 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Web-research toolkit (OSINT).** `web_read(url)` — fetch a public page and return
+  clean readable content (title, meta description, main text with scripts/styles/nav
+  stripped, outbound links, word count); the reader that pairs with search. Not
+  target-scoped (reads third-party research) but the block-private SSRF guard still
+  refuses internal/metadata IPs, no engagement auth is sent, and returned text is
+  treated as untrusted. `web_search` is now **multi-engine & resilient** — DuckDuckGo
+  HTML → DDG Lite → Bing fallback, URL de-duplication, and a `site=` domain filter —
+  so one engine failing or rate-limiting no longer blinds the search. New
+  `web-research` skill. `moonmcp/intel/reader.py`, `moonmcp/intel/search.py`.
+- **Memory: knowledge graph + learning loop.** The shared memory hub gains a typed
+  **knowledge graph** — entities (host / endpoint / param / technology / service /
+  cve / credential / asset) and typed relations (`affects` / `on` / `uses` /
+  `caused_by` / `confirms` / …) — so findings become a queryable structure, not flat
+  notes; `add_finding` now auto-links a finding to its host and endpoint.
+  `memory_link` / `memory_graph` build and read it, `memory_brief(target)` rolls up
+  *what we know about a target* (entities, findings, leads, lessons), and
+  `memory_lesson(add/recall)` gives the agent a durable, cross-target **learning
+  loop** so tradecraft carries forward between sessions. New `memory` skill.
+  `moonmcp/memory.py`.
 - **Database & data-store attack surface (detection-only).** A large multilingual
   research synthesis (`docs/DATABASE_RESEARCH.md`) executed as ~14 probes:
   `db_exposure` (raw-socket unauth sweep — Redis/Mongo/memcached/ES/CouchDB/InfluxDB/

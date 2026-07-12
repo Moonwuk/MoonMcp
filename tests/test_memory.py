@@ -111,3 +111,99 @@ async def test_memory_tools_roundtrip_and_trust_default(fresh_context):
     assert got["title"].startswith("server banner")
     stats = await srv.memory_stats()
     assert stats["total"] >= 1
+
+
+# --- knowledge graph (entities + relations) ---------------------------------
+def test_entity_upsert_dedupes_and_keeps_curated():
+    m = MemoryStore()
+    e1 = m.add_entity(kind="host", name="API.Example.com", target="example.com", trust="curated")
+    # same kind+name+target (case-insensitive) → upsert, not a new row
+    e2 = m.add_entity(kind="host", name="api.example.com", target="Example.com",
+                      attrs="nginx", trust="untrusted")
+    assert e1 == e2
+    ents = m.entities(kind="host")
+    assert len(ents) == 1
+    assert ents[0]["attrs"] == "nginx"       # attrs merged in
+    assert ents[0]["trust"] == "curated"     # curated never downgraded
+    # a blank name is a no-op
+    assert m.add_entity(kind="host", name="   ") == 0
+
+
+def test_relation_dedup_and_graph_scoping():
+    m = MemoryStore()
+    m.add_entity(kind="host", name="a.example.com", target="a.example.com", trust="curated")
+    m.add_entity(kind="technology", name="nginx", target="a.example.com", trust="curated")
+    r1 = m.add_relation("host:a.example.com", "uses", "technology:nginx", target="a.example.com")
+    r2 = m.add_relation("host:a.example.com", "uses", "technology:nginx", target="a.example.com")
+    assert r1 == r2  # deduped
+    # a relation on a different target must not leak into this graph
+    m.add_relation("host:b.example.com", "uses", "technology:apache", target="b.example.com")
+    g = m.graph("a.example.com")
+    assert {e["name"] for e in g["entities"]} == {"a.example.com", "nginx"}
+    assert g["relations"] == [{"src": "host:a.example.com", "rel": "uses",
+                               "dst": "technology:nginx"}]
+    # an incomplete edge is rejected
+    assert m.add_relation("", "uses", "technology:nginx") == 0
+
+
+def test_brief_rolls_up_entities_findings_and_lessons():
+    m = MemoryStore()
+    m.add_entity(kind="host", name="a.example.com", target="a.example.com", trust="curated")
+    m.add(kind="finding", title="IDOR on /orders", target="https://a.example.com/orders",
+          severity="high", trust="curated")
+    m.add(kind="lead", title="reflected q param", target="https://a.example.com/search",
+          trust="untrusted")
+    m.add(kind="lesson", title="check field suggestion", body="introspection off still leaks",
+          trust="curated", tags="lesson")
+    b = m.brief("a.example.com")
+    assert "host" in b["entities"] and "a.example.com" in b["entities"]["host"]
+    assert any(f["title"] == "IDOR on /orders" for f in b["findings"])
+    assert "reflected q param" in b["leads"]
+    assert any(le["title"] == "check field suggestion" for le in b["lessons"])
+    assert b["counts"]["findings"] == 1
+
+
+@pytest.mark.asyncio
+async def test_add_finding_autolinks_graph(fresh_context):
+    res = await srv.add_finding(target="https://a.example.com/orders", severity="high",
+                                title="IDOR on /orders", detail="user B reads user A order")
+    mid = res["memory_id"]
+    g = await srv.memory_graph(target="a.example.com")
+    rels = {(r["src"], r["rel"], r["dst"]) for r in g["relations"]}
+    assert (f"finding:{mid}", "affects", "host:a.example.com") in rels
+    assert (f"finding:{mid}", "on", "endpoint:/orders") in rels
+    kinds = {e["kind"] for e in g["entities"]}
+    assert {"host", "endpoint"} <= kinds
+
+
+@pytest.mark.asyncio
+async def test_memory_link_autocreates_entities(fresh_context):
+    r = await srv.memory_link(src="host:a.example.com", rel="uses",
+                              dst="technology:nginx", target="a.example.com")
+    assert r["relation_id"] > 0
+    g = await srv.memory_graph(target="a.example.com")
+    assert {e["name"] for e in g["entities"]} == {"a.example.com", "nginx"}
+    # an invalid edge is reported, not silently linked
+    bad = await srv.memory_link(src="", rel="uses", dst="technology:nginx")
+    assert "error" in bad
+
+
+@pytest.mark.asyncio
+async def test_memory_lesson_add_and_recall(fresh_context):
+    add = await srv.memory_lesson(action="add", title="GraphQL introspection off != safe",
+                                  body="field-suggestion leaked the schema")
+    assert add["added"]["id"] > 0
+    rec = await srv.memory_lesson(action="recall", query="introspection")
+    assert rec["count"] >= 1
+    assert any("introspection" in le["title"].lower() for le in rec["lessons"])
+    # a lesson needs a title
+    assert "error" in await srv.memory_lesson(action="add", title="")
+
+
+@pytest.mark.asyncio
+async def test_memory_brief_tool(fresh_context):
+    await srv.add_finding(target="https://a.example.com/orders", severity="high",
+                          title="IDOR on /orders")
+    b = await srv.memory_brief(target="a.example.com")
+    assert b["target"] == "a.example.com"
+    assert any(f["title"] == "IDOR on /orders" for f in b["findings"])
