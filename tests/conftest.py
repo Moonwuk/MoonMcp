@@ -420,6 +420,32 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok")
             return
+        if self.path.startswith("/lfi-vuln"):
+            # VULNERABLE: fully decodes the param (simulating an edge layer that
+            # decodes once and a backend framework that decodes again — the
+            # double-encoded-bypass scenario) and serves the traversed file's
+            # content when the resolved path matches a known target file.
+            import urllib.parse as _up
+            from urllib.parse import parse_qs, urlparse
+            raw_q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            decoded = _up.unquote(raw_q)  # a 2nd decode pass catches the double-encoded payload
+            low = decoded.lower().split("\x00")[0]  # a null byte truncates the path like a real OS call
+            if "etc/passwd" in low or "etc\\passwd" in low:
+                body = b"root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
+            elif "win.ini" in low:
+                body = b"; for 16-bit app support\n[fonts]\n[extensions]\n[mci extensions]\n[files]\n"
+            else:
+                body = b"<html>not found</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/lfi-safe"):
+            # SAFE twin: never returns file content regardless of the payload.
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>ok</html>")
+            return
         if self.path.startswith("/sqli-mb"):
             # VULNERABLE charset mismatch: a multibyte lead byte + quote breaks out
             # of the (naive addslashes) escaping, so it errors where plain %27 doesn't.

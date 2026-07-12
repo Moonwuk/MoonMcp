@@ -96,8 +96,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "history), plus differential detectors for top-payout classes (SSTI, SQLi, "
         "blind SSRF, cache poisoning) and the confirm_finding gate.",
         ["http_repeater", "intruder", "passive_scan", "confirm_finding",
-         "ssti_probe", "sqli_probe", "cmdi_probe", "ssrf_probe", "cache_probe",
-         "http_history"],
+         "ssti_probe", "sqli_probe", "cmdi_probe", "lfi_probe", "ssrf_probe",
+         "cache_probe", "http_history"],
     )),
     ("knowledge", (
         "Knowledge bases",
