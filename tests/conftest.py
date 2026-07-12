@@ -35,6 +35,19 @@ parse(location.search);parse(location.hash);
 </script></body></html>"""
 
 
+# The one SignatureValue the SAML test fixtures treat as "genuinely signed" --
+# real XML-DSig crypto is out of scope for a zero-dependency test harness, so
+# this constant stands in for "the signature verifies", exactly like the real
+# saml_xsw_probe fixture's SAMLResponse carries it unmodified while
+# corrupt_signature() flips one character to produce an "invalid" twin.
+_SAML_VALID_SIG = "ZmFrZXNpZ25hdHVyZXZhbHVlPT0="
+_SAML_NS = {
+    "samlp": "urn:oasis:names:tc:SAML:2.0:protocol",
+    "saml": "urn:oasis:names:tc:SAML:2.0:assertion",
+    "ds": "http://www.w3.org/2000/09/xmldsig#",
+}
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     _lb = 0    # /lb backend rotation counter
     _rl = 0    # /rl rate-limit counter
@@ -42,6 +55,50 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):  # silence
         pass
+
+    def _saml_reply(self, raw: bytes, safe: bool):
+        import base64
+        from urllib.parse import parse_qs
+        from xml.etree import ElementTree as ET
+        fields = parse_qs(raw.decode("utf-8", "replace"))
+        b64 = (fields.get("SAMLResponse") or [""])[0]
+        try:
+            xml_text = base64.b64decode(b64).decode("utf-8", "replace")
+            root = ET.fromstring(xml_text)
+        except Exception:
+            body = b"<html>bad request</html>"
+            self.send_response(400)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        sig = root.find(".//ds:Signature", _SAML_NS)
+        sig_val = sig.find("ds:SignatureValue", _SAML_NS) if sig is not None else None
+        if sig_val is None or (sig_val.text or "").strip() != _SAML_VALID_SIG:
+            body = b"<html>signature invalid</html>"
+            self.send_response(403)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if safe:
+            # SAFE: resolves identity from the assertion whose ID matches what
+            # the Signature's Reference actually covers, wherever it sits.
+            ref = sig.find("ds:SignedInfo/ds:Reference", _SAML_NS)
+            ref_id = (ref.get("URI") or "").lstrip("#") if ref is not None else None
+            assertion = next((el for el in root.iter()
+                              if el.tag.endswith("}Assertion") and el.get("ID") == ref_id), None)
+        else:
+            # VULNERABLE: naive "first direct-child Assertion" identity read --
+            # ignores which assertion the Signature Reference actually covers.
+            assertion = root.find("saml:Assertion", _SAML_NS)
+        nameid = assertion.find(".//saml:Subject/saml:NameID", _SAML_NS) if assertion is not None else None
+        identity = nameid.text if nameid is not None else "unknown"
+        body = f"<html>Welcome, {identity}</html>".encode("utf-8", "replace")
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _nosqli_reply(self, text: str, ctype: str):
         # DELIBERATELY VULNERABLE login: a plain scalar `user` is denied (401), but
@@ -155,6 +212,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         # drain the request body so the socket stays clean
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path.startswith("/saml-acs-vuln"):
+            self._saml_reply(raw, safe=False)
+            return
+        if self.path.startswith("/saml-acs-safe"):
+            self._saml_reply(raw, safe=True)
+            return
         if self.path.startswith("/store"):
             # Phase 1 of a second-order flow: store the written value (safely) so a
             # later /render call re-uses it in a query (the vulnerable sink).

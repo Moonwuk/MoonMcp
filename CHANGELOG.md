@@ -6,6 +6,29 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **SAML XML Signature Wrapping probe (`saml_xsw_probe`).** Detection-only,
+  gap #8/8 (the last) from the Burp technique research pass. SAML responses
+  carry a *detached* signature — a `<ds:Signature>` whose `Reference` points
+  at the `<saml:Assertion>` it covers *by ID*, not by tree position — so if
+  the SP's signature validator resolves that reference by ID while its
+  business logic picks an assertion by some naive positional rule instead
+  ("first assertion in the document", "last one", "direct child of
+  Response"), an attacker can relocate the original validly-signed assertion
+  and plant a forged, unsigned one where the positional logic will actually
+  look. Give it a captured, legitimately-signed SAMLResponse (base64 or raw
+  XML) and the SP's ACS URL: it first reports a static structural read (no
+  network) — assertion/signature counts, dangling signature references — then
+  resends the document via three representative topologies (not the full
+  academic XSW1-8 taxonomy — `sibling_before`/`sibling_after`/
+  `wrap_extension`, mirroring `cmdi_probe`'s small-representative-set
+  discipline), each cloning the signed assertion, stripping the clone's
+  signature, and forging its identity. `reflected_forged_identity` — the
+  forged identity appearing in a variant's response but in neither an
+  accepted-baseline nor a signature-corrupted-control response — is the
+  strong, replay-noise-independent confirmation signal (SAML's own
+  anti-replay protections can make simple status/length baselines noisy on
+  their own). Never forges a valid signature — the wrapping trick IS the
+  attack. `moonmcp/web/saml.py`.
 - **Generic differential "interpretation" prober (`interp_probe`, Backslash
   Powered Scanner-style).** Detection-only, gap #7/8 from the Burp technique
   research pass — a meta-probe, not a class-specific one. Most injection
