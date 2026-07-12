@@ -4,10 +4,17 @@
 
 [![CI](https://github.com/Moonwuk/MoonMcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Moonwuk/MoonMcp/actions/workflows/ci.yml)
 
-MoonMCP exposes a curated set of reconnaissance, fingerprinting and OSINT
-capabilities to any [Model Context Protocol](https://modelcontextprotocol.io)
+MoonMCP exposes a curated set of reconnaissance, fingerprinting, OSINT and
+**detection** capabilities to any [Model Context Protocol](https://modelcontextprotocol.io)
 client (Claude Desktop, Claude Code, Cursor, …), so an AI agent can map a target's
-attack surface **safely and within an authorised scope**.
+attack surface **safely and within an authorised scope**: web + OSINT recon
+(multi-engine search, a page reader, subdomains, wayback, CVE/Shodan), web-app
+detectors (CORS, GraphQL introspection + batch/BOLA, WebSocket/CSWSH, secrets,
+exposed-`.git` history forensics, injection/SQLi/SSRF/SSTI, datastore exposure),
+behavioural infrastructure mapping, offline knowledge bases, and a **persistent,
+cross-agent memory hub with a typed knowledge graph** so findings are remembered and
+built upon. Every tool is **detection-only** — leads to verify, with weaponisation
+delegated to sqlmap/Strix under human confirmation.
 
 > ⚖️ **Authorised testing only.** MoonMCP is for security research on assets you
 > own or are explicitly permitted to test (e.g. a bug-bounty program's in-scope
@@ -457,7 +464,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 155 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 158 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
