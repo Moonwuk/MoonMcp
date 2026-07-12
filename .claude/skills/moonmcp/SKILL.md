@@ -79,7 +79,9 @@ Two ways, pick based on the user's situation:
 3. **Map the web app:** `crawl`, `analyze_js` (endpoints + source maps),
    `parse_openapi`, `discover_parameters`, `cors_audit`, `graphql_check`,
    `extract_secrets`, `trace_redirects`, `open_redirect`, `takeover_check`,
-   `vcs_exposure`. Found a `ws://`/`wss://` endpoint (in JS or the network tab)?
+   `vcs_exposure` → if `.git` is exposed, `git_forensics` mines the **history**
+   (config creds, reflog emails, tracked-file list, loose-object secret walk) — a
+   stable Critical. Found a `ws://`/`wss://` endpoint (in JS or the network tab)?
    `ws_probe` it — confirms the WebSocket and runs the **CSWSH** (foreign-Origin)
    check most scanners miss; `probe_message=true` (opt-in) adds a benign echo test.
    For JS-heavy SPAs use `browser_open` / `browser_eval` /

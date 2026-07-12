@@ -6,6 +6,17 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Git-history forensics (`git_forensics`).** The deep follow-up to `vcs_exposure`
+  and a stable-Critical source: when a `.git` is exposed, it reconstructs history
+  from what the server already serves (read-only GETs; nothing written) and mines it
+  — `.git/config` remote URLs embedding **credentials**, the `.git/logs/HEAD` reflog
+  (commit SHAs + author names/emails + messages), the `.git/index` **tracked file
+  list** (flags `.env`/`id_rsa`/`*.sql`/`credentials`, parsed from the binary DIRC
+  format), and a **bounded loose-object walk** (`objects/xx/…` zlib-inflate → commit
+  → tree → blob) running the secret scanner over every blob and commit message.
+  Packed history (delta-compressed `*.pack`) is **detected and reported** for
+  git-dumper/Strix rather than silently skipped. Secrets are redacted; each is a lead
+  to confirm live. `moonmcp/recon/gitdump.py`.
 - **WebSocket detection (`ws_probe`).** The WebSocket surface that most scanners
   skip. Speaks the RFC 6455 handshake by hand (stdlib — no `websockets` dependency)
   to confirm an endpoint (HTTP 101 + a valid `Sec-WebSocket-Accept`) and run the

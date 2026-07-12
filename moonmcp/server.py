@@ -70,6 +70,7 @@ from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import firebase as firebasemod
+from .recon import gitdump as gitdumpmod
 from .recon import headers as headersmod
 from .recon import infra as inframod
 from .recon import jsendpoints as jsmod
@@ -1646,6 +1647,41 @@ async def vcs_exposure(target: str) -> dict:
     base = raw if "://" in raw else f"{scheme}://{host}"
     ctx = get_context()
     result = await exposuremod.check_exposure(ctx.http, base, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def git_forensics(target: str, max_objects: int = 60) -> dict:
+    """**Git-history forensics** on an exposed `.git` — the deep follow-up to
+    `vcs_exposure` and a stable-Critical source. Reconstructs history from what the
+    server already serves (read-only GETs; nothing written) and mines it for secrets:
+
+    - `.git/config` remote URLs embedding **credentials** (`user:token@host`),
+    - `.git/logs/HEAD` reflog → commit SHAs + **author names/emails** + messages,
+    - `.git/index` → the **tracked file list** (flags `.env` / `id_rsa` / `*.sql` /
+      `credentials` — what secrets exist), parsed from the binary DIRC format,
+    - a **bounded loose-object walk** (`objects/xx/…`, zlib-inflate → commit → tree →
+      blob) running the secret scanner over each blob and commit message.
+
+    Packed history (`objects/pack/*.pack`, delta-compressed) is **detected and
+    reported**, not parsed — run git-dumper / delegate to Strix for a full clone.
+    Secrets are redacted; treat each as a lead (confirm it's live/not rotated).
+    `max_objects` caps the walk (default 60). In scope only.
+    """
+
+    host, port = _split_host_port(target, 443)
+    raw = target.strip()
+    scheme = "http" if raw.startswith("http://") else "https"
+    base = raw if "://" in raw else f"{scheme}://{host}"
+    ctx = get_context()
+    result, hits = await gitdumpmod.git_forensics(
+        ctx.http, base, scope_check=_scope_check(),
+        max_objects=max(1, min(max_objects, 300)))
+    # Fold the scanner's redacted hits (blobs/config/reflog/messages) into the report.
+    for h in hits:
+        result.secrets.append({"type": h.type, "source": h.source,
+                               "redacted": h.redacted, "fp_risk": h.fp_risk})
     return to_dict(result)
 
 

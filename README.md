@@ -44,7 +44,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **156 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **157 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -108,6 +108,7 @@ MoonMCP exposes **156 tools**, **11 resources** and **9 operator prompts**, grou
 | `open_redirect` | Inject a canary into common redirect params (url, next, returnTo, …) — Location / meta / JS. |
 | `trace_redirects` | Follow a URL's **redirect chain** hop by hop and flag offsite / `https→http` downgrade / leaves-scope / loop / meta-refresh / JS redirect (OAuth `redirect_uri`, SSRF-via-redirect). |
 | `vcs_exposure` | Confirm exposed `.git`/`.svn`/`.env`/`.DS_Store` by content signature; extract git remote + commit log. |
+| `git_forensics` | **Git-history forensics** on an exposed `.git` (the deep follow-up to `vcs_exposure`) — reconstructs history from what the server serves (read-only) and mines it: `.git/config` remote **credentials**, `.git/logs/HEAD` reflog (SHAs + author emails + messages), `.git/index` **tracked file list** (flags `.env`/`id_rsa`/`*.sql`), and a bounded **loose-object walk** (commit→tree→blob) running the secret scanner over history. Packed history is detected + flagged for git-dumper/Strix. Secrets redacted. |
 | `screenshot` | Render a page to PNG via Playwright+Chromium **when installed** (else a graceful note). |
 | `browser_open` | Drive a **headless browser**: render a JS-heavy SPA and return the post-JS text/HTML, the **console log**, the **network requests** the page made, and page errors — endpoint/secret discovery a raw fetch can't see. Uses `auth_set`. |
 | `browser_eval` | Run JavaScript in the page (the **browser console**) and return the result + console log — inspect the live DOM, read `window`/JS state, extract SPA-rendered data. |
