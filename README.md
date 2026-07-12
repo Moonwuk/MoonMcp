@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **158 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **159 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -177,6 +177,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `confirm_finding` | **Prove a lead before reporting it:** baseline vs test request → weighs **reflection**, status/length/timing diff, **injection signatures**, and an **out-of-band callback** (OAST) into a verdict (`confirmed` / `likely` / `inconclusive` / `unconfirmed`). Optionally records a confirmed hit. |
 | `ssti_probe` | **SSTI** detector — arithmetic markers per engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor); reports which engine *evaluated* the expression. Intrusive. |
 | `sqli_probe` | **SQLi** detector — error signatures + a reproducible boolean pair, plus opt-in lanes: `context` (ORDER BY / LIMIT), `oob` (per-DBMS OAST), `time_based` (monotonic-guarded), `waf_bypass` (JSON-operator), `multibyte` (Shift-JIS/EUC-KR/GBK), and header/cookie placement. Reports the DBMS; no data extraction (→ sqlmap). Intrusive. |
+| `cmdi_probe` | **Blind OS command injection** detector — a small, non-combinatorial set of shell separators (`;` `\|` `&&` `&` backtick `$()`), each carrying only a side-channel payload (`sleep N`, confirmed by the same monotonic-timing check as `sqli_probe`'s `time_based` lane; or an **OAST** callback). Never sends an output-eliciting payload (`id`, `cat /etc/passwd`, `dir`) — command output is never displayed (→ Strix). Intrusive. |
 | `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
 | `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |

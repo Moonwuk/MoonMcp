@@ -4326,6 +4326,94 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
 
 @mcp.tool()
 @active_tool(intrusive=True)
+async def cmdi_probe(target: str, param: str, method: str = "GET",
+                     time_based: bool = True, delay_s: float = 3.0,
+                     oob: bool = False, oast_token: str | None = None,
+                     wait: float = 3.0) -> dict:
+    """**Blind OS command injection** probe — non-destructive. Injects a small,
+    non-combinatorial set of shell separators (`;` `|` `&&` `&` backtick `` ` `` `$()`)
+    carrying ONLY a side-channel payload — never a command whose output is displayed
+    (no `id`, `cat /etc/passwd`, `dir`). Two lanes: `time_based` (default on) — each
+    separator + `sleep N`, confirmed only when the delay is proportional to `delay_s`
+    (the same monotonic-timing check `sqli_probe`'s time-based lane uses, ruling out a
+    uniformly-slow endpoint or jitter); `oob` — each separator + `curl <canary>`,
+    confirmed by an **OAST** DNS/HTTP callback (start `oast_selfhost` first, or pass an
+    `oast_token` from `oast_generate`). Success is proven by timing or a callback
+    ONLY — command output is never displayed or exfiltrated (a reverse shell or
+    reading file/output content is weaponization → Strix). Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+
+    async def _get(value: str):
+        u, b = _with_param(url, param, value, m)
+        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False,
+                                    scope_check=_scope_check())
+
+    lanes: dict[str, Any] = {}
+    extra_hits: list[str] = []
+    timing_ms = 0.0
+
+    if time_based:
+        req = max(0.0, min(delay_s, 10.0))
+        zero_payloads = probesmod.cmdi_time_payloads(0)
+        delay_payloads = probesmod.cmdi_time_payloads(req)
+        loop = asyncio.get_event_loop()
+        tb: list[dict] = []
+        for (sep, zp), (_s, dp) in zip(zero_payloads, delay_payloads, strict=True):
+            s0 = loop.time()
+            await _get(zp)
+            z_s = loop.time() - s0
+            s1 = loop.time()
+            await _get(dp)
+            d_s = loop.time() - s1
+            hit = probesmod.assess_timing(z_s, d_s, req)
+            if hit:
+                tb.append({"separator": sep, **hit})
+        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        if tb:
+            extra_hits.append("cmdi/time-based")
+            timing_ms = max(h["delta_s"] for h in tb) * 1000
+
+    oast_count = 0
+    if oob:
+        cb = ctx.oast.get(oast_token) if oast_token else None
+        if cb is None and ctx.oast.configured:
+            cb = ctx.oast.generate(label="cmdi_oob")
+        if cb is None:
+            lanes["oob"] = {"error": "oast_unconfigured",
+                            "detail": "start oast_selfhost or oast_configure before an OOB cmdi probe"}
+        else:
+            for _sep, pl in probesmod.cmdi_oob_payloads(cb.http_url):
+                await _get(pl)
+            await asyncio.sleep(max(0.0, min(wait, 8.0)))
+            if ctx.oast_server is not None and ctx.oast_server.running:
+                oh = ctx.oast_server.interactions(cb.token)
+            else:
+                poll = ctx.oast.poll_target(cb.token)
+                oh = []
+                if poll:
+                    try:
+                        r = await ctx.http.fetch(poll, follow_redirects=True)
+                        oh = oastmod.parse_interactions(r.text())
+                    except Exception:
+                        oh = []
+            oast_count = len(oh)
+            lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
+                            "interaction_count": oast_count, "interactions": oh[:20]}
+            if oh:
+                extra_hits.append("cmdi/oob-callback")
+
+    verdict = confirmmod.evaluate(injection_hits=extra_hits, oast_count=oast_count,
+                                  timing_delta_ms=timing_ms)
+    return {"target": url, "param": param, **verdict, "lanes": lanes}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
 async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     """**NoSQL (MongoDB) operator-injection** probe — non-destructive. Sends an
     *object* where the app expects a *string* — `$ne`/`$gt`/`$nin` in both the

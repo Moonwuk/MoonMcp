@@ -6,6 +6,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Blind OS command injection (`cmdi_probe`).** Detection-only, ported from Burp's
+  command-injection extension techniques: a small, non-combinatorial set of shell
+  separators (`;` `|` `&&` `&` backtick `$()`) each carrying only a side-channel
+  payload — `sleep N`, confirmed by the same monotonic-timing check `sqli_probe`'s
+  `time_based` lane uses (rules out network jitter / a uniformly-slow endpoint), or
+  an **OAST** DNS/HTTP callback. Deliberately never sends an output-eliciting
+  payload (`id`, `cat /etc/passwd`, `dir`) — success is proven by timing or a
+  callback only, command output is never displayed or exfiltrated; weaponisation
+  (reverse shell, output read) is delegated to Strix. `moonmcp/web/probes.py`.
 - **Deep GraphQL probing (`graphql_probe`).** The GraphQL classes that pay out even
   when introspection is disabled, past `graphql_check`'s introspection test: **batch
   abuse** (an array of operations honoured in one request → a rate-limit/brute-force

