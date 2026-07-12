@@ -6,6 +6,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **JWT algorithm-confusion forgery (`jwt_alg_confusion`).** Detection-only, gap #2/8
+  from the Burp technique research pass: re-signs a captured RS256/ES256 token as
+  HS256/384/512 using the **public key's exact PEM text** as the HMAC secret — the
+  classic "verifier doesn't pin the algorithm family" bug, the highest-impact JWT
+  attack after `alg:none`. Preserves the original header's `kid` (and other fields)
+  so a key-by-`kid` lookup still resolves; only `alg` flips. No RSA/EC keygen
+  needed — just the public key text, often already in hand via `oauth_probe`'s
+  `jwks_uri`. Purely offline — never auto-replays the forged token; the caller
+  confirms it themselves (or via `http_repeater`). `moonmcp/web/jwt.py`.
 - **Blind OS command injection (`cmdi_probe`).** Detection-only, ported from Burp's
   command-injection extension techniques: a small, non-combinatorial set of shell
   separators (`;` `|` `&&` `&` backtick `$()`) each carrying only a side-channel

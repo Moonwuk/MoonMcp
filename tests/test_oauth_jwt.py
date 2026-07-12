@@ -59,6 +59,67 @@ async def test_jwt_crack_tool(local_server, fresh_context):
     assert res["alg_none_forgery"].endswith(".")
 
 
+# -- JWT alg-confusion forgery (RS256 -> HS256 using the public key as secret) ----
+_PUB_KEY = ("-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKC\n"
+           "-----END PUBLIC KEY-----\n")
+
+
+def _make_rs_token(payload: dict, kid: str | None = None) -> str:
+    header = {"alg": "RS256", "typ": "JWT"}
+    if kid:
+        header["kid"] = kid
+    h = _b64(json.dumps(header, separators=(",", ":")).encode())
+    p = _b64(json.dumps(payload, separators=(",", ":")).encode())
+    return f"{h}.{p}.fake-rsa-signature-not-verified-here"
+
+
+def test_forge_alg_confusion_flips_alg_and_signs_with_public_key():
+    token = _make_rs_token({"sub": "victim", "admin": False})
+    forged = jwtmod.forge_alg_confusion(token, _PUB_KEY)
+    a = jwtmod.analyze_jwt(forged)
+    assert a.algorithm == "HS256"
+    assert a.payload == {"sub": "victim", "admin": False}
+    # the forged signature must verify under the public-key-as-HMAC-secret
+    h_seg, p_seg, sig = forged.split(".")
+    expected = _b64(hmac.new(_PUB_KEY.encode(), f"{h_seg}.{p_seg}".encode(), hashlib.sha256).digest())
+    assert sig == expected
+
+
+def test_forge_alg_confusion_preserves_kid():
+    token = _make_rs_token({"sub": "1"}, kid="key-42")
+    forged = jwtmod.forge_alg_confusion(token, _PUB_KEY)
+    header = json.loads(base64.urlsafe_b64decode(forged.split(".")[0] + "=="))
+    assert header["kid"] == "key-42" and header["alg"] == "HS256"
+
+
+def test_forge_alg_confusion_supports_hs384_512():
+    token = _make_rs_token({"sub": "1"})
+    forged = jwtmod.forge_alg_confusion(token, _PUB_KEY, alg="HS512")
+    assert jwtmod.analyze_jwt(forged).algorithm == "HS512"
+
+
+def test_forge_alg_confusion_rejects_bad_alg_and_bad_token():
+    with pytest.raises(ValueError, match="unsupported"):
+        jwtmod.forge_alg_confusion(_make_rs_token({}), _PUB_KEY, alg="RS256")
+    with pytest.raises(ValueError, match="not a JWT"):
+        jwtmod.forge_alg_confusion("not-a-jwt", _PUB_KEY)
+
+
+@pytest.mark.asyncio
+async def test_jwt_alg_confusion_tool(fresh_context):
+    token = _make_rs_token({"sub": "victim", "role": "user"})
+    res = await srv.jwt_alg_confusion(token=token, public_key_pem=_PUB_KEY)
+    assert res["algorithm"] == "HS256" and "forged_token" in res
+    a = jwtmod.analyze_jwt(res["forged_token"])
+    assert a.payload == {"sub": "victim", "role": "user"}
+
+
+@pytest.mark.asyncio
+async def test_jwt_alg_confusion_tool_bad_token_reports_error(fresh_context):
+    res = await srv.jwt_alg_confusion(token="garbage", public_key_pem=_PUB_KEY)
+    assert res["error"] == "invalid_input"
+
+
 # -- OIDC discovery analyser -------------------------------------------------
 _WEAK_OIDC = {
     "issuer": "http://idp.example.com",
