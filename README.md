@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **165 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -185,6 +185,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
 | `xxe_probe` | **Blind XXE** detector — two lanes: `format_confusion` rewrites a JSON/form body into equivalent XML and resends it under the original Content-Type (tests whether a "JSON-only" endpoint parses XML anyway); `oob` injects a `<!DOCTYPE>` external entity pointing at an **OAST** canary and polls for a callback — never reads file contents. Intrusive. |
 | `interp_probe` | **Generic differential "interpretation" prober** (Backslash Powered Scanner-style) — a meta-probe, not a class-specific one: sends five small markers (backslash/escape, quote/string-context, NUL-byte truncation, `/./` path normalization, bare `{}` template tokens) and checks whether each is echoed literally or transformed. Requires **two or more independent markers** to agree before calling anything more than a weak signal. Never asserts a vulnerability class — `suggested_next` names which class-specific probe (`sqli_probe`, `cmdi_probe`, `lfi_probe`, `ssti_probe`, `parser_diff_probe`, …) to run next. Intrusive. |
+| `saml_xsw_probe` | **SAML XML Signature Wrapping (XSW)** probe — give it a captured, legitimately-signed SAMLResponse + the SP's ACS URL; clones the signed assertion, strips the clone's signature, forges its identity, and splices it in via three representative topologies (`sibling_before`/`sibling_after`/`wrap_extension` — first-wins / last-wins / direct-children-only assertion selection). The original signature is never touched — `reflected_forged_identity` (the forged identity showing up in a variant's response but neither baseline's) is the strong, replay-noise-independent confirmation signal. Intrusive. |
 | `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 
