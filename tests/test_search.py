@@ -20,6 +20,27 @@ _DDG_SAMPLE = """
 """
 
 
+_LITE_SAMPLE = """
+<table>
+<tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa"
+   class='result-link'>Alpha Result</a></td></tr>
+<tr><td class='result-snippet'>Snippet for alpha.</td></tr>
+<tr><td><a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fb"
+   class='result-link'>Beta Result</a></td></tr>
+<tr><td class='result-snippet'>Snippet for beta.</td></tr>
+</table>
+"""
+
+_BING_SAMPLE = """
+<ol id="b_results">
+<li class="b_algo"><h2><a href="https://example.com/one">First &amp; Best</a></h2>
+  <div><p class="b_lineclamp2">Bing snippet one.</p></div></li>
+<li class="b_algo"><h2><a href="https://example.com/two">Second</a></h2>
+  <p>Bing snippet two.</p></li>
+</ol>
+"""
+
+
 def test_parse_ddg_html():
     results = searchmod.parse_ddg_html(_DDG_SAMPLE)
     assert len(results) == 2
@@ -27,6 +48,32 @@ def test_parse_ddg_html():
     assert results[0]["url"] == "https://example.com/admin"  # uddg decoded
     assert "admin panel" in results[0]["snippet"].lower()
     assert results[1]["url"] == "https://docs.example.com/"
+
+
+def test_parse_ddg_lite():
+    results = searchmod.parse_ddg_lite(_LITE_SAMPLE)
+    assert len(results) == 2
+    assert results[0]["title"] == "Alpha Result"
+    assert results[0]["url"] == "https://example.com/a"      # uddg decoded
+    assert "alpha" in results[0]["snippet"].lower()
+
+
+def test_parse_bing():
+    results = searchmod.parse_bing(_BING_SAMPLE)
+    assert len(results) == 2
+    assert results[0]["title"] == "First & Best"            # entity-decoded
+    assert results[0]["url"] == "https://example.com/one"   # direct href
+    assert "snippet one" in results[0]["snippet"].lower()
+    assert results[1]["url"] == "https://example.com/two"
+
+
+def test_dedup_drops_repeat_urls():
+    deduped = searchmod._dedup([
+        {"url": "https://example.com/x", "title": "a"},
+        {"url": "https://example.com/x/", "title": "b"},   # trailing slash = same
+        {"url": "https://example.com/y", "title": "c"},
+    ])
+    assert [d["title"] for d in deduped] == ["a", "c"]
 
 
 def test_generate_dorks_all_and_category():
@@ -55,3 +102,19 @@ async def test_web_search_handles_blocked_network(fresh_context):
     res = await srv.web_search(query="site:example.com admin")
     assert res["query"] == "site:example.com admin"
     assert isinstance(res.get("results"), list)
+    # Network-agnostic: if no engine returned results (e.g. blocked sandbox), it must
+    # have tried them all before giving up. If the network is up and an engine answered
+    # (as on CI runners), `engines_tried` is absent — that's success, not a failure.
+    if not res["results"]:
+        assert set(res.get("engines_tried", [])) >= {"duckduckgo", "bing"}
+
+
+@pytest.mark.asyncio
+async def test_web_search_site_filter_scopes_query(fresh_context):
+    # The site= filter prepends site:<domain>; the reflected query proves it even
+    # when the network is blocked and no results come back.
+    res = await srv.web_search(query="admin panel", site="example.com")
+    assert res["query"].startswith("site:example.com ")
+    # already-present site: isn't doubled
+    res2 = await srv.web_search(query="site:example.com login", site="example.com")
+    assert res2["query"].count("site:example.com") == 1

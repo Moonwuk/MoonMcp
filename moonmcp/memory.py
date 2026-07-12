@@ -30,6 +30,10 @@ import threading
 
 TRUST = ("untrusted", "curated")
 PROVENANCE = ("extracted", "inferred", "manual")
+# Entity kinds for the structured knowledge graph (see add_entity / graph).
+ENTITY_KINDS = ("host", "endpoint", "param", "technology", "service", "cve", "credential", "asset")
+# Relation verbs connecting two graph nodes (entities or `finding:<memory_id>`).
+RELATIONS = ("affects", "on", "uses", "exposes", "caused_by", "related_to", "confirms", "hosts")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory (
@@ -49,6 +53,33 @@ CREATE TABLE IF NOT EXISTS memory (
 CREATE INDEX IF NOT EXISTS idx_memory_target ON memory(target);
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
 CREATE INDEX IF NOT EXISTS idx_memory_trust ON memory(trust);
+
+-- Structured knowledge graph: typed entities + typed relations, so findings are
+-- more than flat notes — a host has endpoints, an endpoint has params, a finding
+-- AFFECTS a host, a vuln is CAUSED_BY a root cause, etc.
+CREATE TABLE IF NOT EXISTS entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    target TEXT,
+    attrs TEXT NOT NULL DEFAULT '',
+    trust TEXT NOT NULL DEFAULT 'untrusted',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_entities_target ON entities(target);
+CREATE INDEX IF NOT EXISTS idx_entities_kind ON entities(kind);
+
+CREATE TABLE IF NOT EXISTS relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    src TEXT NOT NULL,
+    rel TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    target TEXT,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target);
+CREATE INDEX IF NOT EXISTS idx_relations_src ON relations(src);
+CREATE INDEX IF NOT EXISTS idx_relations_dst ON relations(dst);
 """
 
 
@@ -233,6 +264,115 @@ class MemoryStore:
                 "SELECT trust, COUNT(*) FROM memory GROUP BY trust").fetchall()}
         return {"total": total, "fts": self._fts, "db": self.db_path,
                 "by_kind": by_kind, "by_trust": by_trust}
+
+    # -- knowledge graph ---------------------------------------------------
+    def add_entity(self, *, kind: str, name: str, target: str | None = None,
+                   attrs: str = "", trust: str = "untrusted") -> int:
+        """Upsert a typed graph entity (host / endpoint / param / technology / …).
+        Dedups on (kind, name, target) case-insensitively; merges attrs and never
+        downgrades curated trust. Returns the entity id (0 for a blank name)."""
+
+        k = (kind or "").strip().lower() or "asset"
+        nm = (name or "").strip()
+        if not nm:
+            return 0
+        with self._lock:
+            row = self._db.execute(
+                "SELECT id FROM entities WHERE kind=? AND lower(name)=? "
+                "AND lower(COALESCE(target,''))=? ORDER BY id LIMIT 1",
+                (k, nm.lower(), (target or "").lower())).fetchone()
+            if row is not None:
+                eid = int(row["id"])
+                self._db.execute(
+                    "UPDATE entities SET attrs=CASE WHEN ?<>'' THEN ? ELSE attrs END, "
+                    "trust=CASE WHEN trust='curated' THEN 'curated' ELSE ? END WHERE id=?",
+                    (str(attrs), str(attrs), _norm_trust(trust), eid))
+                self._db.commit()
+                return eid
+            cur = self._db.execute(
+                "INSERT INTO entities(kind,name,target,attrs,trust,created_at) VALUES(?,?,?,?,?,?)",
+                (k, nm, target, str(attrs), _norm_trust(trust), ""))
+            self._db.commit()
+            return int(cur.lastrowid or 0)
+
+    def add_relation(self, src: str, rel: str, dst: str, *, target: str | None = None) -> int:
+        """Add a typed edge between two nodes (an entity key ``kind:name`` or a
+        ``finding:<memory_id>``). Dedups on (src, rel, dst, target)."""
+
+        s, r, d = (src or "").strip(), (rel or "").strip().lower(), (dst or "").strip()
+        if not (s and r and d):
+            return 0
+        with self._lock:
+            row = self._db.execute(
+                "SELECT id FROM relations WHERE src=? AND rel=? AND dst=? "
+                "AND lower(COALESCE(target,''))=? LIMIT 1",
+                (s, r, d, (target or "").lower())).fetchone()
+            if row is not None:
+                return int(row["id"])
+            cur = self._db.execute(
+                "INSERT INTO relations(src,rel,dst,target,created_at) VALUES(?,?,?,?,?)",
+                (s, r, d, target, ""))
+            self._db.commit()
+            return int(cur.lastrowid or 0)
+
+    def entities(self, *, target: str | None = None, kind: str | None = None,
+                 limit: int = 200) -> list[dict]:
+        limit = max(1, min(limit, 1000))
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM entities ORDER BY id DESC LIMIT ?", (limit * 4,)).fetchall()
+        out = []
+        for row in rows:
+            e = dict(row)
+            if target and (e.get("target") or "").lower() != target.lower():
+                continue
+            if kind and e["kind"] != kind.strip().lower():
+                continue
+            out.append(e)
+        return out[:limit]
+
+    def graph(self, target: str | None = None, *, limit: int = 500) -> dict:
+        """The entity + relation subgraph for *target* (everything if None)."""
+
+        ents = self.entities(target=target, limit=limit)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM relations ORDER BY id DESC LIMIT ?", (limit * 4,)).fetchall()
+        rels = []
+        for row in rows:
+            d = dict(row)
+            if target and (d.get("target") or "").lower() != target.lower():
+                continue
+            rels.append({"src": d["src"], "rel": d["rel"], "dst": d["dst"]})
+        return {"target": target, "entities": ents, "relations": rels[:limit]}
+
+    def brief(self, target: str) -> dict:
+        """One-shot *what we know about TARGET*: entities grouped by kind, confirmed
+        findings, open leads, cross-target lessons, and the relation count. ``target``
+        should be a host — graph nodes are host-keyed, while memory items (recorded
+        under a full URL) are matched by host substring so both surface."""
+
+        host = (target or "").strip().lower()
+        g = self.graph(host)
+        by_kind: dict[str, list[str]] = {}
+        for e in g["entities"]:
+            by_kind.setdefault(e["kind"], []).append(e["name"])
+        pool = self.search("", limit=400)
+        items = [i for i in pool if host and host in (i.get("target") or "").lower()] if host else pool
+        findings = [i for i in items if i["kind"] in ("finding", "vuln")]
+        leads = [i for i in items if i["kind"] in ("lead", "observation")]
+        lessons = self.search("", kind="lesson", limit=50)
+        return {
+            "target": target,
+            "entities": {k: sorted(set(v)) for k, v in by_kind.items()},
+            "findings": [{"title": f["title"], "severity": f.get("severity"), "trust": f["trust"]}
+                         for f in findings[:50]],
+            "leads": [x["title"] for x in leads[:50]],
+            "lessons": [{"title": x["title"], "body": x["body"][:200]} for x in lessons[:20]],
+            "relation_count": len(g["relations"]),
+            "counts": {"entities": len(g["entities"]), "findings": len(findings),
+                       "leads": len(leads)},
+        }
 
     def close(self) -> None:
         try:
