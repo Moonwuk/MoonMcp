@@ -470,6 +470,33 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html>ok</html>")
             return
+        if self.path.startswith("/interp-vuln"):
+            # VULNERABLE (highly interpretive): simulates escape/quote stripping,
+            # NUL-byte truncation, path-segment collapsing, and template-brace
+            # stripping, so every marker independently shows "interpreted" -- a
+            # synthetic worst case, not a claim any single real backend does all 5.
+            from urllib.parse import parse_qs, urlparse
+            v = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            if v.endswith("\\") or v.endswith("'"):
+                v = v[:-1]
+            if "\x00" in v:
+                v = v.split("\x00", 1)[0]
+            v = v.replace("/./", "/").replace("{}", "")
+            body = ("<html>" + v + "</html>").encode("utf-8", "replace")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/interp-safe"):
+            # SAFE (opaque storage): echoes the value byte-for-byte -- no
+            # interpretation of any marker.
+            from urllib.parse import parse_qs, urlparse
+            v = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            body = ("<html>" + v + "</html>").encode("utf-8", "replace")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/sqli-mb"):
             # VULNERABLE charset mismatch: a multibyte lead byte + quote breaks out
             # of the (naive addslashes) escaping, so it errors where plain %27 doesn't.

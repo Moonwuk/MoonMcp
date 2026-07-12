@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **164 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **165 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -184,6 +184,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `lfi_probe` | **Path traversal / LFI** content-disclosure — depth-escalating `../` (x1/3/6/8), null-byte, double-URL-encoded, and Windows-style variants, confirmed by a genuine **file-content signature** (`root:x:0:0:`, win.ini markers) in the response — proof the traversal reached the filesystem, not just that a WAF let the payload shape through. Reads only universally-present, non-sensitive files. Intrusive. |
 | `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
 | `xxe_probe` | **Blind XXE** detector — two lanes: `format_confusion` rewrites a JSON/form body into equivalent XML and resends it under the original Content-Type (tests whether a "JSON-only" endpoint parses XML anyway); `oob` injects a `<!DOCTYPE>` external entity pointing at an **OAST** canary and polls for a callback — never reads file contents. Intrusive. |
+| `interp_probe` | **Generic differential "interpretation" prober** (Backslash Powered Scanner-style) — a meta-probe, not a class-specific one: sends five small markers (backslash/escape, quote/string-context, NUL-byte truncation, `/./` path normalization, bare `{}` template tokens) and checks whether each is echoed literally or transformed. Requires **two or more independent markers** to agree before calling anything more than a weak signal. Never asserts a vulnerability class — `suggested_next` names which class-specific probe (`sqli_probe`, `cmdi_probe`, `lfi_probe`, `ssti_probe`, `parser_diff_probe`, …) to run next. Intrusive. |
 | `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 

@@ -101,6 +101,7 @@ from .web import graphql as graphqlmod
 from .web import graphqldeep as gqldeepmod
 from .web import graphqli as gqlimod
 from .web import inject as injectmod
+from .web import interp as interpmod
 from .web import jwt as jwtmod
 from .web import logic as logicmod
 from .web import methods as methodsmod
@@ -4535,6 +4536,49 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
         reflected=bool(findings))
     return {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
            **verdict, "findings": findings}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def interp_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Generic differential "interpretation" prober** (Backslash Powered
+    Scanner-style) — a meta-probe, not a class-specific one. Sends five small,
+    distinctive markers into `param` — each revealing ONE kind of character-level
+    processing (backslash/escape handling, quote/string-context handling,
+    NUL-byte truncation, `/./` path-segment normalization, bare `{}`
+    template/structural-token handling) — and checks whether each was echoed
+    literally or transformed. **Two or more independent markers agreeing** is the
+    corroboration bar before this calls anything more than a weak signal (a
+    single marker could be an unrelated WAF/encoder quirk). Never asserts a
+    specific vulnerability class — `suggested_next` points at which
+    class-specific probe (`sqli_probe`, `cmdi_probe`, `lfi_probe`, `ssti_probe`,
+    `parser_diff_probe`, ...) to run given which markers fired. Intrusive; in
+    scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    sc = _scope_check()
+    control = f"mcp{secrets.token_hex(4)}"
+
+    hits: list[dict] = []
+    for name, template, _tools, description in interpmod.MARKERS:
+        value = interpmod.build_probe(control, template)
+        u, b = _with_param(url, param, value, m)
+        r = await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
+        body = r.text(50_000) if r.status is not None else ""
+        assessed = interpmod.assess_marker(control, template, body)
+        hits.append({"marker": name, "description": description, **assessed})
+
+    return {
+        "target": url, "param": param, "control": control,
+        "verdict": interpmod.verdict(hits),
+        "corroborating_markers": sum(1 for h in hits if h["interpreted"]),
+        "markers": hits,
+        "suggested_next": interpmod.suggest_next(hits),
+    }
 
 
 @mcp.tool()

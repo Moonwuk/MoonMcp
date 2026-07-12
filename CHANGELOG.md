@@ -6,6 +6,24 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Generic differential "interpretation" prober (`interp_probe`, Backslash
+  Powered Scanner-style).** Detection-only, gap #7/8 from the Burp technique
+  research pass — a meta-probe, not a class-specific one. Most injection
+  probes look for a KNOWN signature of a KNOWN vulnerability class; this one
+  asks a more basic question first: is this parameter's value being
+  *parsed/interpreted* at all, or just stored/echoed as an opaque blob? Sends
+  five small, distinctive markers — each built to reveal ONE kind of
+  character-level processing (backslash/escape handling, quote/string-context
+  handling, NUL-byte truncation, `/./` path-segment normalization, bare `{}`
+  template/structural-token handling) — and checks whether each was echoed
+  literally or transformed. A single marker firing is a coin-flip (a WAF or
+  encoder could incidentally strip one character class); **two or more
+  independent markers agreeing** is the corroboration bar before this calls
+  anything more than a "weak" signal, mirroring `ssti_probe`'s multi-engine
+  downgrade discipline. Never asserts a specific vulnerability class —
+  `suggested_next` points at which class-specific probe (`sqli_probe`,
+  `cmdi_probe`, `lfi_probe`, `ssti_probe`, `parser_diff_probe`, ...) to run
+  given which markers fired. `moonmcp/web/interp.py`.
 - **Known-vulnerable JS library detector (`js_library_scan`, Retire.js-lite).**
   Detection-only, gap #6/8 from the Burp technique research pass: matches script
   URLs/filenames (and, best-effort, an in-body version banner) already surfaced by
