@@ -60,7 +60,7 @@ lightest tool that answers the question, and escalate noise only with consent.
 | **Pick up a target** (first contact) | `memory_brief` → `server_status` → `recon_target` (one-shot passive+light sweep) |
 | **Find assets/leaks on the web** (no packets to target) | `web_search` (multi-engine; `site=` to scope) → `web_read(url)` for full text; `search_dorks`; `enumerate_subdomains`, `wayback_urls`, `host_intel`/`ip_intel`, `cve_search` — see the `web-research` skill |
 | **Headers / TLS / tech** | `analyze_headers`, `tls_inspect`, `fingerprint`, `well_known`, `favicon_hash`, `jarm_fingerprint`, `dns_lookup` |
-| **Map endpoints & params** | `crawl`, `analyze_js` (endpoints + source maps), `parse_openapi`, `discover_parameters` |
+| **Map endpoints & params** | `crawl`, `analyze_js` (endpoints + source maps) → **`js_library_scan`** (known-vulnerable jQuery/AngularJS/Lodash/Moment/Handlebars/Bootstrap versions), `parse_openapi`, `discover_parameters` |
 | **Secrets / VCS exposure** | `extract_secrets`, `analyze_config`; exposed `.git`? `vcs_exposure` → **`git_forensics`** (history: config creds, reflog emails, tracked-file list, loose-object secret walk — stable Critical) |
 | **CORS / redirects / takeover** | `cors_audit`, `open_redirect` + `trace_redirects`, `crlf_probe`, `takeover_check` |
 | **GraphQL** | `graphql_check` (introspection) → **`graphql_probe`** (batch abuse → rate-limit bypass; field-suggestion schema recovery with introspection OFF; nested-BOLA lead) → `graphql_nosqli` (operator-object variable → Mongo) |

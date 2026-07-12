@@ -75,6 +75,7 @@ from .recon import gitdump as gitdumpmod
 from .recon import headers as headersmod
 from .recon import infra as inframod
 from .recon import jsendpoints as jsmod
+from .recon import jslibs as jslibsmod
 from .recon import openapi as openapimod
 from .recon import origin as originmod
 from .recon import secrets as secretsmod
@@ -1162,6 +1163,26 @@ async def analyze_js(target: str, max_scripts: int = 15) -> dict:
     ctx = get_context()
     return await jsmod.analyze(ctx.http, url, max_scripts=max(1, min(max_scripts, 40)),
                                scope_check=_scope_check())
+
+
+@mcp.tool()
+@safe_tool
+async def js_library_scan(sources: list[str]) -> dict:
+    """**Known-vulnerable JS library detector** (Retire.js-lite) — matches script
+    URLs/filenames (and, best-effort, an in-body version banner) already surfaced
+    by `analyze_js`/`crawl` against a small bundled table of historically-
+    vulnerable library versions: jQuery <3.5.0 (DOM XSS via `.html()`), AngularJS
+    <1.8.0 (CSP/expression-sandbox bypass → XSS), Lodash <4.17.21 (prototype
+    pollution), Moment.js <2.29.2 (ReDoS), Handlebars <4.5.3 (prototype-pollution
+    RCE gadget), Bootstrap <4.1.2 (tooltip/popover XSS). Pure regex + version
+    comparison — no content-hash database (a deliberate zero-dependency trade
+    against Retire.js's fuller but harder-to-maintain coverage). Pass the `.url`
+    values from `analyze_js`'s `scripts_analysed` (or any script src/JS snippet you
+    have) as `sources`. No traffic, no scope needed — scans data you already fetched.
+    """
+
+    hits = jslibsmod.scan_all(sources)
+    return {"scanned": len(sources), "count": len(hits), "findings": hits}
 
 
 @mcp.tool()

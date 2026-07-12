@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **163 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **164 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -97,6 +97,7 @@ MoonMCP exposes **163 tools**, **11 resources** and **9 operator prompts**, grou
 | --- | --- |
 | `crawl` | Bounded depth-1 crawl → internal links, forms+inputs, JS/asset URLs, parameters, external hosts, emails. |
 | `analyze_js` | Deep-extract the hidden API surface from a page **and its JavaScript** (LinkFinder-style) — absolute/relative endpoints a UI crawl misses, plus source maps (`.map`). |
+| `js_library_scan` | **Known-vulnerable JS library detector** (Retire.js-lite) — matches script URLs/filenames/version banners already surfaced by `analyze_js`/`crawl` against a small bundled table (jQuery <3.5.0 DOM XSS, AngularJS <1.8.0 sandbox bypass, Lodash <4.17.21 prototype pollution, Moment.js <2.29.2 ReDoS, Handlebars <4.5.3 prototype-pollution RCE gadget, Bootstrap <4.1.2 tooltip XSS). No traffic, offline. |
 | `parse_openapi` | Parse an OpenAPI/Swagger spec (URL or pasted) → full endpoint/param/method inventory, servers, security schemes, and flags (operations with **no** security). |
 | `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
 | `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |

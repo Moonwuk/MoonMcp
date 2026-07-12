@@ -6,6 +6,17 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Known-vulnerable JS library detector (`js_library_scan`, Retire.js-lite).**
+  Detection-only, gap #6/8 from the Burp technique research pass: matches script
+  URLs/filenames (and, best-effort, an in-body version banner) already surfaced by
+  `analyze_js`/`crawl` against a small bundled table of historically-vulnerable
+  library versions — jQuery <3.5.0 (DOM XSS via `.html()`), AngularJS <1.8.0
+  (CSP/expression-sandbox bypass), Lodash <4.17.21 (prototype pollution),
+  Moment.js <2.29.2 (ReDoS), Handlebars <4.5.3 (prototype-pollution RCE gadget),
+  Bootstrap <4.1.2 (tooltip/popover XSS). Pure regex + version-tuple comparison —
+  no content-hash database to maintain (a deliberate zero-dependency trade
+  against Retire.js's fuller but harder-to-keep-current coverage).
+  `moonmcp/recon/jslibs.py`.
 - **Blind XXE detection (`xxe_probe`).** Detection-only, gap #5/8 from the Burp
   technique research pass — two lanes: **format confusion** rewrites a JSON or
   form-urlencoded body into an equivalent XML document (porting Content Type

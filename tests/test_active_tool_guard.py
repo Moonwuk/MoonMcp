@@ -23,7 +23,7 @@ PASSIVE = {
     "web_search", "web_read", "search_dorks", "cve_lookup", "cve_search",
     "dependency_confusion",
     "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze", "jwt_crack",
-    "jwt_alg_confusion", "deserialize_fingerprint",
+    "jwt_alg_confusion", "deserialize_fingerprint", "js_library_scan",
     # interception history (reads the in-memory log; no traffic)
     "http_history",
     # shared memory hub (local store; no traffic)
