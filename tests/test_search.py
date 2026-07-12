@@ -102,8 +102,11 @@ async def test_web_search_handles_blocked_network(fresh_context):
     res = await srv.web_search(query="site:example.com admin")
     assert res["query"] == "site:example.com admin"
     assert isinstance(res.get("results"), list)
-    # multi-engine: it must have tried every engine before giving up
-    assert set(res.get("engines_tried", [])) >= {"duckduckgo", "bing"}
+    # Network-agnostic: if no engine returned results (e.g. blocked sandbox), it must
+    # have tried them all before giving up. If the network is up and an engine answered
+    # (as on CI runners), `engines_tried` is absent — that's success, not a failure.
+    if not res["results"]:
+        assert set(res.get("engines_tried", [])) >= {"duckduckgo", "bing"}
 
 
 @pytest.mark.asyncio
