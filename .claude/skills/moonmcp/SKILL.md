@@ -79,7 +79,10 @@ Two ways, pick based on the user's situation:
 3. **Map the web app:** `crawl`, `analyze_js` (endpoints + source maps),
    `parse_openapi`, `discover_parameters`, `cors_audit`, `graphql_check`,
    `extract_secrets`, `trace_redirects`, `open_redirect`, `takeover_check`,
-   `vcs_exposure`. For JS-heavy SPAs use `browser_open` / `browser_eval` /
+   `vcs_exposure`. Found a `ws://`/`wss://` endpoint (in JS or the network tab)?
+   `ws_probe` it — confirms the WebSocket and runs the **CSWSH** (foreign-Origin)
+   check most scanners miss; `probe_message=true` (opt-in) adds a benign echo test.
+   For JS-heavy SPAs use `browser_open` / `browser_eval` /
    `browser_interact` (post-JS DOM, console, network) and `cspp_probe`
    (client-side prototype pollution via a URL `__proto__`/`constructor` path, tested
    in our own headless browser — safe, never mutates the target). For IDOR run

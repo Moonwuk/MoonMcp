@@ -258,7 +258,46 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
+    def _ws_upgrade(self, strict):
+        # Minimal RFC 6455 server side for the ws_probe tests. `strict` validates the
+        # Origin (rejects a foreign one → no CSWSH); the lenient endpoint accepts any
+        # Origin (CSWSH-vulnerable). Echoes one frame back if the client sends one.
+        from moonmcp.web import websocket as _ws
+        key = self.headers.get("Sec-WebSocket-Key")
+        upgrade = (self.headers.get("Upgrade") or "").lower()
+        origin = self.headers.get("Origin")
+        if "websocket" not in upgrade or not key:
+            self.send_response(400)
+            self.end_headers()
+            return
+        if strict and origin and not origin.startswith(("http://127.0.0.1", "https://127.0.0.1")):
+            self.send_response(403)  # foreign Origin refused
+            self.end_headers()
+            return
+        resp = ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                f"Connection: Upgrade\r\nSec-WebSocket-Accept: {_ws.accept_value(key)}\r\n\r\n")
+        self.wfile.write(resp.encode("latin-1"))
+        self.wfile.flush()
+        try:  # optional: echo one client frame back (unmasked), else EOF/timeout → return
+            self.connection.settimeout(2.0)
+            hdr = self.rfile.read(2)
+            if len(hdr) < 2:
+                return
+            ln = hdr[1] & 0x7F
+            masked = hdr[1] & 0x80
+            rest = self.rfile.read((4 if masked else 0) + ln)
+            _op, payload, _c = _ws.decode_frame(hdr + rest)
+            if payload:
+                self.wfile.write(bytes([0x81, len(payload)]) + payload)
+                self.wfile.flush()
+        except OSError:
+            return
+
     def do_GET(self):
+        if self.path == "/ws":
+            return self._ws_upgrade(strict=False)
+        if self.path == "/ws-strict":
+            return self._ws_upgrade(strict=True)
         if self.path == "/echo":
             # Echo the request headers back as JSON (used to verify auth context).
             import json as _json
