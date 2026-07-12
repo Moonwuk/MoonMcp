@@ -79,7 +79,9 @@ Two ways, pick based on the user's situation:
 3. **Map the web app:** `crawl`, `analyze_js` (endpoints + source maps),
    `parse_openapi`, `discover_parameters`, `cors_audit`, `graphql_check`,
    `extract_secrets`, `trace_redirects`, `open_redirect`, `takeover_check`,
-   `vcs_exposure`. Found a `ws://`/`wss://` endpoint (in JS or the network tab)?
+   `vcs_exposure` → if `.git` is exposed, `git_forensics` mines the **history**
+   (config creds, reflog emails, tracked-file list, loose-object secret walk) — a
+   stable Critical. Found a `ws://`/`wss://` endpoint (in JS or the network tab)?
    `ws_probe` it — confirms the WebSocket and runs the **CSWSH** (foreign-Origin)
    check most scanners miss; `probe_message=true` (opt-in) adds a benign echo test.
    For JS-heavy SPAs use `browser_open` / `browser_eval` /
@@ -100,7 +102,9 @@ Two ways, pick based on the user's situation:
      `nosqli_probe` (Mongo operator/`$where`), `orm_leak_probe` (Django/Prisma/Rails
      relational lookups), `second_order_sqli_probe` (write→read stored SQLi),
      `fastjson_oast_probe` (Java autoType, OAST). After `graphql_check`, run
-     `graphql_nosqli` (operator object as a GraphQL variable → Mongo/Mongoose filter).
+     `graphql_probe` (batch abuse → rate-limit bypass; field-suggestion schema
+     recovery even with introspection OFF; nested-BOLA lead) and `graphql_nosqli`
+     (operator object as a GraphQL variable → Mongo/Mongoose filter).
      `ssrf_protocol_probe` reaches internal datastores via gopher/dict. Cloud (safe GET, light-active):
      `firebase_exposure` (open RTDB), `supabase_exposure` (RLS-off anon read);
      `extract_secrets` / `analyze_config` classify managed-DB DSNs & tokens.

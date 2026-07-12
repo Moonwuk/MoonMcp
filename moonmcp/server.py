@@ -70,6 +70,7 @@ from .recon import depconf as depconfmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import firebase as firebasemod
+from .recon import gitdump as gitdumpmod
 from .recon import headers as headersmod
 from .recon import infra as inframod
 from .recon import jsendpoints as jsmod
@@ -95,6 +96,7 @@ from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
+from .web import graphqldeep as gqldeepmod
 from .web import graphqli as gqlimod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
@@ -1462,6 +1464,39 @@ async def graphql_check(target: str) -> dict:
 
 @mcp.tool()
 @active_tool()
+async def graphql_probe(target: str, endpoint: str | None = None, batch_n: int = 5) -> dict:
+    """**Deep GraphQL probing** — the classes that pay out even when introspection is
+    OFF. Locates the endpoint (or use `endpoint=` to target one directly), then tests:
+    **batch abuse** (an array of queries honoured in one request → rate-limit /
+    brute-force amplifier, the batched-login credential-stuffing primitive),
+    **field-suggestion schema recovery** (a typo'd field → *"Did you mean …?"* leaks
+    real names, recovering the schema without introspection), and **aliases** (many
+    operations per document). Nested-traversal **BOLA** is surfaced as a lead to
+    confirm with `access_control_check` / Strix. Detection-only — benign queries, small
+    batch, no mutations. Run `graphql_check` first for introspection. In scope only.
+    """
+
+    ctx = get_context()
+    if endpoint:
+        url = endpoint if "://" in endpoint else f"https://{endpoint}"
+        await _require_scope(url, tool="graphql_probe")
+    else:
+        raw = target.strip()
+        base = raw if "://" in raw else f"https://{raw}"
+        disc = await graphqlmod.discover_graphql(ctx.http, base, scope_check=_scope_check())
+        found = next((e for e in disc.endpoints if e.is_graphql), None)
+        if not found:
+            return {"target": target, "is_graphql": False,
+                    "review": ["No GraphQL endpoint found on the common paths — pass endpoint= "
+                               "if you know it, or run graphql_check."]}
+        url = found.url
+    result = await gqldeepmod.deep_probe(ctx.http, url, scope_check=_scope_check(),
+                                         batch_n=max(2, min(batch_n, 20)))
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
 async def ws_probe(target: str, probe_message: bool = False,
                    subprotocol: str | None = None) -> dict:
     """**WebSocket detection** — the surface most scanners skip. Speaks the RFC 6455
@@ -1646,6 +1681,41 @@ async def vcs_exposure(target: str) -> dict:
     base = raw if "://" in raw else f"{scheme}://{host}"
     ctx = get_context()
     result = await exposuremod.check_exposure(ctx.http, base, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def git_forensics(target: str, max_objects: int = 60) -> dict:
+    """**Git-history forensics** on an exposed `.git` — the deep follow-up to
+    `vcs_exposure` and a stable-Critical source. Reconstructs history from what the
+    server already serves (read-only GETs; nothing written) and mines it for secrets:
+
+    - `.git/config` remote URLs embedding **credentials** (`user:token@host`),
+    - `.git/logs/HEAD` reflog → commit SHAs + **author names/emails** + messages,
+    - `.git/index` → the **tracked file list** (flags `.env` / `id_rsa` / `*.sql` /
+      `credentials` — what secrets exist), parsed from the binary DIRC format,
+    - a **bounded loose-object walk** (`objects/xx/…`, zlib-inflate → commit → tree →
+      blob) running the secret scanner over each blob and commit message.
+
+    Packed history (`objects/pack/*.pack`, delta-compressed) is **detected and
+    reported**, not parsed — run git-dumper / delegate to Strix for a full clone.
+    Secrets are redacted; treat each as a lead (confirm it's live/not rotated).
+    `max_objects` caps the walk (default 60). In scope only.
+    """
+
+    host, port = _split_host_port(target, 443)
+    raw = target.strip()
+    scheme = "http" if raw.startswith("http://") else "https"
+    base = raw if "://" in raw else f"{scheme}://{host}"
+    ctx = get_context()
+    result, hits = await gitdumpmod.git_forensics(
+        ctx.http, base, scope_check=_scope_check(),
+        max_objects=max(1, min(max_objects, 300)))
+    # Fold the scanner's redacted hits (blobs/config/reflog/messages) into the report.
+    for h in hits:
+        result.secrets.append({"type": h.type, "source": h.source,
+                               "redacted": h.redacted, "fp_risk": h.fp_risk})
     return to_dict(result)
 
 
