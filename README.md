@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **161 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **162 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -80,6 +80,7 @@ MoonMCP exposes **161 tools**, **11 resources** and **9 operator prompts**, grou
 | `email_security` | SPF / DMARC / DKIM / CAA posture with an A–F grade (DNS-based). |
 | `jwt_analyze` | Decode a JWT and flag `alg:none`, weak HS*, missing expiry, key-injection (no traffic). |
 | `jwt_alg_confusion` | **JWT algorithm-confusion forgery** — re-signs a captured RS/ES token as HS256/384/512 using the **public key's PEM text** as the HMAC secret (`kid` preserved). If the verifier reuses the same key material for both algorithm families, the forged token validates under the public key alone — full forgery without the private key. No traffic, offline. |
+| `deserialize_fingerprint` | **Deserialization-format fingerprint** (Freddy-lite) — 100% passive byte/base64 signature scan of an already-captured cookie/header/field value: Java native serialization (`ACED0005`/`rO0AB...`), .NET ViewState (LosFormatter `FF01`), PHP `serialize()` objects, Python pickle, Ruby `Marshal`, Fastjson/Jackson polymorphic JSON (`@type`/`@class`). Reports the format; never invokes a gadget chain (→ ysoserial/PHPGGC/ViewGen via Strix). No traffic. |
 
 ### 🟡 Active — light (benign, in-scope requests)
 | Tool | Purpose |

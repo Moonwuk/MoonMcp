@@ -67,6 +67,7 @@ from .recon import content as contentmod
 from .recon import crawl as crawlmod
 from .recon import datastores as datastoresmod
 from .recon import depconf as depconfmod
+from .recon import deserialize as deserialmod
 from .recon import favicon as faviconmod
 from .recon import fingerprint as fpmod
 from .recon import firebase as firebasemod
@@ -2114,6 +2115,33 @@ async def jwt_alg_confusion(token: str, public_key_pem: str, alg: str = "HS256")
         "note": ("replay this as `Authorization: Bearer <forged_token>` against a protected "
                  "endpoint — acceptance confirms alg-confusion (the verifier reused the public "
                  "key as an HMAC secret)"),
+    }
+
+
+@mcp.tool()
+@safe_tool
+async def deserialize_fingerprint(blob: str, source: str = "") -> dict:
+    """**Deserialization-format fingerprint** (Freddy-lite) — 100% passive. Scans an
+    already-captured value (a cookie, header, hidden form field, or body you already
+    have) for the byte-level or base64 **signatures** of common object-serialization
+    formats: Java native serialization (`ACED0005` / base64 `rO0AB...`), .NET
+    ViewState (LosFormatter `FF01` header — also flags whether it looks encrypted vs.
+    plaintext), PHP `serialize()` objects (`O:<len>:"Class":`), Python pickle
+    (protocol 2-5 markers), Ruby `Marshal.dump`, and Fastjson/Jackson polymorphic
+    JSON (`@type`/`@class`). Reports the format + a next-step hint (ysoserial /
+    PHPGGC / ViewGen via Strix) — never invokes a gadget chain itself. Pass `source`
+    (e.g. `"cookie:session"`, `"hidden-field:state"`) to note where you found it, so
+    the report reminds you to confirm it's attacker-reachable. No traffic, no scope
+    needed — scans data you already fetched.
+    """
+
+    hits = deserialmod.detect_markers(blob)
+    return {
+        "source": source or ("unspecified — confirm this value is attacker-controlled "
+                             "(cookie/header/hidden field) before treating it as a lead"),
+        "count": len(hits),
+        "findings": [{"format": h.format, "framework": h.framework, "severity": h.severity,
+                     "encoding": h.encoding, "detail": h.detail} for h in hits],
     }
 
 
