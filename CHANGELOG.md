@@ -6,6 +6,17 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Path traversal / LFI content-disclosure (`lfi_probe`).** Detection-only, gap
+  #3/8 from the Burp technique research pass: depth-escalating `../` (x1/3/6/8),
+  null-byte, double-URL-encoded, and Windows-style traversal variants at a param,
+  confirmed by a genuine **file-content signature** (the `root:x:0:0:` /etc/passwd
+  anchor, win.ini `[fonts]`/`[extensions]` markers, and related patterns already in
+  the `path-traversal` knowledge base) — proof the traversal reached the
+  filesystem, distinct from `waf_bypass_probe`'s canary (which only proves a WAF
+  let the payload's *shape* through) and `path_bypass_probe` (401/403
+  ACL-normalization bypass, not file disclosure). Reads only universally-present,
+  non-sensitive files — never app source, credentials, or config; deeper
+  extraction is weaponisation → Strix. `moonmcp/web/probes.py`.
 - **JWT algorithm-confusion forgery (`jwt_alg_confusion`).** Detection-only, gap #2/8
   from the Burp technique research pass: re-signs a captured RS256/ES256 token as
   HS256/384/512 using the **public key's exact PEM text** as the HMAC secret — the
