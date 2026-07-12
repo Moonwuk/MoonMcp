@@ -173,6 +173,30 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"saved")
             return
+        if self.path.startswith("/xxe-oob"):
+            # VULNERABLE: a non-validating XML parser that dereferences a SYSTEM
+            # external entity (simulated by actually fetching any SYSTEM "http(s)://..."
+            # URL found in the raw body -- proving the parser resolved the entity).
+            import re as _re
+            text = raw.decode("utf-8", "replace")
+            mm = _re.search(r'SYSTEM\s+"(https?://[^"]+)"', text)
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(1), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<result>ok</result>")
+            return
+        if self.path.startswith("/xxe-safe"):
+            # SAFE twin: a hardened parser that never dereferences external entities
+            # regardless of what the body contains.
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<result>ok</result>")
+            return
         if self.path.startswith("/nosqli-safe"):
             # NOT vulnerable: identical 200 regardless of operator vs scalar.
             body = b"<html>login page</html>"

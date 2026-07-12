@@ -123,6 +123,7 @@ from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
 from .web import websocket as wsmod
 from .web import workflow as workflowmod
+from .web import xxe as xxemod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware, stdlib-first bug-bounty & reconnaissance server.
@@ -4841,6 +4842,90 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
     if not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
     return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def xxe_probe(target: str, body: str = "", content_type: str = "application/json",
+                    method: str = "POST", oast_token: str | None = None,
+                    wait: float = 3.0) -> dict:
+    """**Blind XXE** probe — two non-destructive lanes.
+
+    `format_confusion`: rewrites `body` (a JSON object, or form-urlencoded per
+    `content_type`) into an equivalent XML document and resends it with the
+    ORIGINAL Content-Type — some frameworks parse a body by *sniffing its shape*
+    rather than strictly enforcing the declared type, so a "JSON-only" endpoint
+    may still hand it to an XML parser. This lane alone proves nothing about XXE;
+    it just tells you whether the `oob` lane is worth trying here.
+
+    `oob`: injects a `<!DOCTYPE>` external entity referencing a MoonMCP **OAST**
+    canary (sent as `Content-Type: application/xml`) and polls for a DNS/HTTP
+    callback — a callback is unambiguous proof the parser dereferenced an
+    external entity. **Never reads file contents** (no exfil channel is built,
+    unlike a real XXE PoC) — start `oast_selfhost`/`oast_configure` first, or
+    pass an `oast_token` from `oast_generate`. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    sc = _scope_check()
+    ct = content_type.lower()
+
+    result: dict[str, Any] = {"target": url}
+
+    confusion: dict[str, Any] = {}
+    if body:
+        xml_body = xxemod.json_to_xml(body) if "json" in ct else (
+            xxemod.form_to_xml(body) if "form" in ct else None)
+        if xml_body is not None:
+            r = await ctx.http.fetch(url, method=m, body=xml_body.encode(),
+                                     headers={"Content-Type": content_type},
+                                     follow_redirects=False, scope_check=sc)
+            confusion = {
+                "rewritten_body": xml_body, "status": r.status,
+                "note": ("sent WITH the original Content-Type — a response that looks "
+                         "successful (2xx / same shape as a normal request) suggests the "
+                         "framework parses the body by its shape, not the declared type; "
+                         "try the oob lane against this endpoint."),
+            }
+        else:
+            confusion = {"error": "not_rewritable",
+                        "detail": "body isn't a JSON object or form-urlencoded content"}
+    result["format_confusion"] = confusion
+
+    oast_count = 0
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None and ctx.oast.configured:
+        cb = ctx.oast.generate(label="xxe_probe")
+    if cb is None:
+        result["oob"] = {"error": "oast_unconfigured",
+                         "detail": "start oast_selfhost or oast_configure before an OOB XXE probe"}
+    else:
+        payload = xxemod.xxe_oob_payload(cb.http_url)
+        await ctx.http.fetch(url, method=m, body=payload.encode(),
+                             headers={"Content-Type": "application/xml"},
+                             follow_redirects=False, scope_check=sc)
+        await asyncio.sleep(max(0.0, min(wait, 8.0)))
+        if ctx.oast_server is not None and ctx.oast_server.running:
+            hits = ctx.oast_server.interactions(cb.token)
+        else:
+            poll = ctx.oast.poll_target(cb.token)
+            hits = []
+            if poll:
+                try:
+                    r = await ctx.http.fetch(poll, follow_redirects=True)
+                    hits = oastmod.parse_interactions(r.text())
+                except Exception:
+                    hits = []
+        oast_count = len(hits)
+        result["oob"] = {"canary": cb.http_url, "token": cb.token,
+                         "interaction_count": oast_count, "interactions": hits[:20]}
+
+    verdict = confirmmod.evaluate(oast_count=oast_count)
+    result.update(verdict)
+    return result
 
 
 @mcp.tool()

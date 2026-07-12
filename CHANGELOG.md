@@ -6,6 +6,16 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Blind XXE detection (`xxe_probe`).** Detection-only, gap #5/8 from the Burp
+  technique research pass — two lanes: **format confusion** rewrites a JSON or
+  form-urlencoded body into an equivalent XML document (porting Content Type
+  Converter's core trick) and resends it under the ORIGINAL Content-Type, since
+  some frameworks parse a body by sniffing its shape rather than strictly
+  enforcing the declared type; **`oob`** injects a `<!DOCTYPE>` external entity
+  referencing a MoonMCP **OAST** canary and polls for a DNS/HTTP callback — a
+  callback is unambiguous proof the parser dereferenced an external entity.
+  Never reads file contents (no exfil channel is built), mirroring
+  `ssrf_probe`/`fastjson_oast_probe`'s callback-only design. `moonmcp/web/xxe.py`.
 - **Deserialization-format fingerprint (`deserialize_fingerprint`, Freddy-lite).**
   Detection-only, gap #4/8 from the Burp technique research pass: 100% passive
   byte/base64 signature scan over an already-captured cookie/header/hidden-field
