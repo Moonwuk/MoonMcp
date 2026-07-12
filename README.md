@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **162 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **164 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -97,6 +97,7 @@ MoonMCP exposes **162 tools**, **11 resources** and **9 operator prompts**, grou
 | --- | --- |
 | `crawl` | Bounded depth-1 crawl → internal links, forms+inputs, JS/asset URLs, parameters, external hosts, emails. |
 | `analyze_js` | Deep-extract the hidden API surface from a page **and its JavaScript** (LinkFinder-style) — absolute/relative endpoints a UI crawl misses, plus source maps (`.map`). |
+| `js_library_scan` | **Known-vulnerable JS library detector** (Retire.js-lite) — matches script URLs/filenames/version banners already surfaced by `analyze_js`/`crawl` against a small bundled table (jQuery <3.5.0 DOM XSS, AngularJS <1.8.0 sandbox bypass, Lodash <4.17.21 prototype pollution, Moment.js <2.29.2 ReDoS, Handlebars <4.5.3 prototype-pollution RCE gadget, Bootstrap <4.1.2 tooltip XSS). No traffic, offline. |
 | `parse_openapi` | Parse an OpenAPI/Swagger spec (URL or pasted) → full endpoint/param/method inventory, servers, security schemes, and flags (operations with **no** security). |
 | `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
 | `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |
@@ -182,6 +183,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `cmdi_probe` | **Blind OS command injection** detector — a small, non-combinatorial set of shell separators (`;` `\|` `&&` `&` backtick `$()`), each carrying only a side-channel payload (`sleep N`, confirmed by the same monotonic-timing check as `sqli_probe`'s `time_based` lane; or an **OAST** callback). Never sends an output-eliciting payload (`id`, `cat /etc/passwd`, `dir`) — command output is never displayed (→ Strix). Intrusive. |
 | `lfi_probe` | **Path traversal / LFI** content-disclosure — depth-escalating `../` (x1/3/6/8), null-byte, double-URL-encoded, and Windows-style variants, confirmed by a genuine **file-content signature** (`root:x:0:0:`, win.ini markers) in the response — proof the traversal reached the filesystem, not just that a WAF let the payload shape through. Reads only universally-present, non-sensitive files. Intrusive. |
 | `ssrf_probe` | **Blind SSRF** detector — plants an OAST canary in a param and checks for a callback (start `oast_selfhost` first). Intrusive. |
+| `xxe_probe` | **Blind XXE** detector — two lanes: `format_confusion` rewrites a JSON/form body into equivalent XML and resends it under the original Content-Type (tests whether a "JSON-only" endpoint parses XML anyway); `oob` injects a `<!DOCTYPE>` external entity pointing at an **OAST** canary and polls for a callback — never reads file contents. Intrusive. |
 | `cache_probe` | **Web cache poisoning** detector — unkeyed-header reflection (`X-Forwarded-Host`, …) × cacheability. Intrusive. |
 | `http_history` | Review / fetch / clear the session's request-response **history** (what repeater/intruder/passive_scan sent). |
 

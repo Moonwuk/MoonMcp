@@ -50,7 +50,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "dns_lookup", "http_probe", "tls_inspect", "analyze_headers",
             "fingerprint", "well_known", "favicon_hash", "tls_fingerprint",
             "jarm_fingerprint", "origin_discovery", "behavior_probe",
-            "crawl", "analyze_js", "recover_sourcemaps", "parse_openapi", "extract_secrets",
+            "crawl", "analyze_js", "js_library_scan", "recover_sourcemaps", "parse_openapi",
+            "extract_secrets",
             "firebase_exposure", "supabase_exposure",
             "cors_audit", "access_control_check", "authz_probe", "graphql_check",
             "graphql_probe", "ws_probe", "discover_parameters", "waf_detect", "takeover_check",
@@ -98,7 +99,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "blind SSRF, cache poisoning) and the confirm_finding gate.",
         ["http_repeater", "intruder", "passive_scan", "confirm_finding",
          "ssti_probe", "sqli_probe", "cmdi_probe", "lfi_probe", "ssrf_probe",
-         "cache_probe", "http_history"],
+         "xxe_probe", "cache_probe", "http_history"],
     )),
     ("knowledge", (
         "Knowledge bases",
