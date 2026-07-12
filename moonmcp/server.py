@@ -96,6 +96,7 @@ from .web import desync as desyncmod
 from .web import exposure as exposuremod
 from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
+from .web import graphqldeep as gqldeepmod
 from .web import graphqli as gqlimod
 from .web import inject as injectmod
 from .web import jwt as jwtmod
@@ -1458,6 +1459,39 @@ async def graphql_check(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     result = await graphqlmod.discover_graphql(ctx.http, url, scope_check=_scope_check())
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def graphql_probe(target: str, endpoint: str | None = None, batch_n: int = 5) -> dict:
+    """**Deep GraphQL probing** — the classes that pay out even when introspection is
+    OFF. Locates the endpoint (or use `endpoint=` to target one directly), then tests:
+    **batch abuse** (an array of queries honoured in one request → rate-limit /
+    brute-force amplifier, the batched-login credential-stuffing primitive),
+    **field-suggestion schema recovery** (a typo'd field → *"Did you mean …?"* leaks
+    real names, recovering the schema without introspection), and **aliases** (many
+    operations per document). Nested-traversal **BOLA** is surfaced as a lead to
+    confirm with `access_control_check` / Strix. Detection-only — benign queries, small
+    batch, no mutations. Run `graphql_check` first for introspection. In scope only.
+    """
+
+    ctx = get_context()
+    if endpoint:
+        url = endpoint if "://" in endpoint else f"https://{endpoint}"
+        await _require_scope(url, tool="graphql_probe")
+    else:
+        raw = target.strip()
+        base = raw if "://" in raw else f"https://{raw}"
+        disc = await graphqlmod.discover_graphql(ctx.http, base, scope_check=_scope_check())
+        found = next((e for e in disc.endpoints if e.is_graphql), None)
+        if not found:
+            return {"target": target, "is_graphql": False,
+                    "review": ["No GraphQL endpoint found on the common paths — pass endpoint= "
+                               "if you know it, or run graphql_check."]}
+        url = found.url
+    result = await gqldeepmod.deep_probe(ctx.http, url, scope_check=_scope_check(),
+                                         batch_n=max(2, min(batch_n, 20)))
     return to_dict(result)
 
 

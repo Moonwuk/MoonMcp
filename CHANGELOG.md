@@ -6,6 +6,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Deep GraphQL probing (`graphql_probe`).** The GraphQL classes that pay out even
+  when introspection is disabled, past `graphql_check`'s introspection test: **batch
+  abuse** (an array of operations honoured in one request → a rate-limit/brute-force
+  amplifier and the batched-login credential-stuffing primitive), **field-suggestion
+  schema recovery** (a deliberately typo'd field → *"Did you mean …?"* leaks real
+  field/type names, recovering the schema without introspection), **alias** honouring
+  (many operations per document), and a nested-traversal **BOLA** lead to confirm with
+  `access_control_check` / Strix. Detection-only — benign queries, small batch, no
+  mutations. `moonmcp/web/graphqldeep.py`.
 - **Git-history forensics (`git_forensics`).** The deep follow-up to `vcs_exposure`
   and a stable-Critical source: when a `.git` is exposed, it reconstructs history
   from what the server already serves (read-only GETs; nothing written) and mines it
