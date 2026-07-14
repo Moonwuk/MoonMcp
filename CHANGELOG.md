@@ -6,6 +6,18 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **CVE risk triage (`cve_triage`).** From the research agenda
+  (docs/RESEARCH_AGENDA.md, top direction) — `cve_lookup` returns CVSS, which is
+  *theoretical* severity; real triage needs exploitation likelihood. The new tool
+  enriches an NVD record with **EPSS** (FIRST.org exploitation probability),
+  **CISA KEV** (is it actively exploited in the wild?), and a public-**PoC** signal
+  (an NVD "Exploit"-tagged reference), then folds them into one composite score —
+  `0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC` — with a KEV hard-override
+  clamping any actively-exploited CVE to the CRITICAL band (≥76) and a KEV+PoC
+  ×1.15 boost. So a "medium CVSS but on the KEV list" bug sorts above a "critical
+  CVSS but no known exploitation" one. Passive third-party data (NVD/FIRST/CISA),
+  no packets to any target; the scoring is a pure, offline-testable function.
+  `moonmcp/intel/cverisk.py`.
 - **CSP policy-strength analysis in `analyze_headers`.** From the project audit
   (docs/PROJECT_AUDIT.md 6.1 — the one confirmed coverage gap): the header audit
   used to grade Content-Security-Policy present-vs-absent, so a worthless-but-

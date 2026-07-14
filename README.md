@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **167 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -73,6 +73,7 @@ MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grou
 | `enumerate_subdomains` | Passive subdomain enum via crt.sh, HackerTarget, AnubisDB, AlienVault OTX. |
 | `wayback_urls` | Historical URLs from the Internet Archive (flags interesting endpoints). |
 | `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID or by keyword (e.g. a product+version). |
+| `cve_triage` | **Prioritise a CVE by real exploitation risk**, not just CVSS — enriches the NVD record with **EPSS** (exploitation probability), **CISA KEV** (actively exploited in the wild?) and a public-**PoC** signal, folded into one composite score (`0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC`, KEV clamps to CRITICAL). Turns a `fingerprint`/`cve_search` hit into a patch-order decision. Passive. |
 | `host_intel` | IP exposure via Shodan InternetDB (free) or the full Shodan API. |
 | `ip_intel` | Map an IP → ASN, org, ISP, cloud/CDN provider, hosting flag, reverse DNS, geo. |
 | `reverse_ip` | Other domains co-hosted on the same IP (reverse-IP lookup). |
@@ -472,7 +473,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 166 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 167 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
