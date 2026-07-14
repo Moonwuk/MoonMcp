@@ -38,6 +38,7 @@ from . import cvss as cvssmod
 from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
 from . import metrics as metricsmod
+from . import nextstep as nextstepmod
 from . import obsidian as obsidianmod
 from . import planner as plannermod
 from . import prompts as promptmod
@@ -1133,7 +1134,9 @@ async def fingerprint(target: str) -> dict:
     dns_res = await dnsmod.resolve(host, http_client=ctx.http)
     ip = (dns_res.a or [None])[0]
     fp = fpmod.fingerprint(result, ip=ip)
-    return to_dict(fp)
+    res = to_dict(fp)
+    res["suggested_next"] = nextstepmod.after("fingerprint")
+    return res
 
 
 @mcp.tool()
@@ -1172,7 +1175,9 @@ async def crawl(target: str, max_pages: int = 10) -> dict:
     result = await crawlmod.crawl(
         ctx.http, url, scope_check=_scope_check(), max_pages=max(1, min(max_pages, 30))
     )
-    return to_dict(result)
+    res = to_dict(result)
+    res["suggested_next"] = nextstepmod.after("crawl")
+    return res
 
 
 @mcp.tool()
@@ -1529,7 +1534,9 @@ async def graphql_check(target: str) -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     result = await graphqlmod.discover_graphql(ctx.http, url, scope_check=_scope_check())
-    return to_dict(result)
+    res = to_dict(result)
+    res["suggested_next"] = nextstepmod.after("graphql_check")
+    return res
 
 
 @mcp.tool()
@@ -1562,7 +1569,9 @@ async def graphql_probe(target: str, endpoint: str | None = None, batch_n: int =
         url = found.url
     result = await gqldeepmod.deep_probe(ctx.http, url, scope_check=_scope_check(),
                                          batch_n=max(2, min(batch_n, 20)))
-    return to_dict(result)
+    res = to_dict(result)
+    res["suggested_next"] = nextstepmod.after("graphql_probe")
+    return res
 
 
 @mcp.tool()
@@ -2113,7 +2122,9 @@ async def jwt_analyze(token: str) -> dict:
     import time
 
     result = jwtmod.analyze_jwt(token, now_epoch=int(time.time()))
-    return to_dict(result)
+    res = to_dict(result)
+    res["suggested_next"] = nextstepmod.after("jwt_analyze")
+    return res
 
 
 @mcp.tool()
@@ -4267,6 +4278,7 @@ async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
         out["verdict"] = "inconclusive"
         out["note"] = ("multiple template engines appear to evaluate the same arithmetic — likely "
                        "a coincidental digit match on the page, not SSTI; verify manually")
+    out["suggested_next"] = nextstepmod.after("ssti_probe", out.get("verdict"))
     return out
 
 
@@ -4411,6 +4423,7 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         "false_status": f1.status, "false_len": len(f1.body)}
     if lanes:
         out["lanes"] = lanes
+    out["suggested_next"] = nextstepmod.after("sqli_probe", verdict.get("verdict"))
     return out
 
 
@@ -4489,7 +4502,8 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
 
     verdict = confirmmod.evaluate(injection_hits=extra_hits, oast_count=oast_count,
                                   timing_delta_ms=timing_ms)
-    return {"target": url, "param": param, **verdict, "lanes": lanes}
+    return {"target": url, "param": param, **verdict, "lanes": lanes,
+            "suggested_next": nextstepmod.after("cmdi_probe", verdict.get("verdict"))}
 
 
 @mcp.tool()
@@ -4534,7 +4548,8 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
         injection_hits=[f"{h['class']}/{h['technology']}" for f in findings for h in f["signatures"]],
         reflected=bool(findings))
     return {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
-           **verdict, "findings": findings}
+           **verdict, "findings": findings,
+           "suggested_next": nextstepmod.after("lfi_probe", verdict.get("verdict"))}
 
 
 @mcp.tool()
@@ -4648,7 +4663,8 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     return {"target": url, "param": param, "method": m, **verdict,
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],
-            "baseline": {"status": control[0].status, "length": control[0].length}}
+            "baseline": {"status": control[0].status, "length": control[0].length},
+            "suggested_next": nextstepmod.after("nosqli_probe", verdict.get("verdict"))}
 
 
 @mcp.tool()
@@ -4895,6 +4911,7 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
            **verdict, "interactions": hits[:20]}
     if not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
+    out["suggested_next"] = nextstepmod.after("ssrf_probe", verdict.get("verdict"))
     return out
 
 
@@ -4969,6 +4986,7 @@ async def xxe_probe(target: str, body: str = "", content_type: str = "applicatio
 
     verdict = confirmmod.evaluate(oast_count=oast_count)
     result.update(verdict)
+    result["suggested_next"] = nextstepmod.after("xxe_probe", verdict.get("verdict"))
     return result
 
 

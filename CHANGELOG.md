@@ -20,6 +20,18 @@ All notable changes to MoonMCP are documented here. The format loosely follows
   tool it can emit actually exists.
 
 ### Changed
+- **Standardised `suggested_next` on the detection probes (ergonomics).** Every
+  detector emits a verdict, but an agent still has to decide the next move. A new
+  `moonmcp/nextstep.py` centralises that: given a probe + its verdict it names the
+  concrete tool(s) to run next (confirm the lead, poll the OAST callback, or pivot
+  to the related class), and the probes attach it as a `suggested_next` field so
+  the agent chains without re-reasoning. Wired into the core detection/recon
+  probes — `sqli_probe`, `cmdi_probe`, `ssti_probe`, `lfi_probe`, `nosqli_probe`,
+  `xxe_probe`, `ssrf_probe`, `graphql_check`, `graphql_probe`, `jwt_analyze`,
+  `fingerprint`, `crawl` (`interp_probe` already computed its own). Only positive
+  verdicts get a suggestion — a clean result stays quiet. Not every one of the
+  168 tools carries it (a recon/meta tool's next step is context-dependent); a
+  drift-guard test asserts the map never points at a non-existent tool.
 - **De-duplicated the OAST-collection epilogue** (docs/PROJECT_AUDIT.md 1.1). The
   ~10-line "read the self-hosted catcher, else poll the provider and parse"
   block was copy-pasted across ~9 OOB probe bodies (jwt_jku, second-order SQLi,
