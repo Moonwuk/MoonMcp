@@ -39,6 +39,7 @@ from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
 from . import metrics as metricsmod
 from . import obsidian as obsidianmod
+from . import planner as plannermod
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
@@ -3290,6 +3291,30 @@ async def memory_brief(target: str) -> dict:
     """
 
     return get_context().memory.brief(_host_key(target))
+
+
+@mcp.tool()
+@safe_tool
+async def plan_target(target: str) -> dict:
+    """**What should I try next on TARGET?** — a ranked, non-redundant list of the
+    probes worth running next, derived from what's already known. Reads the
+    knowledge graph (discovered tech / services / endpoints / params) and the
+    findings store (what's confirmed or tried), cross-references a signal→probe
+    map, and returns each suggestion with the exact tool to run, the recon signal
+    that motivated it, and an impact priority. A suggestion is flagged
+    `already_evidence` (and sorts down) when a finding already covers that class,
+    so you confirm or move on rather than re-running blind. If nothing is known
+    yet it points at the baseline recon tools. This is the inverse of
+    `promote_lead` (which routes an *already-found* lead to its PoC): `plan_target`
+    tells you what to look for next. Offline; reads the local store — run
+    `recon_target` first to populate it.
+    """
+
+    host = _host_key(target)
+    ctx = get_context()
+    entities = ctx.memory.graph(host).get("entities", [])
+    findings = ctx.findings.as_dict(target=host).get("findings", [])
+    return plannermod.plan(entities, findings, target=host)
 
 
 @mcp.tool()

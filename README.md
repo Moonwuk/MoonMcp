@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **167 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **168 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -223,6 +223,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `memory_brief` | **What do we know about TARGET?** — one-shot rollup for orienting before/resuming work: graph entities by kind, confirmed findings, open leads, applicable lessons, counts. Call it first on a target. |
 | `memory_graph` / `memory_link` | Read / build the **knowledge graph** — typed entities (host / endpoint / param / technology / service / cve / …) and typed relations (`affects` / `on` / `uses` / `caused_by` / …) between them and findings. `add_finding` auto-links a finding to its host + endpoint, turning flat findings into a queryable structure. |
 | `memory_lesson` | The **learning loop** — record (`action=add`) and recall (`action=recall`) durable, cross-target **lessons** (tradecraft, false-positive traps, tool quirks) so mistakes and wins carry forward between sessions and agents. |
+| `plan_target` | **What should I try next on TARGET?** — a ranked, non-redundant list of the probes worth running next, derived from the knowledge graph (discovered tech/services/endpoints/params) × the findings store (what's confirmed/tried). Each suggestion names the exact tool, the recon signal that motivated it, and an impact priority; a class already covered by a finding sorts down (`already_evidence`). Empty memory → baseline recon. Offline. |
 
 ### 🛠️ External tools
 | Tool | Purpose |
@@ -473,7 +474,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 167 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 168 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator

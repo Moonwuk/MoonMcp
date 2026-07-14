@@ -131,7 +131,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "typed knowledge graph (entities + relations) structures findings, and "
         "cross-target lessons carry tradecraft forward between sessions.",
         ["memory_add", "memory_search", "memory_get", "memory_stats",
-         "memory_link", "memory_graph", "memory_brief", "memory_lesson"],
+         "memory_link", "memory_graph", "memory_brief", "memory_lesson", "plan_target"],
     )),
     ("external", (
         "External CLIs",

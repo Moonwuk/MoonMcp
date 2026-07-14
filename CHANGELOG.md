@@ -5,6 +5,20 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **`plan_target` — next-action ranking for any agent (ergonomics).** Codifies
+  the idea-gen skill's attack-vector brainstorming as a *tool*, so an agent works
+  the target well even without the skill loaded. Reads the knowledge graph
+  (discovered tech/services/endpoints/params) and the findings store
+  (confirmed/tried), cross-references a signal→probe map, and returns a ranked,
+  non-redundant list of next probes — each with the exact tool, the recon signal
+  that motivated it, and an impact priority. A class already covered by a finding
+  is flagged `already_evidence` and sorts down (confirm or move on, don't re-run
+  blind); empty memory points at the baseline recon tools. The inverse of
+  `promote_lead`/`leadpipe` (which routes an *already-found* lead to its PoC).
+  Pure/offline scoring in `moonmcp/planner.py`; a drift guard test asserts every
+  tool it can emit actually exists.
+
 ### Changed
 - **De-duplicated the OAST-collection epilogue** (docs/PROJECT_AUDIT.md 1.1). The
   ~10-line "read the self-hosted catcher, else poll the provider and parse"
