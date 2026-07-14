@@ -22,7 +22,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Authorise and identify before touching anything: scope, per-program "
         "header, engagement auth, out-of-band callbacks, audit trail.",
         [
-            "server_status", "tool_catalog",
+            "server_status", "tool_catalog", "search_tools",
             "scope_list", "scope_add", "scope_exclude", "scope_remove",
             "program_add", "program_use", "program_list", "program_remove",
             "auth_set", "auth_clear",
