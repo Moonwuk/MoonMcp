@@ -28,7 +28,7 @@ PASSIVE = {
     "http_history",
     # shared memory hub (local store; no traffic)
     "memory_add", "memory_search", "memory_get", "memory_stats",
-    "memory_link", "memory_graph", "memory_brief", "memory_lesson",
+    "memory_link", "memory_graph", "memory_brief", "memory_lesson", "plan_target",
     # findings / reporting / monitoring
     "add_finding", "promote_lead", "label_finding", "metrics",
     "list_findings", "clear_findings", "triage_findings", "cvss_score",
