@@ -1,10 +1,10 @@
 """A self-describing map of MoonMCP's own tools.
 
-An agent lands on MoonMCP with 120+ tools and no idea where to start. This module
-groups every tool into a family, records how much each one touches the target
-(scope-gated? intrusive?), and lays out the recommended recon → report order —
-so `tool_catalog` (and the packaged skill) can hand the model a compact,
-machine-readable map instead of making it read 90 docstrings.
+An agent lands on MoonMCP with a large tool surface and no idea where to start.
+This module groups every tool into a family, records how much each one touches
+the target (scope-gated? intrusive?), and lays out the recommended recon →
+report order — so `tool_catalog` (and the packaged skill) can hand the model a
+compact, machine-readable map instead of making it read every tool's docstring.
 
 Pure data + one pure function (``build_catalog``); the server tool supplies the
 live descriptions and gate markers so this never drifts from what is registered

@@ -13,7 +13,7 @@ description: >-
 
 # MoonMCP operator skill
 
-MoonMCP is a **scope-aware, stdlib-first** recon/bug-bounty MCP server (~158 tools).
+MoonMCP is a **scope-aware, stdlib-first** recon/bug-bounty MCP server (160+ tools).
 Its whole design is that every packet-sending tool passes **one** authorization
 choke point. Use it **only against assets the user is authorised to test**, pick the
 lightest tool that answers the question, and escalate noise only with consent.
