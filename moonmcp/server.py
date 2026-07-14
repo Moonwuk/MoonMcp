@@ -42,6 +42,7 @@ from . import nextstep as nextstepmod
 from . import obsidian as obsidianmod
 from . import planner as plannermod
 from . import prompts as promptmod
+from . import shape as shapemod
 from . import toolsearch as toolsearchmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
@@ -1195,11 +1196,13 @@ async def well_known(target: str) -> dict:
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @active_tool()
-async def crawl(target: str, max_pages: int = 10) -> dict:
+async def crawl(target: str, max_pages: int = 10, response_format: str = "concise") -> dict:
     """Lightly crawl an in-scope site (depth 1, bounded) and extract its attack
     surface: internal links, forms + their input names, JavaScript/asset URLs,
     query parameters, external hosts it reaches, and any emails. HTML parsing
     only — no browser. In scope only; redirects that leave scope are not followed.
+    Long lists are trimmed by default (`response_format="concise"`); pass
+    `"detailed"` for the full crawl tree.
     """
 
     raw = target.strip()
@@ -1210,24 +1213,28 @@ async def crawl(target: str, max_pages: int = 10) -> dict:
     )
     res = to_dict(result)
     res["suggested_next"] = nextstepmod.after("crawl")
-    return res
+    return shapemod.apply(res, response_format)
 
 
 @mcp.tool()
 @active_tool()
-async def analyze_js(target: str, max_scripts: int = 15) -> dict:
+async def analyze_js(target: str, max_scripts: int = 15,
+                     response_format: str = "concise") -> dict:
     """Deep-extract the hidden API surface from a page **and its JavaScript** —
     absolute and relative endpoints/routes that a UI crawl never sees, plus any
     **source maps** (`.map`) that reconstruct the original source. Fetches the
     page, then its same-origin scripts (bounded), and returns a deduped endpoint
     list ready to feed the batch prober / parameter fuzzer. In scope only.
+    Long endpoint lists are trimmed by default; pass `response_format="detailed"`
+    for the full set.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
-    return await jsmod.analyze(ctx.http, url, max_scripts=max(1, min(max_scripts, 40)),
-                               scope_check=_scope_check())
+    result = await jsmod.analyze(ctx.http, url, max_scripts=max(1, min(max_scripts, 40)),
+                                 scope_check=_scope_check())
+    return shapemod.apply(result, response_format)
 
 
 @mcp.tool()
@@ -3159,12 +3166,15 @@ async def metrics(known_positives: int | None = None) -> dict:
 
 @mcp.tool()
 @safe_tool
-async def list_findings(target: str | None = None, severity: str | None = None) -> dict:
+async def list_findings(target: str | None = None, severity: str | None = None,
+                        response_format: str = "concise") -> dict:
     """List recorded findings (optionally filtered by target or severity),
-    severity-ranked, with a summary count. Reads the session findings store.
+    severity-ranked, with a summary count. Reads the session findings store. A
+    long list is trimmed by default; pass `response_format="detailed"` for all.
     """
 
-    return get_context().findings.as_dict(target=target, severity=severity)
+    result = get_context().findings.as_dict(target=target, severity=severity)
+    return shapemod.apply(result, response_format)
 
 
 @mcp.tool()
@@ -3308,20 +3318,24 @@ async def memory_link(src: str, rel: str, dst: str, target: str | None = None) -
 @mcp.tool()
 @safe_tool
 async def memory_graph(target: str | None = None, kind: str | None = None,
-                       limit: int = 200) -> dict:
+                       limit: int = 200, response_format: str = "concise") -> dict:
     """Read the **knowledge graph** — typed entities (host / endpoint / param /
     technology / service / cve / credential / asset) and the relations between them
     (and to findings). Pass a `target` host to scope it to one asset, or `kind` to
     list only entities of one type. This is the structured view of what's been learned
     about a target; pair with `memory_brief` for a prose rollup. Offline; local store.
+    Long entity/relation lists are trimmed by default; pass
+    `response_format="detailed"` for the full graph.
     """
 
     mem = get_context().memory
     host = _host_key(target) if target else None
     if kind:
-        return {"target": host, "kind": kind,
-                "entities": mem.entities(target=host, kind=kind, limit=limit)}
-    return mem.graph(host, limit=limit)
+        result: dict = {"target": host, "kind": kind,
+                        "entities": mem.entities(target=host, kind=kind, limit=limit)}
+    else:
+        result = mem.graph(host, limit=limit)
+    return shapemod.apply(result, response_format)
 
 
 @mcp.tool()
@@ -3843,13 +3857,15 @@ async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
 
 @mcp.tool()
 @active_tool()
-async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
+async def recon_target(domain: str, include_subdomains: bool = True,
+                       response_format: str = "concise") -> dict:
     """One-shot passive+light recon of an in-scope domain.
 
     Chains the safe tools into a single report: subdomain enumeration, DNS
     resolution, TLS certificate (with SANs), an HTTP probe, security-header
     grade, and a technology fingerprint of the apex. No intrusive scanning is
-    performed. Ideal as the first call against a new target.
+    performed. Ideal as the first call against a new target. Long lists (e.g.
+    subdomains) are trimmed by default; pass `response_format="detailed"` for all.
     """
 
     host = normalize_target(domain)
@@ -3904,7 +3920,7 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     email = await emailmod.analyze_email_security(ctx.http, host)
     report["email_security"] = {"grade": email.grade, "spf": bool(email.spf),
                                 "dmarc_policy": email.dmarc_policy, "issues": email.issues}
-    return report
+    return shapemod.apply(report, response_format)
 
 
 @mcp.tool()
@@ -4160,11 +4176,13 @@ async def passive_scan(target: str) -> dict:
 @mcp.tool()
 @safe_tool
 async def http_history(exchange_id: int | None = None, host: str | None = None,
-                       limit: int = 50, clear: bool = False) -> dict:
+                       limit: int = 50, clear: bool = False,
+                       response_format: str = "concise") -> dict:
     """Review the **request/response history** captured by `http_repeater`,
     `intruder` and `passive_scan` (like Burp's history). Pass an `exchange_id` for
     the full recorded pair, `host` to filter, `clear=true` to wipe. No traffic —
-    reads the in-memory session log.
+    reads the in-memory session log. The exchange list is trimmed by default; pass
+    `response_format="detailed"` for all.
     """
 
     ctx = get_context()
@@ -4174,7 +4192,7 @@ async def http_history(exchange_id: int | None = None, host: str | None = None,
         ex = ctx.history.get(exchange_id)
         return to_dict(ex) if ex else {"error": "not_found", "detail": f"no exchange #{exchange_id}"}
     items = ctx.history.list(limit=limit, host=host)
-    return {
+    result = {
         "count": ctx.history.count,
         "shown": len(items),
         "exchanges": [
@@ -4184,6 +4202,7 @@ async def http_history(exchange_id: int | None = None, host: str | None = None,
             for e in items
         ],
     }
+    return shapemod.apply(result, response_format)
 
 
 @mcp.tool()
