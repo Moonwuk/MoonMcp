@@ -29,6 +29,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from . import __version__
 from . import catalog as catalogmod
@@ -6023,6 +6024,36 @@ def _apply_tool_profile() -> None:
         tools.pop(name, None)
 
 
+def _apply_tool_annotations() -> None:
+    """Attach MCP tool annotations derived from each tool's scope markers, so a
+    well-behaved host can auto-insert a confirmation gate on the loud/offensive
+    tools (read/recon on by default; anything that could touch state prompts).
+
+    HINTS ONLY. The real enforcement is the ``@active_tool`` scope guard — the MCP
+    spec itself says clients must treat annotations as untrusted, so these never
+    replace the gate; they just let a cooperating host surface the passive/active
+    split in its UI. Derived from the same ``__moonmcp_*__`` markers the guard
+    test relies on:
+
+      * intrusive active tool -> readOnly=False, destructive=True, openWorld=True
+      * non-intrusive active  -> readOnly=True,  openWorld=True   (touches the target, read-only)
+      * safe / offline tool   -> readOnly=True                    (no target traffic; third-party or pure-offline)
+    """
+
+    for tool in mcp._tool_manager._tools.values():
+        fn = tool.fn
+        gated = getattr(fn, "__moonmcp_gated__", False)
+        intrusive = getattr(fn, "__moonmcp_intrusive__", False)
+        if gated and intrusive:
+            tool.annotations = ToolAnnotations(
+                readOnlyHint=False, destructiveHint=True, openWorldHint=True)
+        elif gated:
+            tool.annotations = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+        else:
+            tool.annotations = ToolAnnotations(readOnlyHint=True)
+
+
+_apply_tool_annotations()
 _apply_tool_profile()
 
 
