@@ -10,7 +10,7 @@ Fastjson/Jackson polymorphic-type JSON markers.
 network traffic, no forged gadget chain, no ysoserial/PHPGGC/ViewGen invocation.
 Output is a lead ("this looks like a raw Java-serialized blob") for the caller to
 hand to the appropriate exploitation tool via Strix, matching the same
-"classify, don't exploit" boundary as `extract_secrets`/`db_credential_scan`.
+"classify, don't exploit" boundary as `extract_secrets`/`analyze_config`.
 """
 
 from __future__ import annotations
