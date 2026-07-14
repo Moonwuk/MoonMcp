@@ -6,6 +6,18 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **CSP policy-strength analysis in `analyze_headers`.** From the project audit
+  (docs/PROJECT_AUDIT.md 6.1 — the one confirmed coverage gap): the header audit
+  used to grade Content-Security-Policy present-vs-absent, so a worthless-but-
+  present CSP scored as full protection. `moonmcp/recon/csp.py` now parses the
+  policy and weights the CSP's contribution by how much it actually blocks script
+  injection — `'unsafe-inline'` (unless neutralised by a nonce/hash),
+  `'unsafe-eval'`, a wildcard `*`, `data:`/`blob:`/`http:` script sources, and the
+  worst case of no `script-src`/`default-src` at all all downgrade the score, with
+  every reason surfaced under a new `csp_weaknesses` field. Softer hardening gaps
+  (permissive `object-src`, missing `base-uri`) are reported but don't move the
+  score, so a genuinely strong policy like `default-src 'self'` still grades full
+  marks. Passive, no extra requests.
 - **SAML XML Signature Wrapping probe (`saml_xsw_probe`).** Detection-only,
   gap #8/8 (the last) from the Burp technique research pass. SAML responses
   carry a *detached* signature — a `<ds:Signature>` whose `Reference` points

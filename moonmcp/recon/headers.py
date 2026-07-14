@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..net.http import HttpResult
+from . import csp as cspmod
 
 # header -> (severity, human explanation of why it matters when missing)
 _SECURITY_HEADERS: dict[str, tuple[str, str]] = {
@@ -48,6 +49,7 @@ class HeaderAudit:
     missing: list[Finding] = field(default_factory=list)
     info_leaks: list[Finding] = field(default_factory=list)
     cookie_issues: list[Finding] = field(default_factory=list)
+    csp_weaknesses: list[Finding] = field(default_factory=list)
     grade: str = "?"
     score: int = 0
 
@@ -78,7 +80,7 @@ def audit_headers(result: HttpResult) -> HeaderAudit:
 
     is_https = (result.final_url or result.url or "").startswith("https")
     max_score = 0
-    got = 0
+    got = 0.0
     for header, (severity, explanation) in _SECURITY_HEADERS.items():
         weight = {"high": 3, "medium": 2, "low": 1}[severity]
         # HSTS over plain HTTP is meaningless (browsers ignore it) — don't grade it there,
@@ -88,7 +90,17 @@ def audit_headers(result: HttpResult) -> HeaderAudit:
         max_score += weight
         if header in headers_lc:
             audit.present[header] = headers_lc[header]
-            got += weight
+            if header == "content-security-policy":
+                # A present-but-worthless CSP shouldn't score as protection. Weight the
+                # CSP's contribution by how much it actually blocks script injection.
+                csp = cspmod.analyze_csp(headers_lc[header])
+                audit.csp_weaknesses = [
+                    Finding(header=f"csp:{directive}", severity=sev, detail=detail)
+                    for directive, sev, detail in csp["weaknesses"]
+                ]
+                got += weight * csp["strength"]
+            else:
+                got += weight
         else:
             audit.missing.append(Finding(header=header, severity=severity, detail=explanation))
 

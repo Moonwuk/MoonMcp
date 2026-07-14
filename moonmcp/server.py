@@ -1073,7 +1073,11 @@ async def analyze_headers(target: str) -> dict:
 
     Grades (A-F) the presence of HSTS, CSP, X-Frame-Options, X-Content-Type-
     Options, Referrer-Policy and Permissions-Policy; flags information-leaking
-    headers (Server, X-Powered-By, ...) and risky Set-Cookie flags. In scope only.
+    headers (Server, X-Powered-By, ...) and risky Set-Cookie flags. The CSP isn't
+    just checked present-vs-absent — its policy is parsed and a weak one
+    (`unsafe-inline`/`unsafe-eval`, wildcard/`data:`/`blob:`/`http:` script
+    sources, or no script-src/default-src at all) is downgraded in the score and
+    listed under `csp_weaknesses`. In scope only.
     """
 
     raw = target.strip()
