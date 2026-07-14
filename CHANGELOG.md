@@ -6,6 +6,16 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`response_format=concise|detailed` on the heavy-output tools (ergonomics).**
+  Recon tools can emit large payloads (hundreds of subdomains, a full crawl tree,
+  a long request history); streaming all of it into the agent's context every call
+  burns the token budget it needs for the hunt. A new `moonmcp/shape.py` trims
+  lists longer than 20 items to a preview + a `{"_truncated": N, ...}` sentinel;
+  the tool exposes `response_format` (default `"concise"`) so the agent asks for
+  `"detailed"` only when it needs the full set. Wired into the six heaviest tools —
+  `crawl`, `recon_target`, `http_history`, `memory_graph`, `list_findings`,
+  `analyze_js` (not all 169; a small result is unchanged, and a concise result is
+  a strict subset of the detailed one so nothing is silently lost).
 - **`search_tools` — progressive tool discovery (ergonomics).** A 169-tool
   surface is past the point where handing an agent every schema at once helps
   (tool-selection accuracy drops as the visible set grows). `search_tools(query)`
