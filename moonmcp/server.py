@@ -43,7 +43,7 @@ from .context import AppContext, build_context, to_dict
 from .external import cli
 from .external import nuclei as nucleimod
 from .intel import asn as asnmod
-from .intel import cve, shodan
+from .intel import cve, cverisk, shodan
 from .intel import email as emailmod
 from .intel import oast as oastmod
 from .intel import oast_server as oastsrvmod
@@ -917,6 +917,25 @@ async def cve_search(keyword: str, limit: int = 15) -> dict:
     ctx = get_context()
     result = await cve.search_cves(ctx.http, keyword, limit=limit, api_key=ctx.settings.nvd_api_key)
     return to_dict(result)
+
+
+@mcp.tool()
+@safe_tool
+async def cve_triage(cve_id: str) -> dict:
+    """**Prioritise a CVE by real exploitation risk**, not just CVSS. Enriches the
+    NVD record with **EPSS** (FIRST.org exploitation probability), **CISA KEV**
+    (is it *actively* exploited in the wild?), and a **public-PoC** signal (NVD
+    "Exploit"-tagged reference), then folds them into one composite score:
+    `0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC`. Anything on the KEV list is
+    clamped to the CRITICAL band (≥76) regardless of CVSS, and a KEV+PoC pair gets
+    a boost — so a "medium CVSS but actively-exploited" bug sorts above a "critical
+    CVSS but no known exploitation" one. Turns a `fingerprint`/`cve_search` hit
+    into a patch-order decision. Passive third-party data (NVD/FIRST/CISA) — no
+    packets to any target.
+    """
+
+    ctx = get_context()
+    return await cverisk.triage(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
 
 
 @mcp.tool()

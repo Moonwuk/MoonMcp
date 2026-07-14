@@ -30,6 +30,8 @@ class CveRecord:
     cvss_vector: str | None = None
     cwe: list[str] = field(default_factory=list)
     references: list[str] = field(default_factory=list)
+    # True when NVD tags any reference as an "Exploit" — a public-PoC signal.
+    poc: bool = False
 
 
 @dataclass
@@ -68,6 +70,7 @@ def _parse_vuln(vuln: dict) -> CveRecord:
             if val and val.startswith("CWE-") and val not in cwes:
                 cwes.append(val)
     refs = [r.get("url") for r in cve.get("references", []) if r.get("url")][:15]
+    poc = any("Exploit" in (r.get("tags") or []) for r in cve.get("references", []))
     return CveRecord(
         id=cve.get("id", "?"),
         published=cve.get("published"),
@@ -78,6 +81,7 @@ def _parse_vuln(vuln: dict) -> CveRecord:
         cvss_vector=vector,
         cwe=cwes,
         references=refs,
+        poc=poc,
     )
 
 

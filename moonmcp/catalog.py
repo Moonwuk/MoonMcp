@@ -37,7 +37,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         [
             "web_search", "web_read", "search_dorks",
             "enumerate_subdomains", "wayback_urls",
-            "cve_lookup", "cve_search",
+            "cve_lookup", "cve_search", "cve_triage",
             "host_intel", "ip_intel", "reverse_ip",
             "cloud_buckets", "email_security", "dependency_confusion",
         ],
