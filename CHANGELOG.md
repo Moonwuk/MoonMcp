@@ -39,6 +39,20 @@ All notable changes to MoonMCP are documented here. The format loosely follows
   tool it can emit actually exists.
 
 ### Changed
+- **Structured, self-correcting error envelopes on the common failures
+  (ergonomics).** A bare `{"error": "out_of_scope"}` tells an agent *that* it
+  failed, not *what to do next*, so it stalls or retries blind. A new
+  `moonmcp/errors.py` maps the recurring error codes to a one-line recovery
+  `action` and `err()` stamps it onto the envelope: `out_of_scope` → add the host
+  with `scope_add`; `disabled`/`intrusive_disabled` → set
+  `MOONMCP_ALLOW_INTRUSIVE=1` when authorised; `oast_unconfigured` → start
+  `oast_selfhost`; `not_found` → list what exists first; `unreachable` →
+  verify the host; `invalid_token`/`invalid_input` → re-check the argument.
+  Purely additive — the `error` code is unchanged (callers/tests that switch on
+  it keep working) and any tool-specific context keys (`url`, ids) are preserved.
+  Wired through the `@safe_tool` wrapper (scope/blocked/value failures) and the
+  hand-written `oast_unconfigured`/`unreachable`/`not_found`/`invalid_token`
+  returns; it standardises the *common* codes, not every ad-hoc error string.
 - **Standardised `suggested_next` on the detection probes (ergonomics).** Every
   detector emits a verdict, but an agent still has to decide the next move. A new
   `moonmcp/nextstep.py` centralises that: given a probe + its verdict it names the
