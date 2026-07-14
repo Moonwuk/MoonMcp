@@ -42,6 +42,7 @@ from . import nextstep as nextstepmod
 from . import obsidian as obsidianmod
 from . import planner as plannermod
 from . import prompts as promptmod
+from . import toolsearch as toolsearchmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
 from .external import nuclei as nucleimod
@@ -491,6 +492,38 @@ async def tool_catalog(family: str | None = None) -> dict:
     """
 
     return catalogmod.build_catalog(_tool_meta(), family=family)
+
+
+@mcp.tool()
+@safe_tool
+async def search_tools(query: str, limit: int = 6) -> dict:
+    """**Find the few tools relevant to what you're doing** instead of scanning all
+    ~168. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    `"subdomains"`) and get back a short ranked list — each with the tool name, its
+    family, and a one-line gist — so you can pick the right probe without reading
+    the whole catalogue. A name match outranks a family match outranks a gist
+    match. Pair with `tool_catalog` (the full grouped map) and `plan_target` (what
+    to run next on a specific target). Offline — searches the server's own tools.
+    """
+
+    fam_of: dict[str, str] = {}
+    for fam, (_title, _desc, tools) in catalogmod.FAMILIES.items():
+        for t in tools:
+            fam_of.setdefault(t, fam)
+
+    entries: list[dict] = []
+    for name, tool in mcp._tool_manager._tools.items():
+        doc = tool.fn.__doc__ or ""
+        gist = ""
+        for line in doc.splitlines():
+            cleaned = line.replace("**", "").strip()
+            if cleaned:
+                gist = cleaned[:200]
+                break
+        entries.append({"name": name, "family": fam_of.get(name, ""), "gist": gist})
+
+    results = toolsearchmod.rank(query, entries, limit=limit)
+    return {"query": query, "count": len(results), "results": results}
 
 
 @mcp.tool()

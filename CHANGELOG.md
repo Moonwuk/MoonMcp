@@ -6,6 +6,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`search_tools` — progressive tool discovery (ergonomics).** A 169-tool
+  surface is past the point where handing an agent every schema at once helps
+  (tool-selection accuracy drops as the visible set grows). `search_tools(query)`
+  ranks the tools by relevance to a keyword/phrase (`"graphql"`, `"jwt"`,
+  `"cache poisoning"`) and returns a short list — name match outranks family
+  outranks gist — so the agent retrieves the few relevant tools instead of
+  scanning all of them. Pairs with `tool_catalog` (the full grouped map) and
+  `plan_target` (what to run next on a target). Pure ranker in
+  `moonmcp/toolsearch.py`; offline.
 - **`plan_target` — next-action ranking for any agent (ergonomics).** Codifies
   the idea-gen skill's attack-vector brainstorming as a *tool*, so an agent works
   the target well even without the skill loaded. Reads the knowledge graph
