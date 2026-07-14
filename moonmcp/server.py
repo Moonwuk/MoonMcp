@@ -35,6 +35,7 @@ from . import __version__
 from . import catalog as catalogmod
 from . import confirm as confirmmod
 from . import cvss as cvssmod
+from . import errors as errmod
 from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
 from . import metrics as metricsmod
@@ -192,12 +193,12 @@ def safe_tool(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[An
         try:
             return await func(*args, **kwargs)
         except ScopeError as exc:
-            return {"error": "out_of_scope", "detail": str(exc),
-                    "hint": "Add the target to scope with scope_add, or check scope_list."}
+            return errmod.err("out_of_scope", detail=str(exc),
+                              hint="Add the target to scope with scope_add, or check scope_list.")
         except ToolBlocked as exc:
-            return {"error": "disabled", "detail": str(exc)}
+            return errmod.err("disabled", detail=str(exc))
         except ValueError as exc:
-            return {"error": "invalid_input", "detail": str(exc)}
+            return errmod.err("invalid_input", detail=str(exc))
         except Exception as exc:  # never surface an opaque crash to the MCP client
             return {"error": "internal_error", "detail": f"{type(exc).__name__}: {exc}"}
     return wrapper
@@ -938,7 +939,7 @@ async def cve_lookup(cve_id: str) -> dict:
     ctx = get_context()
     record = await cve.lookup_cve(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
     if record is None:
-        return {"error": "not_found", "detail": f"No NVD record for {cve_id}"}
+        return errmod.err("not_found", detail=f"No NVD record for {cve_id}")
     return to_dict(record)
 
 
@@ -1143,7 +1144,7 @@ async def analyze_headers(target: str) -> dict:
         url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
     )
     if result.status is None:
-        return {"error": "unreachable", "detail": result.error, "url": url}
+        return errmod.err("unreachable", detail=result.error, url=url)
     audit = headersmod.audit_headers(result)
     return to_dict(audit)
 
@@ -1164,7 +1165,7 @@ async def fingerprint(target: str) -> dict:
         url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
     )
     if result.status is None:
-        return {"error": "unreachable", "detail": result.error, "url": url}
+        return errmod.err("unreachable", detail=result.error, url=url)
     dns_res = await dnsmod.resolve(host, http_client=ctx.http)
     ip = (dns_res.a or [None])[0]
     fp = fpmod.fingerprint(result, ip=ip)
@@ -2314,14 +2315,14 @@ async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
     cb = ctx.oast.get(oast_token) if oast_token else None
     if cb is None:
         if not ctx.oast.configured:
-            return {"error": "oast_unconfigured",
-                    "detail": "start oast_selfhost or oast_configure before probing jku/x5u SSRF"}
+            return errmod.err("oast_unconfigured",
+                              detail="start oast_selfhost or oast_configure before probing jku/x5u SSRF")
         cb = ctx.oast.generate(label="jwt_jku")
     param = "x5u" if header_param.lower() == "x5u" else "jku"
     try:
         forged = jwtmod.forge_remote_key_header(token, cb.http_url, param=param)
     except ValueError:
-        return {"error": "invalid_token", "detail": "the supplied token is not a JWT"}
+        return errmod.err("invalid_token", detail="the supplied token is not a JWT")
     await ctx.http.fetch(url, method="GET", headers={"Authorization": f"Bearer {forged}"},
                          follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
@@ -2590,7 +2591,7 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
         if cb is None and ctx.oast.configured:
             cb = ctx.oast.generate(label="second_order_sqli")
         if cb is None:
-            oob_out = {"error": "oast_unconfigured"}
+            oob_out = errmod.err("oast_unconfigured")
         else:
             await _cycle(somod.oob_seed(tag, cb.http_url, cb.canary_host))
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
@@ -3273,7 +3274,7 @@ async def memory_get(item_id: int) -> dict:
     """Fetch one memory item by id (from `memory_search` / `memory_add`)."""
 
     item = get_context().memory.get(item_id)
-    return item if item else {"error": "not_found", "detail": f"no memory item #{item_id}"}
+    return item if item else errmod.err("not_found", detail=f"no memory item #{item_id}")
 
 
 @mcp.tool()
@@ -4167,7 +4168,7 @@ async def passive_scan(target: str) -> dict:
         scope_check=_scope_check(),
     )
     if result.status is None:
-        return {"error": "unreachable", "detail": result.error, "url": url}
+        return errmod.err("unreachable", detail=result.error, url=url)
     _record_exchange("passive_scan", "GET", url, {}, b"", result)
     return {"url": result.final_url or url, "status": result.status,
             **interceptmod.passive_findings(result)}
@@ -4190,7 +4191,7 @@ async def http_history(exchange_id: int | None = None, host: str | None = None,
         return {"cleared": ctx.history.clear()}
     if exchange_id is not None:
         ex = ctx.history.get(exchange_id)
-        return to_dict(ex) if ex else {"error": "not_found", "detail": f"no exchange #{exchange_id}"}
+        return to_dict(ex) if ex else errmod.err("not_found", detail=f"no exchange #{exchange_id}")
     items = ctx.history.list(limit=limit, host=host)
     result = {
         "count": ctx.history.count,
@@ -4447,8 +4448,8 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         if cb is None and ctx.oast.configured:
             cb = ctx.oast.generate(label="sqli_oob")
         if cb is None:
-            lanes["oob"] = {"error": "oast_unconfigured",
-                            "detail": "start oast_selfhost or oast_configure before an OOB SQLi probe"}
+            lanes["oob"] = errmod.err("oast_unconfigured",
+                                      detail="start oast_selfhost or oast_configure before an OOB SQLi probe")
         else:
             for _lbl, pl in probesmod.sqli_oob_payloads(cb.canary_host, cb.http_url):
                 await _get(pl)
@@ -4539,8 +4540,8 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
         if cb is None and ctx.oast.configured:
             cb = ctx.oast.generate(label="cmdi_oob")
         if cb is None:
-            lanes["oob"] = {"error": "oast_unconfigured",
-                            "detail": "start oast_selfhost or oast_configure before an OOB cmdi probe"}
+            lanes["oob"] = errmod.err("oast_unconfigured",
+                                      detail="start oast_selfhost or oast_configure before an OOB cmdi probe")
         else:
             for _sep, pl in probesmod.cmdi_oob_payloads(cb.http_url):
                 await _get(pl)
@@ -4950,8 +4951,8 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
     cb = ctx.oast.get(oast_token) if oast_token else None
     if cb is None:
         if not ctx.oast.configured:
-            return {"error": "oast_unconfigured",
-                    "detail": "start oast_selfhost or oast_configure before probing for blind SSRF"}
+            return errmod.err("oast_unconfigured",
+                              detail="start oast_selfhost or oast_configure before probing for blind SSRF")
         cb = ctx.oast.generate(label="ssrf_probe")
     m = method.upper()
     tu, tb = _with_param(url, param, cb.http_url, m)
@@ -5023,8 +5024,8 @@ async def xxe_probe(target: str, body: str = "", content_type: str = "applicatio
     if cb is None and ctx.oast.configured:
         cb = ctx.oast.generate(label="xxe_probe")
     if cb is None:
-        result["oob"] = {"error": "oast_unconfigured",
-                         "detail": "start oast_selfhost or oast_configure before an OOB XXE probe"}
+        result["oob"] = errmod.err("oast_unconfigured",
+                                   detail="start oast_selfhost or oast_configure before an OOB XXE probe")
     else:
         payload = xxemod.xxe_oob_payload(cb.http_url)
         await ctx.http.fetch(url, method=m, body=payload.encode(),
@@ -5240,8 +5241,8 @@ async def fastjson_oast_probe(target: str, method: str = "POST",
     cb = ctx.oast.get(oast_token) if oast_token else None
     if cb is None:
         if not ctx.oast.configured:
-            return {"error": "oast_unconfigured",
-                    "detail": "start oast_selfhost or oast_configure before a Fastjson OAST probe"}
+            return errmod.err("oast_unconfigured",
+                              detail="start oast_selfhost or oast_configure before a Fastjson OAST probe")
         cb = ctx.oast.generate(label="fastjson_oast")
     m = method.upper()
     host = cb.canary_host or cb.http_url
