@@ -6,6 +6,17 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **MCP tool annotations derived from the scope markers.** From the research
+  agenda (docs/RESEARCH_AGENDA.md) + audit convergence: every registered tool now
+  carries MCP `ToolAnnotations` so a cooperating host can auto-insert a
+  confirmation gate on the loud/offensive tools (read/recon on by default,
+  anything that could touch state prompts). Mapping is derived from the existing
+  `@active_tool`/`@safe_tool` markers — intrusive probes get
+  `readOnlyHint=false, destructiveHint=true, openWorldHint=true`; non-intrusive
+  active tools `readOnlyHint=true, openWorldHint=true`; safe/offline tools
+  `readOnlyHint=true`. These are **hints only** — the `@active_tool` scope guard
+  remains the real enforcement (the spec says clients must treat annotations as
+  untrusted), so this adds a host-UI signal without weakening the gate.
 - **CVE risk triage (`cve_triage`).** From the research agenda
   (docs/RESEARCH_AGENDA.md, top direction) — `cve_lookup` returns CVSS, which is
   *theoretical* severity; real triage needs exploitation likelihood. The new tool
