@@ -2273,17 +2273,7 @@ async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
     await ctx.http.fetch(url, method="GET", headers={"Authorization": f"Bearer {forged}"},
                          follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits = await oastmod.collect_interactions(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "header_param": param, "canary": cb.http_url, "token_id": cb.token,
            **verdict, "interactions": hits[:20]}
@@ -2552,17 +2542,7 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
         else:
             await _cycle(somod.oob_seed(tag, cb.http_url, cb.canary_host))
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        rr = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(rr.text())
-                    except Exception:
-                        oh = []
+            oh = await oastmod.collect_interactions(ctx, cb.token)
             oast_count = len(oh)
             oob_out = {"canary": cb.http_url, "token": cb.token,
                        "interaction_count": oast_count, "interactions": oh[:20]}
@@ -4193,18 +4173,7 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
 
     interactions: list[dict] = []
     if oast_token:
-        # The built-in self-host catcher (oast_selfhost) records callbacks locally
-        # and sets no poll_url — read it directly, like ssrf_probe / oast_poll do.
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            interactions = ctx.oast_server.interactions(oast_token)
-        else:
-            poll = ctx.oast.poll_target(oast_token)
-            if poll:
-                try:
-                    r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
-                    interactions = oastmod.parse_interactions(r.text())
-                except Exception:
-                    interactions = []
+        interactions = await oastmod.collect_interactions(ctx, oast_token)
 
     verdict = confirmmod.evaluate(
         reflected=reflected, status_changed=status_changed, length_delta=length_delta,
@@ -4395,17 +4364,7 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
             for _lbl, pl in probesmod.sqli_oob_payloads(cb.canary_host, cb.http_url):
                 await _get(pl)
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        r = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(r.text())
-                    except Exception:
-                        oh = []
+            oh = await oastmod.collect_interactions(ctx, cb.token)
             oast_count = len(oh)
             lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
                             "interaction_count": oast_count, "interactions": oh[:20]}
@@ -4496,17 +4455,7 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
             for _sep, pl in probesmod.cmdi_oob_payloads(cb.http_url):
                 await _get(pl)
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        r = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(r.text())
-                    except Exception:
-                        oh = []
+            oh = await oastmod.collect_interactions(ctx, cb.token)
             oast_count = len(oh)
             lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
                             "interaction_count": oast_count, "interactions": oh[:20]}
@@ -4915,17 +4864,7 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
     tu, tb = _with_param(url, param, cb.http_url, m)
     await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits = await oastmod.collect_interactions(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "param": param, "canary": cb.http_url, "token": cb.token,
            **verdict, "interactions": hits[:20]}
@@ -4998,17 +4937,7 @@ async def xxe_probe(target: str, body: str = "", content_type: str = "applicatio
                              headers={"Content-Type": "application/xml"},
                              follow_redirects=False, scope_check=sc)
         await asyncio.sleep(max(0.0, min(wait, 8.0)))
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            hits = ctx.oast_server.interactions(cb.token)
-        else:
-            poll = ctx.oast.poll_target(cb.token)
-            hits = []
-            if poll:
-                try:
-                    r = await ctx.http.fetch(poll, follow_redirects=True)
-                    hits = oastmod.parse_interactions(r.text())
-                except Exception:
-                    hits = []
+        hits = await oastmod.collect_interactions(ctx, cb.token)
         oast_count = len(hits)
         result["oob"] = {"canary": cb.http_url, "token": cb.token,
                          "interaction_count": oast_count, "interactions": hits[:20]}
@@ -5155,18 +5084,6 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
         u, b = _with_param(url, param, value, m)
         return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
 
-    async def _poll(cb) -> list:
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            return ctx.oast_server.interactions(cb.token)
-        pt = ctx.oast.poll_target(cb.token)
-        if not pt:
-            return []
-        try:
-            r = await ctx.http.fetch(pt, follow_redirects=True)
-            return oastmod.parse_interactions(r.text())
-        except Exception:
-            return []
-
     # Lane 1 — scheme-deref OAST canaries (one token per scheme for attribution).
     scheme_hits: dict[str, int] = {}
     scheme_note = None
@@ -5178,7 +5095,7 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
             await _get(sspmod.scheme_payload(s, cb.canary_host, cb.http_url))
         await asyncio.sleep(max(0.0, min(wait, 8.0)))
         for s, cb in canaries.items():
-            n = len(await _poll(cb))
+            n = len(await oastmod.collect_interactions(ctx, cb.token))
             if n:
                 scheme_hits[s] = n
 
@@ -5240,17 +5157,7 @@ async def fastjson_oast_probe(target: str, method: str = "POST",
                              follow_redirects=False, scope_check=_scope_check())
         sent.append(label)
     await asyncio.sleep(max(0.0, min(wait, 8.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits = await oastmod.collect_interactions(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "canary": cb.http_url, "token": cb.token, "payloads_sent": sent,
            **verdict, "interactions": hits[:20]}

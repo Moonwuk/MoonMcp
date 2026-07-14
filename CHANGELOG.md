@@ -5,6 +5,15 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **De-duplicated the OAST-collection epilogue** (docs/PROJECT_AUDIT.md 1.1). The
+  ~10-line "read the self-hosted catcher, else poll the provider and parse"
+  block was copy-pasted across ~9 OOB probe bodies (jwt_jku, second-order SQLi,
+  passive-scan, sqli/cmdi OOB lanes, ssrf, xxe, ssrf_protocol, fastjson). It now
+  lives once in `oastmod.collect_interactions(ctx, token)`; the probes call it.
+  Behavior-preserving (full suite green); ~80 lines removed. The `oast_poll`
+  diagnostic tool keeps its own distinct return semantics and is unchanged.
+
 ### Added
 - **MCP tool annotations derived from the scope markers.** From the research
   agenda (docs/RESEARCH_AGENDA.md) + audit convergence: every registered tool now

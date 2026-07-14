@@ -18,6 +18,7 @@ import os
 import secrets
 import urllib.parse
 from dataclasses import dataclass, field
+from typing import Any
 
 
 def _token() -> str:
@@ -138,3 +139,26 @@ def parse_interactions(body: str) -> list[dict]:
             return [data]
         return []
     return []
+
+
+async def collect_interactions(ctx: Any, token: str) -> list[dict]:
+    """Collect OAST interactions for *token* — the shared poll epilogue every OOB
+    probe runs after sending its canary payload.
+
+    Reads the self-hosted catcher when it's running, otherwise polls the
+    configured provider's target URL and parses the response. Returns ``[]`` on any
+    failure — an unconfigured or unreachable poll target must never be mistaken for
+    a hit (that would falsely "confirm" a blind vuln). *ctx* is the app context,
+    duck-typed here to avoid an import cycle with the server module.
+    """
+
+    if ctx.oast_server is not None and ctx.oast_server.running:
+        return ctx.oast_server.interactions(token)
+    poll = ctx.oast.poll_target(token)
+    if not poll:
+        return []
+    try:
+        r = await ctx.http.fetch(poll, follow_redirects=True)
+        return parse_interactions(r.text())
+    except Exception:
+        return []
