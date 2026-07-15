@@ -64,9 +64,11 @@ def test_waf_identify():
 @pytest.mark.asyncio
 async def test_tools_and_resources_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
-    for n in ("vuln_info", "vuln_search", "rootcause_info", "vuln_tools",
+    for n in ("vuln_info", "rootcause_info", "vuln_tools",
               "waf_info", "identify_waf"):
         assert n in tools
+    assert "vuln_search" not in tools          # folded into vuln_info(query=)
+    assert (await srv.vuln_info(query="ssrf"))["results"]
     resources = {str(r.uri) for r in await srv.mcp.list_resources()}
     for scheme in ("vulns://", "rootcauses://", "waf://"):
         assert any(u.startswith(scheme) for u in resources), scheme

@@ -47,12 +47,12 @@ def test_search_and_filters():
 @pytest.mark.asyncio
 async def test_technique_tools():
     tools = {t.name for t in await srv.mcp.list_tools()}
-    assert "technique_info" in tools and "technique_search" in tools
+    assert "technique_info" in tools and "technique_search" not in tools
     info = await srv.technique_info(technique="log4shell")
     assert info["id"] == "log4shell"
     idx = await srv.technique_info()
     assert idx["stats"]["techniques"] >= 5
     bylang = await srv.technique_info(language="python")
     assert "results" in bylang
-    s = await srv.technique_search(query="deserialization")
+    s = await srv.technique_info(query="deserialization")   # search folded into _info
     assert s["results"]

@@ -107,10 +107,10 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Offline reference: injections, techniques/PoCs, privilege escalation, "
         "server-side vulns + root causes, WAF fingerprints. No traffic.",
         [
-            "injection_info", "injection_search", "match_injection_signatures",
-            "technique_info", "technique_search",
-            "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
-            "vuln_info", "vuln_search", "vuln_tools", "rootcause_info",
+            "injection_info", "match_injection_signatures",
+            "technique_info",
+            "privesc_info", "privesc_tools", "match_privesc",
+            "vuln_info", "vuln_tools", "rootcause_info",
             "waf_info", "identify_waf",
         ],
     )),

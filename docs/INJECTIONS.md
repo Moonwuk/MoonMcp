@@ -1,7 +1,7 @@
 # MoonMCP — Injection Knowledge Base
 
 > Patterns, root causes and **detection signatures** for every major injection class.
-> This is the data behind `injection_info`, `injection_search` and
+> This is the data behind `injection_info` (with `query=`) and
 > `match_injection_signatures` (which scans an HTTP response body and tells you which
 > injection it *smells* like), plus the `injections://all` resource. Detection payloads
 > are benign canaries for authorised testing — not weaponized chains.

@@ -6,7 +6,7 @@
 > commands, detection indicators and links to public research — **no** weaponized code.
 
 
-**129 techniques** across **6 platforms** and **68 tools**. Behind the `privesc_info` / `privesc_search` /
+**129 techniques** across **6 platforms** and **68 tools**. Behind the `privesc_info` (`query=` to search) /
 `privesc_tools` tools, the `privesc://all` resource, and — most usefully —
 `match_privesc`, which scans pasted enumeration output (`sudo -l`, `id`, a SUID
 listing, `getcap -r /`, `whoami /priv`, `systeminfo`) and tells you which escalation

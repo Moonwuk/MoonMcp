@@ -35,10 +35,10 @@ PASSIVE = {
     "audit_log",
     "export_obsidian", "surface_diff", "export_findings",
     # offline knowledge bases
-    "injection_info", "injection_search", "match_injection_signatures",
-    "technique_info", "technique_search",
-    "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
-    "vuln_info", "vuln_search", "rootcause_info", "vuln_tools",
+    "injection_info", "match_injection_signatures",
+    "technique_info",
+    "privesc_info", "privesc_tools", "match_privesc",
+    "vuln_info", "rootcause_info", "vuln_tools",
     "waf_info", "identify_waf",
     # external-tool inventory + nuclei coverage map (no traffic; run_scanner/vuln_scan do the work)
     "external_tools", "scan_coverage",

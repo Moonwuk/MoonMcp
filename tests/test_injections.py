@@ -56,8 +56,10 @@ def test_match_signatures_filter_by_class():
 @pytest.mark.asyncio
 async def test_injection_tools_registered_and_work():
     tools = {t.name for t in await srv.mcp.list_tools()}
-    for name in ("injection_info", "injection_search", "match_injection_signatures"):
+    for name in ("injection_info", "match_injection_signatures"):
         assert name in tools
+    assert "injection_search" not in tools     # folded into injection_info(query=)
+    assert (await srv.injection_info(query="sql"))["results"]
     info = await srv.injection_info(injection_class="sqli")
     assert info["id"] == "sqli"
     idx = await srv.injection_info()

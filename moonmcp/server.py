@@ -3642,7 +3642,7 @@ async def export_findings(format: str = "sarif", target: str | None = None,
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @safe_tool
-async def injection_info(injection_class: str | None = None) -> dict:
+async def injection_info(injection_class: str | None = None, query: str | None = None) -> dict:
     """Look up MoonMCP's injection knowledge base: patterns (detection payloads),
     causes (root causes) and signatures (exact error strings / regexes to detect
     the vuln from a response). Pass an injection class id/alias (e.g. sqli, xss,
@@ -3651,6 +3651,8 @@ async def injection_info(injection_class: str | None = None) -> dict:
     No network — pure reference.
     """
 
+    if query:
+        return {"query": query, "results": injmod.search(query)}
     if not injection_class:
         return {"stats": injmod.stats(), "classes": injmod.list_classes()}
     entry = injmod.get_class(injection_class)
@@ -3658,14 +3660,6 @@ async def injection_info(injection_class: str | None = None) -> dict:
         return {"error": "unknown_class", "detail": f"No injection class '{injection_class}'",
                 "known": [c["id"] for c in injmod.list_classes()]}
     return entry
-
-
-@mcp.tool()
-@safe_tool
-async def injection_search(query: str) -> dict:
-    """Search the injection knowledge base by keyword (name, alias, CWE, summary)."""
-
-    return {"query": query, "results": injmod.search(query)}
 
 
 @mcp.tool()
@@ -3684,7 +3678,7 @@ async def match_injection_signatures(text: str, injection_class: str | None = No
 @mcp.tool()
 @safe_tool
 async def technique_info(technique: str | None = None, category: str | None = None,
-                         language: str | None = None) -> dict:
+                         language: str | None = None, query: str | None = None) -> dict:
     """Look up MoonMCP's techniques & notable-PoC catalog — a referenced index of
     exploitation techniques and landmark public vulnerabilities across languages
     (web, deserialization, memory-corruption/asm, famous CVEs, language-specific,
@@ -3693,6 +3687,8 @@ async def technique_info(technique: str | None = None, category: str | None = No
     the public PoC/research — it is a knowledge reference, not exploit code.
     """
 
+    if query:
+        return {"query": query, "results": techmod.search(query)}
     if technique:
         entry = techmod.get_technique(technique)
         if entry is None:
@@ -3706,21 +3702,13 @@ async def technique_info(technique: str | None = None, category: str | None = No
     return {"stats": techmod.stats(), "techniques": techmod.list_techniques()}
 
 
-@mcp.tool()
-@safe_tool
-async def technique_search(query: str) -> dict:
-    """Search the techniques & PoC catalog by keyword, language, CVE or category."""
-
-    return {"query": query, "results": techmod.search(query)}
-
-
 # ---------------------------------------------------------------------------
 # knowledge base — privilege escalation (techniques + tooling)
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @safe_tool
 async def privesc_info(technique: str | None = None, platform: str | None = None,
-                       category: str | None = None) -> dict:
+                       category: str | None = None, query: str | None = None) -> dict:
     """Look up MoonMCP's privilege-escalation knowledge base — a referenced catalog
     of local privesc techniques across Linux, Windows, container, cloud and Active
     Directory, with benign enumeration commands, detection indicators and links to
@@ -3731,6 +3719,8 @@ async def privesc_info(technique: str | None = None, platform: str | None = None
     for the index + stats. No network — pure reference.
     """
 
+    if query:
+        return {"query": query, "results": privescmod.search(query)}
     if technique:
         entry = privescmod.get_technique(technique)
         if entry is None:
@@ -3742,16 +3732,6 @@ async def privesc_info(technique: str | None = None, platform: str | None = None
     if category:
         return {"category": category, "results": privescmod.by_category(category)}
     return {"stats": privescmod.stats(), "techniques": privescmod.list_techniques()}
-
-
-@mcp.tool()
-@safe_tool
-async def privesc_search(query: str) -> dict:
-    """Search the privilege-escalation KB by keyword (name, platform, category, CVE,
-    tool or detection indicator).
-    """
-
-    return {"query": query, "results": privescmod.search(query)}
 
 
 @mcp.tool()
@@ -3793,7 +3773,8 @@ async def match_privesc(text: str, platform: str | None = None) -> dict:
 @mcp.tool()
 @safe_tool
 async def vuln_info(vuln: str | None = None, category: str | None = None,
-                    popularity: str | None = None, root_cause: str | None = None) -> dict:
+                    popularity: str | None = None, root_cause: str | None = None,
+                    query: str | None = None) -> dict:
     """Look up MoonMCP's server-side vulnerability catalog — popular AND obscure
     classes (SSRF, SQLi, RCE, deserialization, request smuggling, SSTI, XXE,
     cache poisoning, mass assignment, prototype pollution, race conditions,
@@ -3804,6 +3785,8 @@ async def vuln_info(vuln: str | None = None, category: str | None = None,
     `root_cause`; or omit for the index + stats. No network — pure reference.
     """
 
+    if query:
+        return {"query": query, "results": vulnsmod.search(query)}
     if vuln:
         entry = vulnsmod.get_vuln(vuln)
         if entry is None:
@@ -3817,16 +3800,6 @@ async def vuln_info(vuln: str | None = None, category: str | None = None,
     if root_cause:
         return {"root_cause": root_cause, "results": vulnsmod.by_root_cause(root_cause)}
     return {"stats": vulnsmod.stats(), "vulns": vulnsmod.list_vulns()}
-
-
-@mcp.tool()
-@safe_tool
-async def vuln_search(query: str) -> dict:
-    """Search the server-side vulnerability catalog by keyword (name, category,
-    root cause, real-world incident, tool).
-    """
-
-    return {"query": query, "results": vulnsmod.search(query)}
 
 
 @mcp.tool()

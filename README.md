@@ -51,14 +51,14 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **170 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
 | `server_status` | Report config, active program, detected enhancers and external CLIs. |
 | `tool_catalog` | Self-describing **map of all tools** grouped by family, each tagged `scope_gated` / `intrusive`, plus the recommended recon→report workflow — call it second to orient. |
-| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~169 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
+| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~166 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
@@ -243,13 +243,13 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 
 | Tool | Purpose |
 | --- | --- |
-| `injection_info` / `injection_search` | Look up / search one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, per-engine signatures. |
+| `injection_info` | Look up (or `query=` to search) one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, per-engine signatures. |
 | `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology (e.g. `ORA-01756` → Oracle SQLi). |
-| `technique_info` / `technique_search` | 115 exploitation techniques & landmark public PoCs across all languages/levels — descriptions + links, not exploit code. |
-| `privesc_info` / `privesc_search` | 129 privilege-escalation techniques across Linux/Windows/container/cloud/AD/macOS: enumeration commands, detection indicators, mitigations, references. |
+| `technique_info` (`query=` to search) | 115 exploitation techniques & landmark public PoCs across all languages/levels — descriptions + links, not exploit code. |
+| `privesc_info` (`query=` to search) | 129 privilege-escalation techniques across Linux/Windows/container/cloud/AD/macOS: enumeration commands, detection indicators, mitigations, references. |
 | `privesc_tools` | Catalog of 68 privesc tools (LinPEAS/WinPEAS, GTFOBins, LOLBAS, PowerUp, Seatbelt, pspy, potato family, BloodHound, Impacket, …). |
 | `match_privesc` | Scan pasted enumeration output (`sudo -l`, `id`, `getcap -r /`, `whoami /priv`, `systeminfo`) → which escalation vectors it indicates. |
-| `vuln_info` / `vuln_search` / `vuln_tools` | 44 server-side vuln classes (popular + obscure) with root cause, `where_it_breaks`, detection, WAF notes and real-world incidents; + a 29-tool discovery catalog. |
+| `vuln_info` (`query=` to search) / `vuln_tools` | 44 server-side vuln classes (popular + obscure) with root cause, `where_it_breaks`, detection, WAF notes and real-world incidents; + a 29-tool discovery catalog. |
 | `rootcause_info` | The root-cause taxonomy — the ~13 fundamental causes underneath all these bugs, each with why it recurs, the systemic fix, and the catalog vulns that derive from it. |
 | `waf_info` / `identify_waf` | WAF KB (how they work · fingerprints · bypass concepts); `identify_waf` names the vendor from a raw HTTP response (CF-RAY, `__cfduid`, `x-akamai`, `incap_ses`, BigIP, …). |
 
@@ -475,7 +475,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 170 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 166 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
