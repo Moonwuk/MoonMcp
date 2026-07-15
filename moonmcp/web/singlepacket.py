@@ -92,6 +92,11 @@ async def single_packet_race(host: str, port: int, tls: bool, raw: bytes, n: int
                                  return_exceptions=True)
     live = [c for c in conns if not isinstance(c, BaseException) and c]
     if len(live) < 2:
+        for c in live:                       # close the lone open connection we won't use
+            try:
+                c[1].close()
+            except Exception:
+                pass
         return {**assess_race([]), "technique": "http1-last-byte-sync",
                 "error": "could not open at least two connections", "connections": len(live)}
 

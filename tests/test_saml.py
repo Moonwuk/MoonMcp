@@ -270,3 +270,13 @@ async def test_saml_xsw_probe_baselines_reflect_signature_check(local_server, fr
                                    saml_response=_SAMPLE_XML)
     assert res["baseline_accepted"]["status"] == 200
     assert res["baseline_corrupted"]["status"] == 403
+
+
+def test_decode_response_tolerates_line_wrapped_base64():
+    import base64
+
+    from moonmcp.web import saml
+    xml = "<samlp:Response>hi</samlp:Response>"
+    b64 = base64.b64encode(xml.encode()).decode()
+    wrapped = b64[:8] + "\n" + b64[8:20] + "\r\n" + b64[20:]     # line-wrapped like the wire
+    assert saml.decode_response(wrapped) == xml

@@ -82,7 +82,13 @@ class FindingsStore:
 
         seen: dict[tuple[str, str, str], Finding] = {}
         for f in sorted(self._items, key=lambda x: x.id):
-            seen.setdefault(_signature(f), f)
+            sig = _signature(f)
+            cur = seen.get(sig)
+            # Keep the HIGHEST-severity representative (smaller rank = more severe),
+            # earliest id on a tie — never let a later low-severity duplicate hide a
+            # higher-severity one under the same signature.
+            if cur is None or _sev_rank(f.severity) < _sev_rank(cur.severity):
+                seen[sig] = f
         return sorted(seen.values(), key=lambda f: (_sev_rank(f.severity), f.id))
 
     def list(self, target: str | None = None, severity: str | None = None) -> list[Finding]:
@@ -99,9 +105,13 @@ class FindingsStore:
             n = len(self._items)
             self._items = []
             return n
-        t = target.lower()
+        # Match the SAME host-scope semantics as list(): an apex clears its
+        # subdomains too — otherwise clear("example.com") leaves sub.example.com
+        # findings that list("example.com") still surfaces (asymmetric, surprising).
+        t = target.lower().lstrip("*.")
         before = len(self._items)
-        self._items = [f for f in self._items if f.target.lower() != t]
+        self._items = [f for f in self._items
+                       if not (f.target.lower() == t or f.target.lower().endswith("." + t))]
         return before - len(self._items)
 
     def summary(self) -> dict:

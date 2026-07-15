@@ -207,3 +207,16 @@ async def test_memory_brief_tool(fresh_context):
     b = await srv.memory_brief(target="a.example.com")
     assert b["target"] == "a.example.com"
     assert any(f["title"] == "IDOR on /orders" for f in b["findings"])
+
+
+def test_recent_kind_filter_counts_matching_rows():
+    # the kind filter is applied in SQL, so LIMIT counts MATCHING rows — a lesson
+    # buried under newer notes is still returned by recent(kind='lesson').
+    m = MemoryStore()
+    for i in range(5):
+        m.add(kind="note", title=f"note{i}", target="x")
+    m.add(kind="lesson", title="the one lesson", target="x")
+    for i in range(5):
+        m.add(kind="note", title=f"note_b{i}", target="x")
+    got = m.recent(limit=3, kind="lesson")
+    assert len(got) == 1 and got[0]["title"] == "the one lesson"

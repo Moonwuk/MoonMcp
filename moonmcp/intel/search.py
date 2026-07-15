@@ -48,7 +48,10 @@ def _real_url(href: str) -> str:
             q = urllib.parse.urlparse(href if "//" not in href[:2] else "https:" + href).query
             uddg = urllib.parse.parse_qs(q).get("uddg", [])
             if uddg:
-                return urllib.parse.unquote(uddg[0])
+                # parse_qs already percent-decoded the value once — a second unquote
+                # here corrupts any destination URL that legitimately contains a
+                # percent-encoded reserved char (e.g. a literal %3F in the path).
+                return uddg[0]
         except Exception:
             pass
     if href.startswith("//"):

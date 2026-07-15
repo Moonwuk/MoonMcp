@@ -155,3 +155,14 @@ async def test_git_forensics_not_exposed():
 async def test_git_forensics_registered(fresh_context):
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "git_forensics" in tools
+
+
+def test_sha_hex_validator_rejects_traversal_refs():
+    # a ref parsed out of a (target-controlled) object must be a real 40-hex id,
+    # never a "../"-bearing string that object_path() would turn into a traversal.
+    from moonmcp.recon.gitdump import _SHA_HEX
+    assert _SHA_HEX.fullmatch("a" * 40)
+    assert not _SHA_HEX.fullmatch("../../../../etc/passwd")
+    assert not _SHA_HEX.fullmatch("a" * 39)              # too short
+    assert not _SHA_HEX.fullmatch("A" * 40)              # uppercase is not a git object id
+    assert not _SHA_HEX.fullmatch("a" * 40 + "/x/y")     # trailing path segment

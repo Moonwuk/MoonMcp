@@ -194,7 +194,11 @@ def build_vault(
         if f.get("detail"):
             body += ["", "## Detail", str(f["detail"])]
         if f.get("evidence"):
-            body += ["", "## Evidence", "```", str(f["evidence"])[:4000], "```"]
+            ev = str(f["evidence"])[:4000]
+            # Use a fence longer than any backtick run in the evidence, so evidence
+            # containing ``` can't break out and render as live Obsidian markdown.
+            fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", ev)), default=0) + 1)
+            body += ["", "## Evidence", fence, ev, fence]
         vault.write(f"Findings/{note_name}.md", "\n".join(body))
 
     for host, notes in assets.items():

@@ -36,6 +36,7 @@ from urllib.parse import urljoin
 from ..net.http import HttpClient
 
 _SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+_SHA_HEX = re.compile(r"[0-9a-f]{40}")   # anchored (fullmatch) validator for an object id
 # Cap loose-object inflation — a small compressed object can zlib-bomb to gigabytes,
 # so bound the decompressed size (the header + enough payload to parse and scan).
 _MAX_OBJECT = 5 * 1024 * 1024
@@ -297,6 +298,11 @@ async def git_forensics(client: HttpClient, base_url: str, *, scope_check=None,
     pending = list(dict.fromkeys(queue))
     while pending and res.objects_walked < max_objects:
         sha = pending.pop(0)
+        # Object refs parsed out of a (target-controlled) commit/tree must be real
+        # 40-hex object ids — never a "../"-bearing string that object_path() would
+        # turn into a traversing GET outside .git/objects/ on the host.
+        if not _SHA_HEX.fullmatch(sha):
+            continue
         if sha in seen:
             continue
         seen.add(sha)

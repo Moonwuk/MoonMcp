@@ -88,3 +88,41 @@ async def test_ws_probe_message_echo_optin(fresh_context, local_server):
     assert res["echo"] is not None
     assert res["echo"]["reflected"] is True
     assert any(ld["kind"] == "message_reflection" for ld in res["leads"])
+
+
+@pytest.mark.asyncio
+async def test_handshake_reassembles_fragmented_response(monkeypatch):
+    # The 101 line and the Sec-WebSocket-Accept header arrive in SEPARATE reads —
+    # the handshake must still parse (a single read() would miss the accept header).
+    import asyncio
+
+    key = "dGhlIHNhbXBsZSBub25jZQ=="
+    accept = ws.accept_value(key)
+    monkeypatch.setattr(ws, "new_key", lambda: key)
+
+    class _FragReader:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        async def read(self, n):
+            return self._chunks.pop(0) if self._chunks else b""
+
+    class _NullWriter:
+        def write(self, d):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+    async def _fake_open(*a, **k):
+        return _FragReader([
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n",
+            f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n".encode(),
+        ]), _NullWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", _fake_open)
+    res = await ws._handshake("h", 80, False, "/", "h", 5.0, origin=None, subprotocols=None)
+    assert res["ok"] is True and res["status"] == 101

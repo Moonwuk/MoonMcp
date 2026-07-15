@@ -187,3 +187,57 @@ async def test_exposure_empty_signature_soft404_not_confirmed():
 
     res2 = await check_exposure(_GitSite(), "https://x.test/")
     assert res2.git_exposed is True
+
+
+# [core #19/#20] dedup keeps the higher-severity representative; clear() is
+# subdomain-aware (same host scope as list()).
+def test_findings_dedup_keeps_higher_severity_and_clear_is_subdomain_aware():
+    from moonmcp.findings import FindingsStore
+    fs = FindingsStore()
+    fs.add(target="acme.com", severity="low", title="Same finding", type="x")
+    fs.add(target="acme.com", severity="high", title="Same finding", type="x")
+    uniq = fs.unique()
+    assert len(uniq) == 1 and uniq[0].severity == "high"      # higher severity survives
+    fs.add(target="sub.acme.com", severity="medium", title="Sub finding", type="y")
+    assert fs.clear("acme.com") == 3                          # apex + subdomain findings
+    assert fs.list("acme.com") == []
+
+
+# [core #11] a malformed OIDC discovery doc with scalar (non-iterable) fields must
+# not crash the probe.
+def test_oidc_metadata_tolerates_scalar_fields():
+    from moonmcp.web.oauth import analyze_oidc_metadata
+    out = analyze_oidc_metadata({"response_types_supported": 1,       # int, not a list
+                                 "code_challenge_methods_supported": 5})
+    assert isinstance(out, list)                              # no TypeError
+
+
+# [core #35] language filter is an exact token match, not a substring.
+def test_techniques_by_language_is_exact_not_substring():
+    from moonmcp.knowledge import techniques as tk
+    # 'ava' is a substring of java/javascript but is not itself a language token.
+    assert tk.by_language("ava") == []
+
+
+# [core #34] a DDG uddg value is already decoded once — no second decode.
+def test_ddg_real_url_no_double_decode():
+    from moonmcp.intel.search import _real_url
+    href = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fx.com%2Fpath%253Fkeep&rut=abc"
+    assert _real_url(href) == "https://x.com/path%3Fkeep"    # literal %3F survives
+
+
+# [core #32] ModSecurity must not be fingerprinted on the generic phrase.
+def test_modsecurity_not_matched_on_generic_phrase():
+    from moonmcp.web import waf
+    assert ("body", "not acceptable") not in waf._SIGNATURES["ModSecurity"]
+
+
+# [core #9] registrable-domain derivation must handle multi-label public suffixes,
+# so origin discovery doesn't emit candidate hosts under the public suffix.
+def test_origin_registrable_base_handles_public_suffixes():
+    from moonmcp.recon.origin import _registrable_base
+    assert _registrable_base("example.com") == "example.com"
+    assert _registrable_base("sub.example.com") == "example.com"
+    assert _registrable_base("example.co.uk") == "example.co.uk"       # NOT "co.uk"
+    assert _registrable_base("sub.example.co.uk") == "example.co.uk"
+    assert _registrable_base("shop.example.com.au") == "example.com.au"
