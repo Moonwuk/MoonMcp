@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS memory (
     provenance TEXT NOT NULL DEFAULT 'manual',
     tags TEXT NOT NULL DEFAULT '',
     session TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT ''
+    created_at TEXT NOT NULL DEFAULT '',
+    confidence INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_memory_target ON memory(target);
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
@@ -106,8 +107,17 @@ class MemoryStore:
         self._fts = False
         with self._lock:
             self._db.executescript(_SCHEMA)
+            self._migrate()
             self._fts = self._try_fts()
             self._db.commit()
+
+    def _migrate(self) -> None:
+        """Additive column migrations for pre-existing persistent DBs (the
+        CREATE TABLE IF NOT EXISTS above won't add a column to an old table)."""
+
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(memory)").fetchall()}
+        if "confidence" not in cols:
+            self._db.execute("ALTER TABLE memory ADD COLUMN confidence INTEGER NOT NULL DEFAULT 1")
 
     def _try_fts(self) -> bool:
         try:
@@ -176,6 +186,81 @@ class MemoryStore:
                 )
             self._db.commit()
             return int(rowid or 0)
+
+    # -- lessons (learning loop with hygiene) ------------------------------
+    def record_lesson(self, *, title: str, body: str = "", tags: str = "",
+                      now: str = "") -> dict:
+        """Store a lesson, or **corroborate** an existing one by the same title —
+        re-asserting a lesson bumps its ``confidence`` (voting) instead of silently
+        overwriting. Returns ``{id, title, confidence, created_at, corroborated}``.
+        Lessons are always ``curated`` (a vetted conclusion), ``kind='lesson'``."""
+
+        title = title.strip()
+        with self._lock:
+            existing = self._db.execute(
+                "SELECT id, confidence, created_at FROM memory "
+                "WHERE kind='lesson' AND lower(title)=? ORDER BY id LIMIT 1",
+                (title.lower(),),
+            ).fetchone()
+            if existing is not None:
+                eid = int(existing["id"])
+                conf = int(existing["confidence"] or 1) + 1
+                if self._fts:
+                    self._db.execute(
+                        "INSERT INTO memory_fts(memory_fts,rowid,title,body,tags) "
+                        "SELECT 'delete', id, title, body, tags FROM memory WHERE id=?", (eid,))
+                self._db.execute(
+                    "UPDATE memory SET body=?, tags=?, confidence=?, source='memory_lesson' WHERE id=?",
+                    (str(body), str(tags), conf, eid))
+                if self._fts:
+                    self._db.execute(
+                        "INSERT INTO memory_fts(rowid,title,body,tags) VALUES(?,?,?,?)",
+                        (eid, title, str(body), str(tags)))
+                self._db.commit()
+                return {"id": eid, "title": title, "confidence": conf,
+                        "created_at": existing["created_at"] or "", "corroborated": True}
+            cur = self._db.execute(
+                "INSERT INTO memory(kind,target,title,body,severity,source,trust,provenance,"
+                "tags,session,created_at,confidence) "
+                "VALUES('lesson',NULL,?,?,NULL,'memory_lesson','curated','manual',?,'',?,1)",
+                (title, str(body), str(tags), str(now)))
+            rid = int(cur.lastrowid or 0)
+            if self._fts and rid:
+                self._db.execute(
+                    "INSERT INTO memory_fts(rowid,title,body,tags) VALUES(?,?,?,?)",
+                    (rid, title, str(body), str(tags)))
+            self._db.commit()
+            return {"id": rid, "title": title, "confidence": 1,
+                    "created_at": str(now), "corroborated": False}
+
+    def lessons(self, query: str = "", limit: int = 20) -> list[dict]:
+        """Recall lessons (kind='lesson') — rows carry ``confidence`` and
+        ``created_at`` for the hygiene layer to score and age."""
+
+        return self.search(query, kind="lesson", limit=limit)
+
+    def prune_lessons(self, *, now: str, ttl_days: int, min_confidence: int = 2) -> int:
+        """Delete lessons that are BOTH stale (older than *ttl_days*) AND below
+        *min_confidence* — a corroborated lesson is kept regardless of age, and a
+        lesson with no timestamp is never pruned. Returns the count removed."""
+
+        from . import lessons as _L
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, created_at, confidence FROM memory WHERE kind='lesson'").fetchall()
+            victims = [
+                int(r["id"]) for r in rows
+                if int(r["confidence"] or 1) < min_confidence
+                and _L.is_stale(r["created_at"], now, ttl_days)
+            ]
+            for vid in victims:
+                if self._fts:
+                    self._db.execute(
+                        "INSERT INTO memory_fts(memory_fts,rowid,title,body,tags) "
+                        "SELECT 'delete', id, title, body, tags FROM memory WHERE id=?", (vid,))
+                self._db.execute("DELETE FROM memory WHERE id=?", (vid,))
+            self._db.commit()
+            return len(victims)
 
     def clear(self, target: str | None = None) -> int:
         with self._lock:
