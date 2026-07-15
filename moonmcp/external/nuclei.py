@@ -54,8 +54,9 @@ NATIVE_EDGE: dict[str, str] = {
     "authz_probe": "multi-step BOLA chain: read the owner's response, extract the object ids it "
                    "exposes, then access them as another identity — cross-request + cross-identity "
                    "state a stateless template engine cannot carry",
-    "logic_probe": "business-logic param tampering + mass-assignment; depends on app intent, "
-                   "not a static signature",
+    "logic_probe": "business-logic abuse — param tampering + mass-assignment + money-aware value "
+                   "manipulation (negative/overflow/precision/>100% discount, currency swap, "
+                   "single-use coupon reuse); semantics of value/intent, not a static signature",
     "workflow_probe": "multi-step flow step-skipping (force-browse to a later/terminal step "
                       "without completing prerequisites) — needs the ordered flow + sequence state",
     "oauth_redirect_probe": "OAuth redirect_uri allow-list bypass: discover the authorization "
@@ -112,8 +113,6 @@ NATIVE_EDGE: dict[str, str] = {
                          "non-standard form it ACCEPTED vs a rejected invalid control; a stateless "
                          "per-template engine sends one fixed request and has no notion of 'same "
                          "logical input, two encodings, compare the decode/precedence'",
-    "value_probe": "money-aware value manipulation (negative/overflow/precision/>100% discount, "
-                   "currency swap, single-use coupon reuse) — semantics of value, not a signature",
     "race_probe": "single-packet race via HTTP/1.1 last-byte synchronization (all N requests "
                   "complete within ~1ms, neutralizing jitter) — nuclei's race directive is gate-based "
                   "and historically broken, and cannot do single-packet timing on its normalizing client",

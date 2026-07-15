@@ -73,7 +73,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "port_scan", "content_discovery", "http_methods",
             "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
             "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
-            "logic_probe", "race_probe", "workflow_probe", "value_probe", "jwt_jku_probe",
+            "logic_probe", "race_probe", "workflow_probe", "jwt_jku_probe",
             "nosqli_probe", "db_exposure", "second_order_sqli_probe", "orm_leak_probe",
             "fastjson_oast_probe", "ssrf_protocol_probe", "parser_diff_probe",
             "graphql_nosqli",
@@ -156,7 +156,7 @@ WORKFLOW: list[str] = [
     "Web-app — crawl, analyze_js, discover_parameters, cors_audit, graphql_check, "
     "extract_secrets; access_control_check / authz_probe after auth_set for IDOR/BOLA.",
     "Intrusive (only with explicit consent + MOONMCP_ALLOW_INTRUSIVE) — port_scan, "
-    "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe / value_probe.",
+    "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe.",
     "Confirm — turn a probe's review lead into a proof: promote_lead(kind=…) routes it to "
     "confirm_finding / side-effect re-observation / a Strix PoC brief.",
     "Record & report — add_finding / promote_lead as you go (both mirror to shared memory), "

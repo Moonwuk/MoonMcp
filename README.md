@@ -51,14 +51,14 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **165 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **164 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
 | `server_status` | Report config, active program, detected enhancers and external CLIs. |
 | `tool_catalog` | Self-describing **map of all tools** grouped by family, each tagged `scope_gated` / `intrusive`, plus the recommended recon→report workflow — call it second to orient. |
-| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~165 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
+| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~164 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
@@ -144,8 +144,7 @@ MoonMCP exposes **165 tools**, **11 resources** and **9 operator prompts**, grou
 | `desync_modern_probe` | Modern desync (2025 class): 0.CL / TE.0 / `Expect: 100-continue` / chunk-extension via response-timeout deltas on raw closed sockets (CVE-2025-32094 / CVE-2025-55315). Detection-only. |
 | `cache_deception_probe` | Web-cache **deception**: primes a path-confusion variant (`/x.css`, `;x.css`, `%2f`) of the private page and re-reads it cookieless → a cached authed body under an attacker-readable key. |
 | `ssrf_metadata_probe` | Response-based SSRF → **cloud-metadata credential theft** (AWS/GCP/Azure/Alibaba/Yandex/Oracle/DO): injects each provider's IMDS URL and scans for its credential signature. |
-| `logic_probe` | Business-logic abuse: mass-assignment (privileged fields echoed back) + value/quantity tampering. |
-| `value_probe` | Money-aware value manipulation (negative/overflow/precision/>100 % discount, currency swap, single-use-coupon reuse). |
+| `logic_probe` | Business-logic abuse: parameter/quantity tampering + mass-assignment (privileged fields echoed back) + money-aware **value manipulation** (negative/overflow/precision/>100 % discount, currency swap) + single-use-**coupon reuse** (`coupon_code=`). |
 | `race_probe` | Single-packet **race condition** (HTTP/1.1 last-byte sync) → non-atomic per-user limits (coupon/withdrawal double-spend). |
 | `workflow_probe` | **Step-skipping** on a multi-step flow — fetch each step cold (without its prerequisites) → order confirmed without payment, account active without verification. |
 | `jwt_jku_probe` | JWT `jku`/`x5u` **key-injection SSRF** — re-issues the token with a `jku` pointing at an OAST canary; a callback = the server fetched attacker key material (CVE-2018-0114). |
@@ -474,7 +473,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 165 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 164 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator

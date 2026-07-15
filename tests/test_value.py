@@ -99,6 +99,9 @@ async def test_coupon_reuse_verdict():
 
 # -- registration -----------------------------------------------------------
 @pytest.mark.asyncio
-async def test_value_probe_tool_registered():
+async def test_value_lanes_folded_into_logic_probe():
     tools = {t.name for t in await srv.mcp.list_tools()}
-    assert "value_probe" in tools
+    assert "value_probe" not in tools     # value/currency/coupon lanes folded into logic_probe
+    assert "logic_probe" in tools
+    tool = next(t for t in srv.mcp._tool_manager.list_tools() if t.name == "logic_probe")
+    assert "coupon_code" in tool.parameters.get("properties", {})

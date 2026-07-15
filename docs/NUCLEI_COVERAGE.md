@@ -51,7 +51,7 @@ behavioural-infra (cross-sample statistical inference), `config_audit` forge-cha
 synchronization — `moonmcp/web/singlepacket.py`, all N requests complete within ~1 ms,
 neutralizing the jitter the old `asyncio.gather` was bound to; the tighter HTTP/2
 single-packet variant is deferred as it needs the `h2` dependency),
-`value_probe`, `logic_probe`, `response_leak_probe`, `reset_poison_probe`,
+`logic_probe`, `response_leak_probe`, `reset_poison_probe`,
 `path_bypass_probe`, `tls_behavior`, `oauth_probe`, `recover_sourcemaps`, `jwt_crack`
 (really a jwt_tool/hashcat wrapper), `desync_probe`, `confirm_finding`, `origin_discovery`.
 

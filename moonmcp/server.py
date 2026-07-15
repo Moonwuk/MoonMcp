@@ -2512,30 +2512,53 @@ async def crlf_probe(target: str, param: str, method: str = "GET") -> dict:
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def logic_probe(target: str, param: str | None = None, method: str = "GET") -> dict:
-    """Business-logic ABUSE sweep on an endpoint: **parameter tampering**
-    (negative/zero/overflow on money/quantity params — pass `param`, or the
-    money/quantity params in the URL query are auto-targeted) + a **mass-assignment**
-    check (POSTs privileged fields like role/is_admin/balance and flags reflected
-    ones). Returns LEADS (verdict=review) to confirm against the flow — drive it
-    with the `business_logic_hunt` prompt. Intrusive; in scope only.
+async def logic_probe(target: str, param: str | None = None, method: str = "GET",
+                      coupon_code: str | None = None) -> dict:
+    """Business-logic ABUSE sweep on an endpoint. Runs four lanes:
+
+    - **parameter tampering** — negative/zero/overflow on quantity/numeric params;
+    - **mass-assignment** — POSTs privileged fields (role/is_admin/balance) and flags
+      reflected ones;
+    - **value / financial-logic** — the manipulations a correct server must reject on
+      money fields (amount/price/discount/points…): negative, zero, integer overflow,
+      sub-cent precision, >100 % discount, and **currency swap/downgrade**;
+    - **coupon/gift-card reuse** — if `coupon_code` is given, applies the same code
+      repeatedly (single-use bypass).
+
+    Pass `param` to target one field, or the money/quantity params in the URL query
+    are auto-targeted. Returns LEADS (verdict=review) to confirm against the flow —
+    drive it with the `business_logic_hunt` prompt. Intrusive; in scope only.
     """
 
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     sc = _scope_check()
-    params = [param] if param else logicmod.numeric_params(logicmod.query_keys(url))
+    keys = logicmod.query_keys(url)
     findings: list[dict] = []
-    for p in params:
+    # tampering + mass-assignment lanes
+    tparams = [param] if param else logicmod.numeric_params(keys)
+    for p in tparams:
         findings.extend(await logicmod.probe_parameter_tampering(
             ctx.http, url, p, method=method, scope_check=sc))
     findings.extend(await logicmod.probe_mass_assignment(ctx.http, url, scope_check=sc))
-    return {
-        "target": url, "tested_params": params, "findings": findings,
-        "note": (f"{len(findings)} logic lead(s) — verify the real-world effect against the flow"
-                 if findings else "no automatable logic leads; drive the flow per business_logic_hunt"),
-    }
+    # value / currency lanes (money-literate)
+    money = [param] if param else valuemod.money_fields(keys)
+    for f in money:
+        findings.extend(await valuemod.probe_value_tampering(ctx.http, url, f, method=method, scope_check=sc))
+    for f in valuemod.currency_fields(keys):
+        findings.extend(await valuemod.probe_currency_swap(ctx.http, url, f, method=method, scope_check=sc))
+    out: dict = {"target": url, "tested_params": sorted(set(tparams) | set(money)), "findings": findings}
+    if coupon_code:
+        cfields = valuemod.coupon_fields(keys)
+        field = cfields[0] if cfields else (param or "coupon")
+        out["coupon_reuse"] = await valuemod.probe_coupon_reuse(
+            ctx.http, url, field, coupon_code,
+            method=(method if method != "GET" else "POST"), scope_check=sc)
+    n = len(findings) + (1 if out.get("coupon_reuse", {}).get("verdict") == "review" else 0)
+    out["note"] = (f"{n} logic lead(s) — verify the real-world effect against the flow"
+                   if n else "no automatable logic leads; drive the flow per business_logic_hunt")
+    return out
 
 
 @mcp.tool()
@@ -2700,43 +2723,6 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
                            **verdict, "findings": findings}
     if oob_out is not None:
         out["oob"] = oob_out
-    return out
-
-
-@mcp.tool()
-@active_tool(intrusive=True)
-async def value_probe(target: str, param: str | None = None, coupon_code: str | None = None,
-                      method: str = "GET") -> dict:
-    """**Value / financial-logic** manipulation on money fields. Auto-targets value
-    params in the URL (amount/price/balance/discount/coupon/points/currency…) — or
-    pass `param` — and sends the manipulations a correct server must reject: **negative**
-    amounts, **zero**, integer **overflow**, sub-cent **precision**, **>100 % discount**,
-    and **currency swap/downgrade**. If `coupon_code` is given, also tests single-use
-    **coupon/gift-card reuse** (apply the same code repeatedly). Accepted-like-baseline =
-    a value-logic lead (verdict `review`; confirm the charged/credited amount). Intrusive;
-    in scope only.
-    """
-
-    ctx = get_context()
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    sc = _scope_check()
-    keys = logicmod.query_keys(url)
-    money = [param] if param else valuemod.money_fields(keys)
-    findings: list[dict] = []
-    for f in money:
-        findings.extend(await valuemod.probe_value_tampering(ctx.http, url, f, method=method, scope_check=sc))
-    for f in valuemod.currency_fields(keys):
-        findings.extend(await valuemod.probe_currency_swap(ctx.http, url, f, method=method, scope_check=sc))
-    out: dict = {"target": url, "tested_fields": money, "findings": findings}
-    if coupon_code:
-        cfields = valuemod.coupon_fields(keys)
-        field = cfields[0] if cfields else (param or "coupon")
-        out["coupon_reuse"] = await valuemod.probe_coupon_reuse(
-            ctx.http, url, field, coupon_code, method=(method if method != "GET" else "POST"), scope_check=sc)
-    n = len(findings) + (1 if out.get("coupon_reuse", {}).get("verdict") == "review" else 0)
-    out["note"] = (f"{n} value-logic lead(s) — confirm the real charged/credited amount"
-                   if n else "no value manipulation accepted; drive the money flow per business_logic_hunt")
     return out
 
 
