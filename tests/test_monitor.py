@@ -58,3 +58,13 @@ async def test_surface_tools(fresh_context):
     # clear mode
     cleared = await srv.surface_diff(clear="ep")
     assert cleared["cleared"] == 1
+
+
+@pytest.mark.asyncio
+async def test_surface_diff_requires_name_for_diff(fresh_context):
+    # items supplied but no name → must error, never silently key a snapshot on "".
+    res = await srv.surface_diff(items=["/a", "/b"])
+    assert res["error"] == "missing_name" and res["action"]
+    # nothing was recorded under an empty name
+    snaps = await srv.surface_diff()
+    assert "" not in snaps["snapshots"]
