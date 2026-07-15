@@ -48,11 +48,13 @@ def test_snapshot_clear():
 @pytest.mark.asyncio
 async def test_surface_tools(fresh_context):
     tools = {t.name for t in await srv.mcp.list_tools()}
-    assert "surface_diff" in tools and "surface_snapshots" in tools
+    assert "surface_diff" in tools and "surface_snapshots" not in tools
     await srv.surface_diff(name="ep", items=["/a", "/b"])
     d = await srv.surface_diff(name="ep", items=["/b", "/c"])
     assert d["added"] == ["/c"] and d["removed"] == ["/a"]
-    snaps = await srv.surface_snapshots()
+    # list mode: omit items
+    snaps = await srv.surface_diff()
     assert snaps["snapshots"].get("ep") == 2
-    cleared = await srv.surface_snapshots(clear="ep")
+    # clear mode
+    cleared = await srv.surface_diff(clear="ep")
     assert cleared["cleared"] == 1

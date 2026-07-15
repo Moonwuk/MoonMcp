@@ -152,5 +152,5 @@ async def deep_probe(client: HttpClient, url: str, *, scope_check=None,
     res.review.append(
         "BOLA: once you know the schema (introspection or the recovered names), test nested "
         "traversal to other users' objects — e.g. `node(id:\"…\") { ... }` or "
-        "`me { orders { owner { email } } }` with another tenant's id — via access_control_check / Strix.")
+        "`me { orders { owner { email } } }` with another tenant's id — via authz_probe / Strix.")
     return res

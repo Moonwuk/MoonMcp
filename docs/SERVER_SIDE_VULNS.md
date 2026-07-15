@@ -4,7 +4,7 @@
 > the underrated ones that pay. Each entry maps to the ROOT CAUSE it springs from
 > ([`ROOT_CAUSES.md`](ROOT_CAUSES.md)) and pins the concrete point where real apps get
 > it wrong (*where it breaks*), with detection, WAF notes and real-world incidents.
-> Behind `vuln_info` / `vuln_search` / `rootcause_info` / `vuln_tools` and `vulns://all`.
+> Behind `vuln_info` (`query=` to search) / `rootcause_info` / `vuln_tools` and `vulns://all`.
 
 
 **44 classes** — 21 common · 18 uncommon · 5 rare. Referenced only — no weaponized code.

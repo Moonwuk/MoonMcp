@@ -937,13 +937,24 @@ async def wayback_urls(domain: str, limit: int = 500, include_subdomains: bool =
 
 @mcp.tool()
 @safe_tool
-async def cve_lookup(cve_id: str) -> dict:
+async def cve_lookup(cve_id: str, triage: bool = False) -> dict:
     """Look up a single CVE by ID (e.g. CVE-2021-44228) from the NVD database.
 
     Returns description, CVSS score/severity/vector, CWE mappings and references.
+
+    Pass **`triage=True`** to **prioritise by real exploitation risk** instead of
+    just CVSS: the record is enriched with **EPSS** (FIRST.org exploitation
+    probability), **CISA KEV** (actively exploited in the wild?) and a public-**PoC**
+    signal, folded into one composite score (`0.35·EPSS + 0.30·KEV + 0.20·CVSS +
+    0.15·PoC`, KEV clamps to the CRITICAL band) — turning a `fingerprint`/`cve_search`
+    hit into a patch-order decision. Costs an extra EPSS call + a CISA-KEV fetch, so
+    it defaults off. Passive third-party data (NVD/FIRST/CISA) — no packets to any
+    target.
     """
 
     ctx = get_context()
+    if triage:
+        return await cverisk.triage(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
     record = await cve.lookup_cve(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
     if record is None:
         return errmod.err("not_found", detail=f"No NVD record for {cve_id}")
@@ -962,25 +973,6 @@ async def cve_search(keyword: str, limit: int = 15) -> dict:
     ctx = get_context()
     result = await cve.search_cves(ctx.http, keyword, limit=limit, api_key=ctx.settings.nvd_api_key)
     return to_dict(result)
-
-
-@mcp.tool()
-@safe_tool
-async def cve_triage(cve_id: str) -> dict:
-    """**Prioritise a CVE by real exploitation risk**, not just CVSS. Enriches the
-    NVD record with **EPSS** (FIRST.org exploitation probability), **CISA KEV**
-    (is it *actively* exploited in the wild?), and a **public-PoC** signal (NVD
-    "Exploit"-tagged reference), then folds them into one composite score:
-    `0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC`. Anything on the KEV list is
-    clamped to the CRITICAL band (≥76) regardless of CVSS, and a KEV+PoC pair gets
-    a boost — so a "medium CVSS but actively-exploited" bug sorts above a "critical
-    CVSS but no known exploitation" one. Turns a `fingerprint`/`cve_search` hit
-    into a patch-order decision. Passive third-party data (NVD/FIRST/CISA) — no
-    packets to any target.
-    """
-
-    ctx = get_context()
-    return await cverisk.triage(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
 
 
 @mcp.tool()
@@ -1186,7 +1178,7 @@ async def fingerprint(target: str) -> dict:
 async def ingress_fingerprint(target: str) -> dict:
     """**Identify the Kubernetes ingress controller / service-mesh data plane** in
     front of a host and map it to its high-severity CVEs — the keystone that lets
-    `cve_triage` fire on the ingress layer. Detection-only.
+    `cve_lookup(triage=True)` fire on the ingress layer. Detection-only.
 
     Classifies ingress-nginx, Traefik, Kong, Istio/Envoy, HAProxy Ingress,
     Ambassador and the managed cloud LBs (Google Frontend/GKE, AWS ALB, Azure
@@ -1226,7 +1218,7 @@ async def ingress_fingerprint(target: str) -> dict:
     report = ingressmod.classify(main, unmatched=unmatched, cert=cert)
     nxt: list[str] = []
     if report["applicable_cves"]:
-        nxt.append("cve_triage")
+        nxt.append("cve_lookup")
     if report["controller"]:
         nxt.append("path_bypass_probe")
     if report["admin_surface"]:
@@ -1555,46 +1547,65 @@ async def cors_audit(target: str) -> dict:
 
 @mcp.tool()
 @active_tool()
-async def access_control_check(target: str, method: str = "GET", body: str | None = None,
-                               second_headers: dict[str, str] | None = None) -> dict:
-    """Probe an in-scope URL for broken access control / IDOR by replaying the
-    SAME request under multiple identities and diffing the responses:
+async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
+                      max_refs: int = 8, method: str = "GET", body: str | None = None,
+                      direct_only: bool = False) -> dict:
+    """**Broken access control / BOLA / IDOR** — the object-level authorization test
+    a stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
+    `second_headers` (a lower-priv user B).
 
-    - **A** = the current engagement auth (`auth_set` — user A),
-    - **B** = `second_headers` if given (a second, lower-priv user's headers/cookies),
-    - **anon** = no credentials at all.
+    Default (a GET with no body) runs the full **multi-step BOLA chain**: (1) **direct**
+    — B/anon get the *same* object from the same URL; (2) **sibling sweep** — walk the
+    id space (id±1, low ids) as B/anon and flag any object they read; (3) **multi-step
+    chain** — extract the object ids the owner's response exposes, then fetch each as
+    B/anon.
 
-    If a protected resource returns a similar 2xx body to the anonymous or the
-    other-user request, that is a strong broken-access-control / IDOR signal. The
-    verdict is a lead to verify — it reports each identity's status/length and the
-    body-similarity so you can judge. Set `auth_set` first for a meaningful A.
-    In scope only; sends benign, identical requests (no payloads).
+    For a **non-GET request, a request with a `body`, or `direct_only=True`**, it runs
+    the single-request **cross-identity diff** instead (replay the *same* request as
+    owner A / user B / anon and flag when a lower-priv identity gets a near-identical
+    2xx) — the arbitrary-method access-control check (e.g. a protected POST). Read-only
+    (never mutates — state change → Strix); findings are `review` leads. In scope only.
     """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    m = method.upper()
+
+    # Non-GET / with-body / direct_only → single-request cross-identity diff (the
+    # id-space sweep + multi-step chain are inherently GET-based).
+    if direct_only or m != "GET" or body is not None:
+        return await _authz_direct_diff(ctx, url, m, body, second_headers)
+
+    result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
+                                       max_refs=max_refs, scope_check=_scope_check())
+    result["hint"] = (None if ctx.auth.is_set()
+                      else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
+    n = len(result.get("findings", []))
+    result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
+                      "object" if n else "no cross-identity object access observed")
+    return result
+
+
+async def _authz_direct_diff(ctx, url: str, method: str, body: str | None,
+                             second_headers: dict[str, str] | None) -> dict:
+    """Replay the SAME request under owner-A / user-B / anon and flag when a lower-priv
+    identity gets a near-identical 2xx (broken access control / IDOR on one request)."""
 
     import hashlib
     from difflib import SequenceMatcher
 
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    ctx = get_context()
     bodyb = body.encode() if body else None
-    m = method.upper()
 
     async def _probe(*, headers=None, suppress_auth=False):
-        r = await ctx.http.fetch(url, method=m, headers=headers, body=bodyb,
+        r = await ctx.http.fetch(url, method=method, headers=headers, body=bodyb,
                                  follow_redirects=False, suppress_auth=suppress_auth)
         snippet = r.body[:4096]
-        return {
-            "status": r.status,
-            "length": len(r.body),
-            "sha1": hashlib.sha1(snippet).hexdigest()[:12] if snippet else None,
-            "_snippet": snippet,
-            "error": r.error,
-            "blocked": r.blocked_reason,
-        }
+        return {"status": r.status, "length": len(r.body),
+                "sha1": hashlib.sha1(snippet).hexdigest()[:12] if snippet else None,
+                "_snippet": snippet, "error": r.error, "blocked": r.blocked_reason}
 
-    identities: dict[str, dict] = {}
-    identities["auth_A"] = await _probe()  # current engagement auth
+    identities: dict[str, dict] = {"auth_A": await _probe()}
     if second_headers:
         identities["user_B"] = await _probe(headers=second_headers, suppress_auth=True)
     identities["anonymous"] = await _probe(suppress_auth=True)
@@ -1612,10 +1623,8 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
         if not other:
             continue
         sim = _similar(a, other)
-        comparisons[f"auth_A_vs_{name}"] = {
-            "similarity": sim,
-            "same_status": a["status"] == other["status"],
-        }
+        comparisons[f"auth_A_vs_{name}"] = {"similarity": sim,
+                                            "same_status": a["status"] == other["status"]}
         a_ok = a["status"] is not None and 200 <= a["status"] < 300
         other_ok = other["status"] is not None and 200 <= other["status"] < 300
         if a_ok and other_ok and sim >= 0.95:
@@ -1623,43 +1632,14 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
             concerns.append(
                 f"{who} receives a response nearly identical to the authenticated one "
                 f"(status {other['status']}, similarity {sim}) — possible broken access "
-                f"control / IDOR; verify the resource is meant to be private to user A."
-            )
+                f"control / IDOR; verify the resource is meant to be private to user A.")
 
     for v in identities.values():
         v.pop("_snippet", None)
     hint = None if ctx.auth.is_set() else "No engagement auth set — call auth_set first so 'auth_A' is authenticated."
-    return {"target": url, "method": m, "identities": identities,
+    return {"target": url, "method": method, "identities": identities,
             "comparisons": comparisons, "concerns": concerns,
             "verdict": "review" if concerns else "no_obvious_idor", "hint": hint}
-
-
-@mcp.tool()
-@active_tool()
-async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
-                      max_refs: int = 8) -> dict:
-    """**Multi-step BOLA / IDOR chain** — the object-level authorization test a
-    stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
-    `second_headers` (a lower-priv user B); this runs three GET-only signals:
-    (1) **direct** — B/anon get the *same* object from the same URL; (2) **sibling
-    sweep** — walk the id space (id±1, low ids) as B/anon and flag any object they
-    read; (3) **multi-step chain** — extract the object ids the owner's response
-    exposes, then fetch each as B/anon (owner response → cross-identity access).
-    Read-only (never mutates — state change → Strix). Findings are `review` leads.
-    In scope only.
-    """
-
-    ctx = get_context()
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
-                                       max_refs=max_refs, scope_check=_scope_check())
-    result["hint"] = (None if ctx.auth.is_set()
-                      else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
-    n = len(result.get("findings", []))
-    result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
-                      "object" if n else "no cross-identity object access observed")
-    return result
 
 
 @mcp.tool()
@@ -1689,7 +1669,7 @@ async def graphql_probe(target: str, endpoint: str | None = None, batch_n: int =
     **field-suggestion schema recovery** (a typo'd field → *"Did you mean …?"* leaks
     real names, recovering the schema without introspection), and **aliases** (many
     operations per document). Nested-traversal **BOLA** is surfaced as a lead to
-    confirm with `access_control_check` / Strix. Detection-only — benign queries, small
+    confirm with `authz_probe` / Strix. Detection-only — benign queries, small
     batch, no mutations. Run `graphql_check` first for introspection. In scope only.
     """
 
@@ -2520,30 +2500,53 @@ async def crlf_probe(target: str, param: str, method: str = "GET") -> dict:
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def logic_probe(target: str, param: str | None = None, method: str = "GET") -> dict:
-    """Business-logic ABUSE sweep on an endpoint: **parameter tampering**
-    (negative/zero/overflow on money/quantity params — pass `param`, or the
-    money/quantity params in the URL query are auto-targeted) + a **mass-assignment**
-    check (POSTs privileged fields like role/is_admin/balance and flags reflected
-    ones). Returns LEADS (verdict=review) to confirm against the flow — drive it
-    with the `business_logic_hunt` prompt. Intrusive; in scope only.
+async def logic_probe(target: str, param: str | None = None, method: str = "GET",
+                      coupon_code: str | None = None) -> dict:
+    """Business-logic ABUSE sweep on an endpoint. Runs four lanes:
+
+    - **parameter tampering** — negative/zero/overflow on quantity/numeric params;
+    - **mass-assignment** — POSTs privileged fields (role/is_admin/balance) and flags
+      reflected ones;
+    - **value / financial-logic** — the manipulations a correct server must reject on
+      money fields (amount/price/discount/points…): negative, zero, integer overflow,
+      sub-cent precision, >100 % discount, and **currency swap/downgrade**;
+    - **coupon/gift-card reuse** — if `coupon_code` is given, applies the same code
+      repeatedly (single-use bypass).
+
+    Pass `param` to target one field, or the money/quantity params in the URL query
+    are auto-targeted. Returns LEADS (verdict=review) to confirm against the flow —
+    drive it with the `business_logic_hunt` prompt. Intrusive; in scope only.
     """
 
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     sc = _scope_check()
-    params = [param] if param else logicmod.numeric_params(logicmod.query_keys(url))
+    keys = logicmod.query_keys(url)
     findings: list[dict] = []
-    for p in params:
+    # tampering + mass-assignment lanes
+    tparams = [param] if param else logicmod.numeric_params(keys)
+    for p in tparams:
         findings.extend(await logicmod.probe_parameter_tampering(
             ctx.http, url, p, method=method, scope_check=sc))
     findings.extend(await logicmod.probe_mass_assignment(ctx.http, url, scope_check=sc))
-    return {
-        "target": url, "tested_params": params, "findings": findings,
-        "note": (f"{len(findings)} logic lead(s) — verify the real-world effect against the flow"
-                 if findings else "no automatable logic leads; drive the flow per business_logic_hunt"),
-    }
+    # value / currency lanes (money-literate)
+    money = [param] if param else valuemod.money_fields(keys)
+    for f in money:
+        findings.extend(await valuemod.probe_value_tampering(ctx.http, url, f, method=method, scope_check=sc))
+    for f in valuemod.currency_fields(keys):
+        findings.extend(await valuemod.probe_currency_swap(ctx.http, url, f, method=method, scope_check=sc))
+    out: dict = {"target": url, "tested_params": sorted(set(tparams) | set(money)), "findings": findings}
+    if coupon_code:
+        cfields = valuemod.coupon_fields(keys)
+        field = cfields[0] if cfields else (param or "coupon")
+        out["coupon_reuse"] = await valuemod.probe_coupon_reuse(
+            ctx.http, url, field, coupon_code,
+            method=(method if method != "GET" else "POST"), scope_check=sc)
+    n = len(findings) + (1 if out.get("coupon_reuse", {}).get("verdict") == "review" else 0)
+    out["note"] = (f"{n} logic lead(s) — verify the real-world effect against the flow"
+                   if n else "no automatable logic leads; drive the flow per business_logic_hunt")
+    return out
 
 
 @mcp.tool()
@@ -2708,43 +2711,6 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
                            **verdict, "findings": findings}
     if oob_out is not None:
         out["oob"] = oob_out
-    return out
-
-
-@mcp.tool()
-@active_tool(intrusive=True)
-async def value_probe(target: str, param: str | None = None, coupon_code: str | None = None,
-                      method: str = "GET") -> dict:
-    """**Value / financial-logic** manipulation on money fields. Auto-targets value
-    params in the URL (amount/price/balance/discount/coupon/points/currency…) — or
-    pass `param` — and sends the manipulations a correct server must reject: **negative**
-    amounts, **zero**, integer **overflow**, sub-cent **precision**, **>100 % discount**,
-    and **currency swap/downgrade**. If `coupon_code` is given, also tests single-use
-    **coupon/gift-card reuse** (apply the same code repeatedly). Accepted-like-baseline =
-    a value-logic lead (verdict `review`; confirm the charged/credited amount). Intrusive;
-    in scope only.
-    """
-
-    ctx = get_context()
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    sc = _scope_check()
-    keys = logicmod.query_keys(url)
-    money = [param] if param else valuemod.money_fields(keys)
-    findings: list[dict] = []
-    for f in money:
-        findings.extend(await valuemod.probe_value_tampering(ctx.http, url, f, method=method, scope_check=sc))
-    for f in valuemod.currency_fields(keys):
-        findings.extend(await valuemod.probe_currency_swap(ctx.http, url, f, method=method, scope_check=sc))
-    out: dict = {"target": url, "tested_fields": money, "findings": findings}
-    if coupon_code:
-        cfields = valuemod.coupon_fields(keys)
-        field = cfields[0] if cfields else (param or "coupon")
-        out["coupon_reuse"] = await valuemod.probe_coupon_reuse(
-            ctx.http, url, field, coupon_code, method=(method if method != "GET" else "POST"), scope_check=sc)
-    n = len(findings) + (1 if out.get("coupon_reuse", {}).get("verdict") == "review" else 0)
-    out["note"] = (f"{n} value-logic lead(s) — confirm the real charged/credited amount"
-                   if n else "no value manipulation accepted; drive the money flow per business_logic_hunt")
     return out
 
 
@@ -3590,29 +3556,25 @@ async def export_obsidian(out_dir: str | None = None, include_kb: bool = True,
 
 @mcp.tool()
 @safe_tool
-async def surface_diff(name: str, items: list[str]) -> dict:
+async def surface_diff(name: str = "", items: list[str] | None = None,
+                       clear: str | None = None) -> dict:
     """Track how the attack surface **changes** over time. Pass a snapshot `name`
     (e.g. `acme-subdomains`) and the current list of `items` (subdomains, live
     hosts, endpoints, params). The first call sets the baseline; every later call
     returns only what was **added** / **removed** since last time — the fresh,
     under-competed surface. Persists across runs if MOONMCP_STATE_DIR is set.
-    """
 
-    return get_context().snapshots.diff(name, items)
-
-
-@mcp.tool()
-@safe_tool
-async def surface_snapshots(clear: str | None = None) -> dict:
-    """List the tracked surface snapshots (name → item count), or clear one by
-    name (or all with `clear="*"`).
+    Housekeeping on the same store: omit `items` to **list** the tracked snapshots
+    (name → item count); pass `clear=<name>` (or `clear="*"` for all) to remove one.
     """
 
     ctx = get_context()
     if clear is not None:
         removed = ctx.snapshots.clear(None if clear == "*" else clear)
         return {"cleared": removed, "snapshots": ctx.snapshots.names()}
-    return {"snapshots": ctx.snapshots.names()}
+    if items is None:
+        return {"snapshots": ctx.snapshots.names()}
+    return ctx.snapshots.diff(name, items)
 
 
 @mcp.tool()
@@ -3646,7 +3608,7 @@ async def export_findings(format: str = "sarif", target: str | None = None,
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @safe_tool
-async def injection_info(injection_class: str | None = None) -> dict:
+async def injection_info(injection_class: str | None = None, query: str | None = None) -> dict:
     """Look up MoonMCP's injection knowledge base: patterns (detection payloads),
     causes (root causes) and signatures (exact error strings / regexes to detect
     the vuln from a response). Pass an injection class id/alias (e.g. sqli, xss,
@@ -3655,6 +3617,8 @@ async def injection_info(injection_class: str | None = None) -> dict:
     No network — pure reference.
     """
 
+    if query:
+        return {"query": query, "results": injmod.search(query)}
     if not injection_class:
         return {"stats": injmod.stats(), "classes": injmod.list_classes()}
     entry = injmod.get_class(injection_class)
@@ -3662,14 +3626,6 @@ async def injection_info(injection_class: str | None = None) -> dict:
         return {"error": "unknown_class", "detail": f"No injection class '{injection_class}'",
                 "known": [c["id"] for c in injmod.list_classes()]}
     return entry
-
-
-@mcp.tool()
-@safe_tool
-async def injection_search(query: str) -> dict:
-    """Search the injection knowledge base by keyword (name, alias, CWE, summary)."""
-
-    return {"query": query, "results": injmod.search(query)}
 
 
 @mcp.tool()
@@ -3688,7 +3644,7 @@ async def match_injection_signatures(text: str, injection_class: str | None = No
 @mcp.tool()
 @safe_tool
 async def technique_info(technique: str | None = None, category: str | None = None,
-                         language: str | None = None) -> dict:
+                         language: str | None = None, query: str | None = None) -> dict:
     """Look up MoonMCP's techniques & notable-PoC catalog — a referenced index of
     exploitation techniques and landmark public vulnerabilities across languages
     (web, deserialization, memory-corruption/asm, famous CVEs, language-specific,
@@ -3697,6 +3653,8 @@ async def technique_info(technique: str | None = None, category: str | None = No
     the public PoC/research — it is a knowledge reference, not exploit code.
     """
 
+    if query:
+        return {"query": query, "results": techmod.search(query)}
     if technique:
         entry = techmod.get_technique(technique)
         if entry is None:
@@ -3710,21 +3668,13 @@ async def technique_info(technique: str | None = None, category: str | None = No
     return {"stats": techmod.stats(), "techniques": techmod.list_techniques()}
 
 
-@mcp.tool()
-@safe_tool
-async def technique_search(query: str) -> dict:
-    """Search the techniques & PoC catalog by keyword, language, CVE or category."""
-
-    return {"query": query, "results": techmod.search(query)}
-
-
 # ---------------------------------------------------------------------------
 # knowledge base — privilege escalation (techniques + tooling)
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @safe_tool
 async def privesc_info(technique: str | None = None, platform: str | None = None,
-                       category: str | None = None) -> dict:
+                       category: str | None = None, query: str | None = None) -> dict:
     """Look up MoonMCP's privilege-escalation knowledge base — a referenced catalog
     of local privesc techniques across Linux, Windows, container, cloud and Active
     Directory, with benign enumeration commands, detection indicators and links to
@@ -3735,6 +3685,8 @@ async def privesc_info(technique: str | None = None, platform: str | None = None
     for the index + stats. No network — pure reference.
     """
 
+    if query:
+        return {"query": query, "results": privescmod.search(query)}
     if technique:
         entry = privescmod.get_technique(technique)
         if entry is None:
@@ -3746,16 +3698,6 @@ async def privesc_info(technique: str | None = None, platform: str | None = None
     if category:
         return {"category": category, "results": privescmod.by_category(category)}
     return {"stats": privescmod.stats(), "techniques": privescmod.list_techniques()}
-
-
-@mcp.tool()
-@safe_tool
-async def privesc_search(query: str) -> dict:
-    """Search the privilege-escalation KB by keyword (name, platform, category, CVE,
-    tool or detection indicator).
-    """
-
-    return {"query": query, "results": privescmod.search(query)}
 
 
 @mcp.tool()
@@ -3797,7 +3739,8 @@ async def match_privesc(text: str, platform: str | None = None) -> dict:
 @mcp.tool()
 @safe_tool
 async def vuln_info(vuln: str | None = None, category: str | None = None,
-                    popularity: str | None = None, root_cause: str | None = None) -> dict:
+                    popularity: str | None = None, root_cause: str | None = None,
+                    query: str | None = None) -> dict:
     """Look up MoonMCP's server-side vulnerability catalog — popular AND obscure
     classes (SSRF, SQLi, RCE, deserialization, request smuggling, SSTI, XXE,
     cache poisoning, mass assignment, prototype pollution, race conditions,
@@ -3808,6 +3751,8 @@ async def vuln_info(vuln: str | None = None, category: str | None = None,
     `root_cause`; or omit for the index + stats. No network — pure reference.
     """
 
+    if query:
+        return {"query": query, "results": vulnsmod.search(query)}
     if vuln:
         entry = vulnsmod.get_vuln(vuln)
         if entry is None:
@@ -3821,16 +3766,6 @@ async def vuln_info(vuln: str | None = None, category: str | None = None,
     if root_cause:
         return {"root_cause": root_cause, "results": vulnsmod.by_root_cause(root_cause)}
     return {"stats": vulnsmod.stats(), "vulns": vulnsmod.list_vulns()}
-
-
-@mcp.tool()
-@safe_tool
-async def vuln_search(query: str) -> dict:
-    """Search the server-side vulnerability catalog by keyword (name, category,
-    root cause, real-world incident, tool).
-    """
-
-    return {"query": query, "results": vulnsmod.search(query)}
 
 
 @mcp.tool()

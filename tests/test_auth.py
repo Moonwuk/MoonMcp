@@ -48,10 +48,10 @@ async def test_auth_headers_reach_the_server(local_server, fresh_context):
 async def test_suppress_auth_on_anonymous_leg(local_server, fresh_context):
     base, _ = local_server
     await srv.auth_set(bearer="secret-A")
-    # access_control_check: the anonymous leg must NOT carry the bearer.
+    # authz_probe(direct_only=True): the anonymous leg must NOT carry the bearer.
     # (the local server ignores auth, so all identities get 200 — we assert the
     # tool ran all identities and produced a structured verdict)
-    res = await srv.access_control_check(target=f"{base}/echo")
+    res = await srv.authz_probe(target=f"{base}/echo", direct_only=True)
     assert "auth_A" in res["identities"] and "anonymous" in res["identities"]
     assert res["identities"]["auth_A"]["status"] == 200
     assert res["identities"]["anonymous"]["status"] == 200
@@ -65,7 +65,7 @@ async def test_access_control_flags_shared_response(local_server, fresh_context)
     # local server returns the same body regardless of identity → the diff should
     # flag that anonymous gets a response identical to the authenticated one.
     await srv.auth_set(bearer="secret-A")
-    res = await srv.access_control_check(target=base)
+    res = await srv.authz_probe(target=base, direct_only=True)
     assert res["verdict"] == "review"
     assert any("access control" in c.lower() or "idor" in c.lower() for c in res["concerns"])
     await srv.auth_clear()
@@ -74,5 +74,6 @@ async def test_access_control_flags_shared_response(local_server, fresh_context)
 @pytest.mark.asyncio
 async def test_auth_tools_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
-    for n in ("auth_set", "auth_clear", "access_control_check"):
+    for n in ("auth_set", "auth_clear", "authz_probe"):
         assert n in tools
+    assert "access_control_check" not in tools   # folded into authz_probe(direct_only=/method=/body=)

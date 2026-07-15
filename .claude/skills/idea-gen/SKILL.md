@@ -46,10 +46,10 @@ sends no traffic itself; reach for it in CROSS-REF alongside `waf_info`, not her
 
 **CROSS-REF.** For each distinct technology/service/endpoint/param entity, query
 the offline catalogs to find matching vuln classes:
-- `technique_info(technology_or_cve)` / `technique_search(query)` for framework/language-specific techniques and known CVEs.
-- `vuln_info(...)` / `vuln_search(query)`, and `rootcause_info(root_cause)` to trace a signal (e.g. "deserialization", "SSRF") back to its derived vuln classes.
-- `injection_info(class)` / `injection_search(query)` for any parameter or input surface.
-- `privesc_info` / `privesc_search` if auth/role boundaries were observed.
+- `technique_info(technology_or_cve)` / `technique_info(query=…)` for framework/language-specific techniques and known CVEs.
+- `vuln_info(...)` / `vuln_info(query=…)`, and `rootcause_info(root_cause)` to trace a signal (e.g. "deserialization", "SSRF") back to its derived vuln classes.
+- `injection_info(class)` / `injection_info(query=…)` for any parameter or input surface.
+- `privesc_info` (with `query=`) if auth/role boundaries were observed.
 - `waf_info` if a WAF was fingerprinted, to know what it likely blocks — or
   `identify_waf` to name the vendor from a raw captured response/blocking page
   (both offline, no traffic).
@@ -77,11 +77,11 @@ low-severity reflected XSS (`true_positive` — excluded below); one open lead,
 "possible open redirect on `/login?next=`" — not re-listed, flagged for
 `confirm_finding` instead.
 
-1. **GraphQL authorization bypass** — Signal: `/graphql` endpoint from `memory_graph`. Cross-ref: `vuln_search("graphql")`, `injection_search("graphql")`. Test: `graphql_check` → `graphql_probe` → `access_control_check`. High×High×Medium.
+1. **GraphQL authorization bypass** — Signal: `/graphql` endpoint from `memory_graph`. Cross-ref: `vuln_info(query="graphql")`, `injection_info(query="graphql")`. Test: `graphql_check` → `graphql_probe` → `authz_probe`. High×High×Medium.
 2. **JWT alg-confusion / weak signing** — Signal: JWT cookie seen during fingerprinting. Cross-ref: `technique_info("jwt")`. Test: `jwt_analyze` → `jwt_alg_confusion` → `jwt_crack`. High×High×Low.
 3. **SSRF via cloud metadata** — Signal: AWS hosting confirmed by `host_intel`. Cross-ref: `rootcause_info("ssrf")`, `vuln_info`. Test: `ssrf_metadata_probe` (intrusive, needs consent). High×Medium×Medium.
-4. **Sourcemap-leaked API surface** — Signal: `.map` files seen in `crawl`. Cross-ref: `technique_search("sourcemap")`. Test: `analyze_js` (detects the map) → `recover_sourcemaps` (reconstructs it) → `discover_parameters`. Medium×High×Low.
-5. **Cloud storage misconfiguration** — Signal: AWS infra + brand name. Cross-ref: `vuln_search("s3")`. Test: `cloud_buckets`. Medium×Medium×Low.
+4. **Sourcemap-leaked API surface** — Signal: `.map` files seen in `crawl`. Cross-ref: `technique_info(query="sourcemap")`. Test: `analyze_js` (detects the map) → `recover_sourcemaps` (reconstructs it) → `discover_parameters`. Medium×High×Low.
+5. **Cloud storage misconfiguration** — Signal: AWS infra + brand name. Cross-ref: `vuln_info(query="s3")`. Test: `cloud_buckets`. Medium×Medium×Low.
 6. **JS-library CVE match** — Signal: front-end libraries fingerprinted via `crawl`. Cross-ref: `cve_search(library_name)`. Test: `js_library_scan` → `cve_lookup(cve_id)`. Medium×Medium×Low.
 
 Any hypothesis confirmed goes to `add_finding`; anything disproven gets

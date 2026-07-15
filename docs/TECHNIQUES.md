@@ -3,7 +3,7 @@
 > A **referenced** catalog for authorised security research. Each entry describes a
 > technique or landmark vulnerability *conceptually* and links to the authoritative
 > public PoC / research — it ships **no** weaponized exploit code or shellcode. It is
-> the data behind the `technique_info` / `technique_search` tools and the
+> the data behind the `technique_info` tool (`query=` to search) and the
 > `techniques://all` resource.
 
 

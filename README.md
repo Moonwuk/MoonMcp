@@ -51,14 +51,14 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **171 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **163 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
 | `server_status` | Report config, active program, detected enhancers and external CLIs. |
 | `tool_catalog` | Self-describing **map of all tools** grouped by family, each tagged `scope_gated` / `intrusive`, plus the recommended recon→report workflow — call it second to orient. |
-| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~169 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
+| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~163 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
@@ -73,8 +73,7 @@ MoonMCP exposes **171 tools**, **11 resources** and **9 operator prompts**, grou
 | `search_dorks` | Generate ready-to-run **Google/Bing dorks** for a target (exposed files, login panels, config/secrets, dir listings, code leaks, SSRF params). |
 | `enumerate_subdomains` | Passive subdomain enum via crt.sh, HackerTarget, AnubisDB, AlienVault OTX. |
 | `wayback_urls` | Historical URLs from the Internet Archive (flags interesting endpoints). |
-| `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID or by keyword (e.g. a product+version). |
-| `cve_triage` | **Prioritise a CVE by real exploitation risk**, not just CVSS — enriches the NVD record with **EPSS** (exploitation probability), **CISA KEV** (actively exploited in the wild?) and a public-**PoC** signal, folded into one composite score (`0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC`, KEV clamps to CRITICAL). Turns a `fingerprint`/`cve_search` hit into a patch-order decision. Passive. |
+| `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID (pass `triage=True` to rank by real exploitation risk — EPSS + CISA-KEV + PoC) or by keyword. |
 | `host_intel` | IP exposure via Shodan InternetDB (free) or the full Shodan API. |
 | `ip_intel` | Map an IP → ASN, org, ISP, cloud/CDN provider, hosting flag, reverse DNS, geo. |
 | `reverse_ip` | Other domains co-hosted on the same IP (reverse-IP lookup). |
@@ -103,7 +102,6 @@ MoonMCP exposes **171 tools**, **11 resources** and **9 operator prompts**, grou
 | `parse_openapi` | Parse an OpenAPI/Swagger spec (URL or pasted) → full endpoint/param/method inventory, servers, security schemes, and flags (operations with **no** security). |
 | `extract_secrets` | Scan a page **and its JavaScript** for exposed keys/tokens (AWS, GitHub, Slack, Stripe, private keys, JWTs) — redacted. |
 | `cors_audit` | CORS misconfig: origin reflection, `null` origin, prefix/suffix bypass — worse with credentials. |
-| `access_control_check` | Replay a request as **user A (auth) vs user B vs anonymous** and diff the responses → broken-access-control / IDOR signal (the #1 payout class; set `auth_set` first). |
 | `authz_probe` | Function/object-level authorization: replay a privileged/admin action as a lower-priv or anonymous user → BFLA / BOLA. |
 | `response_leak_probe` | Drives the OTP / reset / verify flow and detects the out-of-band secret (token/OTP) returned **in-band** in the response (account-takeover primitive). |
 | `reset_poison_probe` | **Password-reset poisoning** via `Host` / `X-Forwarded-Host` — the reset link is built to point at an attacker host. |
@@ -145,8 +143,7 @@ MoonMCP exposes **171 tools**, **11 resources** and **9 operator prompts**, grou
 | `desync_modern_probe` | Modern desync (2025 class): 0.CL / TE.0 / `Expect: 100-continue` / chunk-extension via response-timeout deltas on raw closed sockets (CVE-2025-32094 / CVE-2025-55315). Detection-only. |
 | `cache_deception_probe` | Web-cache **deception**: primes a path-confusion variant (`/x.css`, `;x.css`, `%2f`) of the private page and re-reads it cookieless → a cached authed body under an attacker-readable key. |
 | `ssrf_metadata_probe` | Response-based SSRF → **cloud-metadata credential theft** (AWS/GCP/Azure/Alibaba/Yandex/Oracle/DO): injects each provider's IMDS URL and scans for its credential signature. |
-| `logic_probe` | Business-logic abuse: mass-assignment (privileged fields echoed back) + value/quantity tampering. |
-| `value_probe` | Money-aware value manipulation (negative/overflow/precision/>100 % discount, currency swap, single-use-coupon reuse). |
+| `logic_probe` | Business-logic abuse: parameter/quantity tampering + mass-assignment (privileged fields echoed back) + money-aware **value manipulation** (negative/overflow/precision/>100 % discount, currency swap) + single-use-**coupon reuse** (`coupon_code=`). |
 | `race_probe` | Single-packet **race condition** (HTTP/1.1 last-byte sync) → non-atomic per-user limits (coupon/withdrawal double-spend). |
 | `workflow_probe` | **Step-skipping** on a multi-step flow — fetch each step cold (without its prerequisites) → order confirmed without payment, account active without verification. |
 | `jwt_jku_probe` | JWT `jku`/`x5u` **key-injection SSRF** — re-issues the token with a `jku` pointing at an OAST canary; a callback = the server fetched attacker key material (CVE-2018-0114). |
@@ -213,7 +210,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `cvss_score` | Compute a **CVSS 3.1 base score** + severity band from a vector or individual metrics — so a confirmed finding carries a defensible standard severity. Offline. |
 | `export_findings` | Export findings as **SARIF 2.1.0** (GitHub code-scanning / DAST pipelines) or JSON. |
 | `export_obsidian` | "Graphify" the session into an **Obsidian vault** — linked notes (asset ↔ finding, vuln ↔ root cause) + tags + an Obsidian **Canvas** graph. Open the folder and use the graph view. |
-| `surface_diff` / `surface_snapshots` | Track how the attack surface **changes over time** — baseline a set (subdomains/endpoints/…) and surface only what's **new** since last run (persists via `MOONMCP_STATE_DIR`). |
+| `surface_diff` | Track how the attack surface **changes over time** — baseline a set (subdomains/endpoints/…) and surface only what's **new** since last run; omit `items` to list snapshots, `clear=` to remove one (persists via `MOONMCP_STATE_DIR`). |
 
 ### 🧠 Shared memory hub (persistent, cross-agent)
 | Tool | Purpose |
@@ -243,13 +240,13 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 
 | Tool | Purpose |
 | --- | --- |
-| `injection_info` / `injection_search` | Look up / search one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, per-engine signatures. |
+| `injection_info` | Look up (or `query=` to search) one of 29 injection classes (sqli, nosqli, xss, ssti, cmdi, xxe, xpath, ldapi, ssrf, crlf, prototype-pollution, prompt-injection, …): detection payloads, root causes, per-engine signatures. |
 | `match_injection_signatures` | Scan a response body for known injection error signatures → which class + technology (e.g. `ORA-01756` → Oracle SQLi). |
-| `technique_info` / `technique_search` | 115 exploitation techniques & landmark public PoCs across all languages/levels — descriptions + links, not exploit code. |
-| `privesc_info` / `privesc_search` | 129 privilege-escalation techniques across Linux/Windows/container/cloud/AD/macOS: enumeration commands, detection indicators, mitigations, references. |
+| `technique_info` (`query=` to search) | 115 exploitation techniques & landmark public PoCs across all languages/levels — descriptions + links, not exploit code. |
+| `privesc_info` (`query=` to search) | 129 privilege-escalation techniques across Linux/Windows/container/cloud/AD/macOS: enumeration commands, detection indicators, mitigations, references. |
 | `privesc_tools` | Catalog of 68 privesc tools (LinPEAS/WinPEAS, GTFOBins, LOLBAS, PowerUp, Seatbelt, pspy, potato family, BloodHound, Impacket, …). |
 | `match_privesc` | Scan pasted enumeration output (`sudo -l`, `id`, `getcap -r /`, `whoami /priv`, `systeminfo`) → which escalation vectors it indicates. |
-| `vuln_info` / `vuln_search` / `vuln_tools` | 44 server-side vuln classes (popular + obscure) with root cause, `where_it_breaks`, detection, WAF notes and real-world incidents; + a 29-tool discovery catalog. |
+| `vuln_info` (`query=` to search) / `vuln_tools` | 44 server-side vuln classes (popular + obscure) with root cause, `where_it_breaks`, detection, WAF notes and real-world incidents; + a 29-tool discovery catalog. |
 | `rootcause_info` | The root-cause taxonomy — the ~13 fundamental causes underneath all these bugs, each with why it recurs, the systemic fix, and the catalog vulns that derive from it. |
 | `waf_info` / `identify_waf` | WAF KB (how they work · fingerprints · bypass concepts); `identify_waf` names the vendor from a raw HTTP response (CF-RAY, `__cfduid`, `x-akamai`, `incap_ses`, BigIP, …). |
 
@@ -475,7 +472,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 171 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 163 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator

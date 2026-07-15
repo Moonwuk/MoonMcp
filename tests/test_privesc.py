@@ -60,8 +60,10 @@ def test_match_enumeration_linux_and_windows():
 @pytest.mark.asyncio
 async def test_privesc_tools_registered_and_work():
     tools = {t.name for t in await srv.mcp.list_tools()}
-    for name in ("privesc_info", "privesc_search", "privesc_tools", "match_privesc"):
+    for name in ("privesc_info", "privesc_tools", "match_privesc"):
         assert name in tools
+    assert "privesc_search" not in tools     # folded into privesc_info(query=)
+    assert (await srv.privesc_info(query="sudo"))["results"]
     idx = await srv.privesc_info()
     assert idx["stats"]["techniques"] >= 5
     lin = await srv.privesc_info(platform="linux")

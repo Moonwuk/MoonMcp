@@ -20,7 +20,7 @@ PASSIVE = {
     "auth_set", "auth_clear",
     "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
     # keyless OSINT (queries a third party, never the target)
-    "web_search", "web_read", "search_dorks", "cve_lookup", "cve_search", "cve_triage",
+    "web_search", "web_read", "search_dorks", "cve_lookup", "cve_search",
     "dependency_confusion",
     "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze", "jwt_crack",
     "jwt_alg_confusion", "deserialize_fingerprint", "js_library_scan",
@@ -33,12 +33,12 @@ PASSIVE = {
     "add_finding", "promote_lead", "label_finding", "metrics",
     "list_findings", "clear_findings", "triage_findings", "cvss_score",
     "audit_log",
-    "export_obsidian", "surface_diff", "surface_snapshots", "export_findings",
+    "export_obsidian", "surface_diff", "export_findings",
     # offline knowledge bases
-    "injection_info", "injection_search", "match_injection_signatures",
-    "technique_info", "technique_search",
-    "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
-    "vuln_info", "vuln_search", "rootcause_info", "vuln_tools",
+    "injection_info", "match_injection_signatures",
+    "technique_info",
+    "privesc_info", "privesc_tools", "match_privesc",
+    "vuln_info", "rootcause_info", "vuln_tools",
     "waf_info", "identify_waf",
     # external-tool inventory + nuclei coverage map (no traffic; run_scanner/vuln_scan do the work)
     "external_tools", "scan_coverage",

@@ -37,7 +37,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         [
             "web_search", "web_read", "search_dorks",
             "enumerate_subdomains", "wayback_urls",
-            "cve_lookup", "cve_search", "cve_triage",
+            "cve_lookup", "cve_search",
             "host_intel", "ip_intel", "reverse_ip",
             "cloud_buckets", "email_security", "dependency_confusion",
         ],
@@ -53,7 +53,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "crawl", "analyze_js", "js_library_scan", "recover_sourcemaps", "parse_openapi",
             "extract_secrets",
             "firebase_exposure", "supabase_exposure",
-            "cors_audit", "access_control_check", "authz_probe", "graphql_check",
+            "cors_audit", "authz_probe", "graphql_check",
             "graphql_probe", "ws_probe", "discover_parameters", "waf_detect", "takeover_check",
             "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
             "git_forensics",
@@ -73,7 +73,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "port_scan", "content_discovery", "http_methods",
             "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
             "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
-            "logic_probe", "race_probe", "workflow_probe", "value_probe", "jwt_jku_probe",
+            "logic_probe", "race_probe", "workflow_probe", "jwt_jku_probe",
             "nosqli_probe", "db_exposure", "second_order_sqli_probe", "orm_leak_probe",
             "fastjson_oast_probe", "ssrf_protocol_probe", "parser_diff_probe",
             "graphql_nosqli",
@@ -107,10 +107,10 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Offline reference: injections, techniques/PoCs, privilege escalation, "
         "server-side vulns + root causes, WAF fingerprints. No traffic.",
         [
-            "injection_info", "injection_search", "match_injection_signatures",
-            "technique_info", "technique_search",
-            "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
-            "vuln_info", "vuln_search", "vuln_tools", "rootcause_info",
+            "injection_info", "match_injection_signatures",
+            "technique_info",
+            "privesc_info", "privesc_tools", "match_privesc",
+            "vuln_info", "vuln_tools", "rootcause_info",
             "waf_info", "identify_waf",
         ],
     )),
@@ -122,7 +122,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "add_finding", "promote_lead", "label_finding", "metrics",
             "list_findings", "clear_findings", "triage_findings",
             "cvss_score", "export_findings", "export_obsidian",
-            "surface_diff", "surface_snapshots",
+            "surface_diff",
         ],
     )),
     ("memory", (
@@ -154,9 +154,9 @@ WORKFLOW: list[str] = [
     "Light active — recon_target for a one-shot sweep, then http_probe / fingerprint / "
     "analyze_headers / well_known / tls_inspect.",
     "Web-app — crawl, analyze_js, discover_parameters, cors_audit, graphql_check, "
-    "extract_secrets; access_control_check / authz_probe after auth_set for IDOR/BOLA.",
+    "extract_secrets; authz_probe after auth_set for IDOR/BOLA.",
     "Intrusive (only with explicit consent + MOONMCP_ALLOW_INTRUSIVE) — port_scan, "
-    "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe / value_probe.",
+    "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe.",
     "Confirm — turn a probe's review lead into a proof: promote_lead(kind=…) routes it to "
     "confirm_finding / side-effect re-observation / a Strix PoC brief.",
     "Record & report — add_finding / promote_lead as you go (both mirror to shared memory), "

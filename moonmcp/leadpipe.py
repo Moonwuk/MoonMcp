@@ -1,6 +1,6 @@
 """Lead → PoC pipeline — turn an edge-probe's ``review`` lead into a confirmation plan.
 
-Every MoonMCP edge probe (authz_probe, workflow_probe, value_probe, race_probe,
+Every MoonMCP edge probe (authz_probe, workflow_probe, race_probe,
 path_bypass_probe, cache_deception_probe, the injection probes, …) emits *leads*, not
 confirmations. That is honest, but the bug-bounty value only materializes if a lead is
 driven to a proven finding — the coverage audit calls this pipeline the real deliverable.
