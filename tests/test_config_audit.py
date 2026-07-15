@@ -5,6 +5,7 @@ import pytest
 from moonmcp import server as srv
 from moonmcp.recon.config_audit import (
     analyze_config,
+    classify_ingress_annotation,
     classify_signing_secret,
     detect_format,
 )
@@ -12,6 +13,32 @@ from moonmcp.recon.config_audit import (
 
 def _issues(audit):
     return {f.issue for f in audit.findings}
+
+
+def test_classify_ingress_annotation():
+    hit = classify_ingress_annotation("nginx.ingress.kubernetes.io/configuration-snippet")
+    assert hit is not None and hit[1] == "high"
+    assert classify_ingress_annotation("nginx.ingress.kubernetes.io/auth-url")[1] == "medium"
+    assert classify_ingress_annotation("nginx.ingress.kubernetes.io/ssl-passthrough")[1] == "low"
+    # not an ingress annotation namespace → ignored (no false positive)
+    assert classify_ingress_annotation("some.random/configuration-snippet") is None
+    assert classify_ingress_annotation("spring.datasource.url") is None
+
+
+def test_analyze_config_flags_ingress_annotation():
+    manifest = (
+        "apiVersion: networking.k8s.io/v1\n"
+        "kind: Ingress\n"
+        "metadata:\n"
+        "  annotations:\n"
+        '    nginx.ingress.kubernetes.io/configuration-snippet: "more_set_headers x;"\n'
+        '    nginx.ingress.kubernetes.io/auth-url: "http://auth.internal/check"\n'
+    )
+    audit = analyze_config(manifest, "ingress.yaml")
+    annos = {r["annotation"] for r in audit.summary["ingress_risks"]}
+    assert "configuration-snippet" in annos
+    assert "auth-url" in annos
+    assert "risky ingress annotation" in _issues(audit)
 
 
 def test_detect_format():

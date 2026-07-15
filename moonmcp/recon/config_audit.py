@@ -6,8 +6,11 @@ Recon frequently surfaces config files — an exposed ``.env``, a leaked
 common formats, enumerates **every setting** grouped by category so you can
 understand the whole configuration at a glance, and flags the security-relevant
 ones: exposed secrets, ``DEBUG=true``, disabled TLS verification, wildcard CORS,
-default/weak credentials, bind-to-all, and credentials embedded in connection
-strings.
+default/weak credentials, bind-to-all, credentials embedded in connection strings,
+and — when a Kubernetes manifest is supplied — **risky ingress annotations**
+(``configuration-snippet``/``server-snippet`` config injection, ``auth-url``
+external-auth/SSRF, ``mirror-target`` blind SSRF, ``permanent-redirect``,
+``ssl-passthrough``, ``use-regex``).
 
 Pure standard library (json / configparser / xml.etree / regex) with a minimal
 YAML/dotenv/.properties/PHP reader, so it works with zero dependencies.
@@ -398,6 +401,41 @@ def classify_managed_db(value: str) -> tuple[str, str, str] | None:
     return None
 
 
+# Risky Kubernetes ingress annotations — the KEY is the tell (the value is often a
+# harmless-looking path/snippet). (annotation-substring, severity, note).
+_INGRESS_ANNOTATION_RISKS: list[tuple[str, str, str]] = [
+    ("configuration-snippet", "high",
+     "arbitrary nginx/Lua config injection → ServiceAccount-token/Secret theft "
+     "(CVE-2023-5043 class); set allow-snippet-annotations=false"),
+    ("server-snippet", "high", "arbitrary nginx config injection (snippet abuse, CVE-2021-25742 class)"),
+    ("auth-snippet", "high", "arbitrary nginx config in the auth location block"),
+    ("stream-snippet", "high", "arbitrary nginx stream config injection"),
+    ("permanent-redirect", "medium", "value rendered into a return/rewrite directive (CVE-2023-5044)"),
+    ("auth-tls-match-cn", "medium", "value rendered into nginx config (IngressNightmare CVE-2025-1097)"),
+    ("mirror-target", "medium", "server-side request mirror — blind SSRF (CVE-2025-1098)"),
+    ("mirror-host", "medium", "mirror host injected into nginx config (CVE-2025-1098)"),
+    ("auth-url", "medium",
+     "external-auth subrequest — SSRF surface + un-normalized $request_uri trust "
+     "(traversal auth bypass; CVE-2025-24514 injection sink)"),
+    ("ssl-passthrough", "low", "TLS terminated at the backend — bypasses the ingress WAF/policy"),
+    ("use-regex", "low",
+     "regex path matching can coerce sibling Exact paths to prefix/regex (authz gap) + ReDoS"),
+]
+
+
+def classify_ingress_annotation(key: str) -> tuple[str, str, str] | None:
+    """If *key* is a risky Kubernetes ingress annotation, return
+    ``(annotation, severity, note)`` — else None (pure)."""
+
+    kl = key.lower()
+    if "ingress.kubernetes.io" not in kl and "nginx.ingress" not in kl:
+        return None
+    for anno, severity, note in _INGRESS_ANNOTATION_RISKS:
+        if anno in kl:
+            return (anno, severity, note)
+    return None
+
+
 def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
     k, v = key.lower(), (value or "").strip()
     vlow = v.lower()
@@ -475,6 +513,7 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
     findings: list[ConfigFinding] = []
     forge_chains: list[dict] = []
     managed_db: list[dict] = []
+    ingress_risks: list[dict] = []
     for key, value in pairs:
         cat = _categorize(key)
         rule_hits = _rule_checks(key, value)
@@ -496,6 +535,13 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
             service, note, severity = mdb
             rule_hits.append(ConfigFinding(severity, key, "managed database credential", f"{service}: {note}"))
             managed_db.append({"key": key, "service": service, "note": note, "severity": severity})
+        # Risky k8s ingress annotation — keyed on the annotation name, not the value
+        # (the value is often a benign-looking path/snippet).
+        anno = classify_ingress_annotation(key)
+        if anno is not None:
+            annotation, severity, note = anno
+            rule_hits.append(ConfigFinding(severity, key, "risky ingress annotation", f"{annotation}: {note}"))
+            ingress_risks.append({"key": key, "annotation": annotation, "severity": severity, "note": note})
         sensitive = cat == "secret" or forge is not None or mdb is not None or any(
             f.issue in ("exposed credential", "credentials in connection string") for f in rule_hits)
         shown = _redact(value) if sensitive and value else value
@@ -512,5 +558,6 @@ def analyze_config(content: str, filename: str | None = None) -> ConfigAudit:
         by_cat[s.category] = by_cat.get(s.category, 0) + 1
     audit.summary = {"by_severity": by_sev, "by_category": by_cat,
                      "sensitive_settings": sum(1 for s in audit.settings if s.sensitive),
-                     "forge_chains": forge_chains, "managed_db": managed_db}
+                     "forge_chains": forge_chains, "managed_db": managed_db,
+                     "ingress_risks": ingress_risks}
     return audit
