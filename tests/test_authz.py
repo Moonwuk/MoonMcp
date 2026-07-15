@@ -109,6 +109,28 @@ async def test_no_refs_still_runs_direct_only():
     assert any(f["kind"] == "direct_bola" for f in res["findings"])
 
 
+# -- routing: body truthiness, not `is not None` ----------------------------
+@pytest.mark.asyncio
+async def test_authz_probe_empty_body_runs_bola_chain(fresh_context, local_server):
+    base, _ = local_server
+    # A GET with an EMPTY-STRING body carries no payload, so it must run the full
+    # multi-step BOLA chain — NOT the single-request cross-identity diff (which is
+    # reserved for non-GET / a real body / direct_only). The two return shapes are
+    # distinct: the chain carries "note"/"refs_found"; the diff carries "identities".
+    res = await srv.authz_probe(target=f"{base}/orders/100", body="")
+    assert "identities" not in res      # would appear iff misrouted to the direct diff
+    assert "note" in res                # BOLA-chain shape
+
+
+@pytest.mark.asyncio
+async def test_authz_probe_real_body_runs_direct_diff(fresh_context, local_server):
+    base, _ = local_server
+    # A real body legitimately routes to the single-request cross-identity diff.
+    res = await srv.authz_probe(target=f"{base}/echo", method="POST", body='{"x":1}')
+    assert "identities" in res
+    assert res["method"] == "POST"
+
+
 # -- registration -----------------------------------------------------------
 @pytest.mark.asyncio
 async def test_authz_probe_tool_registered():

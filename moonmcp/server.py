@@ -1573,8 +1573,11 @@ async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
     m = method.upper()
 
     # Non-GET / with-body / direct_only → single-request cross-identity diff (the
-    # id-space sweep + multi-step chain are inherently GET-based).
-    if direct_only or m != "GET" or body is not None:
+    # id-space sweep + multi-step chain are inherently GET-based). Use body
+    # truthiness to match _authz_direct_diff (which sends `body.encode() if body`):
+    # an empty-string body carries no request payload, so it must NOT force the
+    # single-request diff and skip the full BOLA chain a plain GET deserves.
+    if direct_only or m != "GET" or body:
         return await _authz_direct_diff(ctx, url, m, body, second_headers)
 
     result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
@@ -3574,7 +3577,14 @@ async def surface_diff(name: str = "", items: list[str] | None = None,
         return {"cleared": removed, "snapshots": ctx.snapshots.names()}
     if items is None:
         return {"snapshots": ctx.snapshots.names()}
-    return ctx.snapshots.diff(name, items)
+    if not name.strip():
+        return errmod.err(
+            "missing_name",
+            "surface_diff needs a snapshot `name` to track items against.",
+            "Pass name=<snapshot> (e.g. 'acme-subdomains') alongside items, or omit "
+            "items to list the tracked snapshots.",
+        )
+    return ctx.snapshots.diff(name.strip(), items)
 
 
 @mcp.tool()

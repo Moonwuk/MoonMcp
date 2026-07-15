@@ -61,6 +61,15 @@ def polarity(text: str) -> int:
     return -1 if _NEG.search(text or "") else 1
 
 
+def _claim_polarity(row: dict) -> int:
+    """Polarity of a lesson's *claim*. Scope it to the title (the headline claim);
+    the body is elaboration and routinely carries incidental negations ("reflected
+    without encoding", "not blocked") that must not flip the claim's sign and
+    manufacture a false contradiction. Fall back to the body only if untitled."""
+
+    return polarity(row.get("title") or row.get("body") or "")
+
+
 def _subject_tokens(row: dict) -> set[str]:
     text = f"{row.get('title', '')} {row.get('body', '')}".lower()
     return {w for w in _WORD.findall(text) if w not in _STOP}
@@ -78,7 +87,7 @@ def find_contradictions(rows: list[dict], *, overlap: float = 0.5) -> list[dict]
 
     out: list[dict] = []
     prepared = [
-        (r, _subject_tokens(r), polarity(f"{r.get('title', '')} {r.get('body', '')}"))
+        (r, _subject_tokens(r), _claim_polarity(r))
         for r in rows
     ]
     for i in range(len(prepared)):

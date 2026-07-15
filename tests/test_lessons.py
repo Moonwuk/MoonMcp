@@ -51,6 +51,28 @@ def test_no_contradiction_when_different_subject():
     assert L.find_contradictions(rows) == []
 
 
+def test_no_false_contradiction_from_incidental_negation_in_body():
+    # Both TITLES affirm the same claim; only the *body* carries an incidental
+    # negation word ("without"). Polarity is a property of the claim, not the
+    # elaboration — so these must NOT be flagged as contradicting each other.
+    rows = [
+        {"id": 1, "title": "SSTI works on the search param", "body": "seen without waf"},
+        {"id": 2, "title": "SSTI works on the search param", "body": "seen with waf"},
+    ]
+    assert L.find_contradictions(rows) == []
+
+
+def test_contradiction_still_found_when_negation_is_in_the_title():
+    # The claim itself flips in the title — a genuine contradiction, still caught.
+    rows = [
+        {"id": 1, "title": "SSTI works on the search param", "body": "long note without extras"},
+        {"id": 2, "title": "SSTI does not work on the search param", "body": "long note with extras"},
+    ]
+    c = L.find_contradictions(rows)
+    assert len(c) == 1
+    assert {c[0]["a"]["id"], c[0]["b"]["id"]} == {1, 2}
+
+
 def test_age_days_tolerates_naive_aware_mix():
     # a naive stored timestamp vs an aware now (or vice versa) must not raise
     assert L.age_days("2025-01-01T00:00:00", _NOW) is not None       # naive vs aware
@@ -87,6 +109,35 @@ def test_record_lesson_corroborates_on_repeat():
     # the recalled row reflects the bumped confidence + latest body
     hit = next(x for x in m.lessons("parser_diff") if x["id"] == first["id"])
     assert hit["confidence"] == 2 and hit["body"] == "v2 refined"
+
+
+def test_record_lesson_vote_preserves_body_and_tags():
+    # A title-only re-assert is a *vote*: it bumps confidence but must not wipe the
+    # substance (body/tags) recorded on the first insert.
+    m = MemoryStore()
+    m.record_lesson(title="waf X blocks the /admin path", body="original detail",
+                    tags="waf,admin", now=_NOW)
+    voted = m.record_lesson(title="waf X blocks the /admin path", body="", tags="", now=_NOW)
+    assert voted["confidence"] == 2 and voted["corroborated"] is True
+    hit = next(x for x in m.lessons("admin") if x["id"] == voted["id"])
+    assert hit["body"] == "original detail"        # NOT wiped by the empty vote
+    assert "waf" in (hit["tags"] or "")
+    # a later non-empty body still updates
+    m.record_lesson(title="waf X blocks the /admin path", body="sharper detail", now=_NOW)
+    hit2 = next(x for x in m.lessons("admin") if x["id"] == voted["id"])
+    assert hit2["body"] == "sharper detail"
+
+
+def test_record_lesson_returns_persisted_title_casing():
+    # The stored title column is never rewritten on corroboration, so the returned
+    # title must match what's persisted — not the (differently-cased) new call.
+    m = MemoryStore()
+    first = m.record_lesson(title="Origin IP leaks via X-Forwarded-Host", body="a", now=_NOW)
+    again = m.record_lesson(title="origin ip leaks via x-forwarded-host", body="b", now=_NOW)
+    assert again["id"] == first["id"]
+    assert again["title"] == "Origin IP leaks via X-Forwarded-Host"   # persisted casing
+    hit = next(x for x in m.lessons("origin") if x["id"] == first["id"])
+    assert hit["title"] == again["title"]           # return matches DB, no drift
 
 
 def test_prune_lessons_drops_only_stale_uncorroborated():

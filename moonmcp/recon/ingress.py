@@ -290,8 +290,16 @@ def version_status(version: str | None, fixed: tuple[str, ...]) -> str:
     ``fixed`` lists the first patched version in each affected branch, e.g.
     ``("1.11.5", "1.12.1")``. A version in a listed (major, minor) branch is
     vulnerable iff its patch precedes that branch's fix — so ``1.12.0`` is
-    correctly flagged vulnerable while ``1.12.1`` is patched. A branch older than
-    every listed one is vulnerable; a branch newer than all of them is patched.
+    correctly flagged vulnerable while ``1.12.1`` is patched.
+
+    When the version's exact ``(major, minor)`` branch isn't listed we resolve
+    against the fixes in the **same major** first: a minor below the earliest
+    fixed branch never received the backport (vulnerable), a minor above the
+    latest fixed branch shipped after it (patched). Only when the version's whole
+    major has no listed fix do we fall back to major-level ordering — so a gap
+    minor like Traefik ``3.2.0`` under ``("2.11.24", "3.3.6")`` is correctly
+    ``vulnerable`` (not ``unknown``) and ingress-nginx ``0.50.0`` under
+    ``("0.49.1", "1.0.1")`` is correctly ``patched``.
     """
 
     v = _parse_ver(version)
@@ -307,19 +315,29 @@ def version_status(version: str | None, fixed: tuple[str, ...]) -> str:
     key = (v[0], v[1]) if len(v) >= 2 else (v[0], 0)
     if key in branches:
         return "vulnerable" if v < branches[key] else "patched"
-    if key < min(branches):
+    # Gap branch: prefer same-major reasoning (per-minor backports), else fall
+    # back to major ordering. Never leave a resolvable version at "unknown".
+    same_major = sorted(mn for (mj, mn) in branches if mj == key[0])
+    if same_major:
+        if key[1] > same_major[-1]:
+            return "patched"          # newer minor than the latest fixed branch
+        return "vulnerable"           # older minor, or a gap between backports
+    majors = [mj for (mj, _mn) in branches]
+    if key[0] < min(majors):
         return "vulnerable"
-    if key > max(branches):
+    if key[0] > max(majors):
         return "patched"
-    return "unknown"
+    return "unknown"                  # a whole major between fixed majors — ambiguous
 
 
 def known_cves(controller: str, version: str | None) -> list[dict]:
     """The curated CVEs applicable to *controller* (display name), each annotated
     with a ``version_status`` for *version* (pure/offline).
 
-    Sorted most-severe first, unauth ahead of privileged at equal severity, and
-    confirmed-vulnerable ahead of unknown ahead of patched.
+    Sorted **most-severe first**; then unauth ahead of privileged at equal
+    severity; then confirmed-vulnerable ahead of unknown ahead of patched; then
+    higher CVSS. Severity leads so the headline risk is never buried under a
+    lower-severity CVE merely because the latter happens to be version-confirmed.
     """
 
     key = _CANON.get(controller)
@@ -342,9 +360,9 @@ def known_cves(controller: str, version: str | None) -> list[dict]:
                 "detection": cve.detection,
             })
     out.sort(key=lambda c: (
-        status_rank.get(c["version_status"], 0),
         _SEVERITY_RANK.get(c["severity"], 0),
         c["unauth"],
+        status_rank.get(c["version_status"], 0),
         c["cvss"],
     ), reverse=True)
     return out

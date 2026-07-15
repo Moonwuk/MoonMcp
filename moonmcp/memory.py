@@ -198,26 +198,34 @@ class MemoryStore:
         title = title.strip()
         with self._lock:
             existing = self._db.execute(
-                "SELECT id, confidence, created_at FROM memory "
+                "SELECT id, title, body, tags, confidence, created_at FROM memory "
                 "WHERE kind='lesson' AND lower(title)=? ORDER BY id LIMIT 1",
                 (title.lower(),),
             ).fetchone()
             if existing is not None:
                 eid = int(existing["id"])
                 conf = int(existing["confidence"] or 1) + 1
+                # A corroboration is a *vote*, not a rewrite: a title-only re-assert
+                # (empty body/tags) must not wipe the substance already recorded.
+                # Keep the persisted body/tags unless this call supplies new ones.
+                new_body = str(body) if body else (existing["body"] or "")
+                new_tags = str(tags) if tags else (existing["tags"] or "")
+                # The row's title column is never rewritten, so report the stored
+                # casing — never a title that diverges from what's persisted.
+                stored_title = existing["title"] or title
                 if self._fts:
                     self._db.execute(
                         "INSERT INTO memory_fts(memory_fts,rowid,title,body,tags) "
                         "SELECT 'delete', id, title, body, tags FROM memory WHERE id=?", (eid,))
                 self._db.execute(
                     "UPDATE memory SET body=?, tags=?, confidence=?, source='memory_lesson' WHERE id=?",
-                    (str(body), str(tags), conf, eid))
+                    (new_body, new_tags, conf, eid))
                 if self._fts:
                     self._db.execute(
                         "INSERT INTO memory_fts(rowid,title,body,tags) VALUES(?,?,?,?)",
-                        (eid, title, str(body), str(tags)))
+                        (eid, stored_title, new_body, new_tags))
                 self._db.commit()
-                return {"id": eid, "title": title, "confidence": conf,
+                return {"id": eid, "title": stored_title, "confidence": conf,
                         "created_at": existing["created_at"] or "", "corroborated": True}
             cur = self._db.execute(
                 "INSERT INTO memory(kind,target,title,body,severity,source,trust,provenance,"
