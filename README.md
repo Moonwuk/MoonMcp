@@ -51,7 +51,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **169 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **170 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -475,7 +475,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 169 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 170 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator

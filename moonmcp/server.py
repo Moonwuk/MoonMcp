@@ -80,6 +80,7 @@ from .recon import firebase as firebasemod
 from .recon import gitdump as gitdumpmod
 from .recon import headers as headersmod
 from .recon import infra as inframod
+from .recon import ingress as ingressmod
 from .recon import jsendpoints as jsmod
 from .recon import jslibs as jslibsmod
 from .recon import openapi as openapimod
@@ -1172,6 +1173,60 @@ async def fingerprint(target: str) -> dict:
     res = to_dict(fp)
     res["suggested_next"] = nextstepmod.after("fingerprint")
     return res
+
+
+@mcp.tool()
+@active_tool()
+async def ingress_fingerprint(target: str) -> dict:
+    """**Identify the Kubernetes ingress controller / service-mesh data plane** in
+    front of a host and map it to its high-severity CVEs — the keystone that lets
+    `cve_triage` fire on the ingress layer. Detection-only.
+
+    Classifies ingress-nginx, Traefik, Kong, Istio/Envoy, HAProxy Ingress,
+    Ambassador and the managed cloud LBs (Google Frontend/GKE, AWS ALB, Azure
+    Application Gateway) from black-box signals: response headers (`Via: kong/x`,
+    `server: istio-envoy`, `x-envoy-*`, `X-Kong-*-Latency`), the controller's
+    **default-backend 404 body** elicited by an unmatched path (`default backend -
+    404` = ingress-nginx, `404 page not found` = Traefik/Go, Kong's no-Route JSON),
+    and TLS certificate tells — the ingress-nginx *"Fake Certificate"* and the
+    exposed **admission-webhook** SAN (the IngressNightmare / CVE-2025-1974
+    precondition). A detected controller + version is mapped against a curated,
+    offline CVE table (IngressNightmare, Traefik path-matcher bypass, Istio/Envoy
+    authz-normalization, Kong Admin API); when the version is hidden (the usual
+    `server_tokens off` case) the CVEs come back as candidates with a pointer at
+    the `:10254/metrics` version oracle. Sends nothing beyond two benign GETs and a
+    TLS handshake — no injection, no admin-port traffic. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    host = normalize_target(url)
+    scheme = "http" if url.startswith("http://") else "https"
+    ctx = get_context()
+    main = await ctx.http.fetch(
+        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
+    )
+    if main.status is None:
+        return errmod.err("unreachable", detail=main.error, url=url)
+    # Elicit the default-backend 404 body with an obviously-unmatched path.
+    probe_url = f"{scheme}://{host}/{ingressmod.PROBE_PATH}"
+    unmatched = await ctx.http.fetch(probe_url, follow_redirects=False, scope_check=_scope_check())
+    unmatched = unmatched if unmatched.status is not None else None
+    # TLS certificate tell (the Fake-Certificate / admission-webhook SAN signals).
+    cert = None
+    if scheme == "https":
+        _, port = _split_host_port(target, 443)
+        cert = await tlsmod.inspect_certificate(host, port, server_name=host)
+    report = ingressmod.classify(main, unmatched=unmatched, cert=cert)
+    nxt: list[str] = []
+    if report["applicable_cves"]:
+        nxt.append("cve_triage")
+    if report["controller"]:
+        nxt.append("path_bypass_probe")
+    if report["admin_surface"]:
+        nxt.append("http_probe")
+    report["suggested_next"] = nxt
+    return report
 
 
 @mcp.tool()

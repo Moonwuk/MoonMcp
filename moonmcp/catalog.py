@@ -90,7 +90,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "drift, DNS/zone behaviour (wildcard, LB, dangling CNAME), Host-header "
         "routing, and rate-limit behaviour.",
         ["backend_probe", "dns_behavior", "vhost_probe", "ratelimit_probe",
-         "tls_behavior", "edge_map", "http_behavior"],
+         "tls_behavior", "edge_map", "http_behavior", "ingress_fingerprint"],
     )),
     ("intercept", (
         "Interception & active probes",
