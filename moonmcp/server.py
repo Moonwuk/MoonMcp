@@ -35,6 +35,7 @@ from . import __version__
 from . import catalog as catalogmod
 from . import confirm as confirmmod
 from . import cvss as cvssmod
+from . import dryrun as dryrunmod
 from . import errors as errmod
 from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
@@ -285,7 +286,11 @@ def active_tool(
                 raw = bound.arguments.get(tname)
                 if raw is None or (isinstance(raw, str) and not raw.strip()):
                     raise ValueError(f"'{tname}' is required")
-                await _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
+                # A dry-run preview sends no packets, so it needn't require the
+                # intrusive switch — but it still must be in scope (the critical
+                # guard stays on, so even a mis-wired preview can't reach off-scope).
+                is_dry = bound.arguments.get("dry_run") is True
+                await _require_scope(str(raw), intrusive=intrusive and not is_dry, tool=func.__name__)
             return await func(*args, **kwargs)
 
         gated = safe_tool(wrapper)
@@ -4415,18 +4420,24 @@ _with_param = injectmod.with_param
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
+async def ssti_probe(target: str, param: str, method: str = "GET",
+                     dry_run: bool = False) -> dict:
     """**Server-Side Template Injection** probe. Injects benign arithmetic markers
     for each major engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor,
     Handlebars) into `param` and checks whether the result (``7331*7=51317``)
     renders — i.e. the expression was *evaluated*, not reflected. Differential vs a
-    control. Reports which engine fired. Intrusive; in scope only.
+    control. Reports which engine fired. `dry_run=True` returns the payloads it
+    would send without sending them. Intrusive; in scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
+    if dry_run:
+        return dryrunmod.preview(probe="ssti_probe", target=url, param=param, method=m,
+                                 payloads=[f"{engine}: {payload}"
+                                           for engine, payload in probesmod.SSTI_PAYLOADS])
     burl, bbody = _with_param(url, param, "moonc0nfirm", m)
     b = await ctx.http.fetch(burl, method=m, body=bbody, follow_redirects=False, scope_check=_scope_check())
     tested: list[tuple[str, str, str]] = []
@@ -4677,7 +4688,8 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
+async def lfi_probe(target: str, param: str, method: str = "GET",
+                    dry_run: bool = False) -> dict:
     """**Path traversal / LFI** content-disclosure probe — non-destructive. Sends
     depth-escalating (`../` x1/x3/x6/x8), null-byte, double-URL-encoded, and
     Windows-style traversal variants at `param` and checks the response for a
@@ -4687,13 +4699,17 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
     not just that a WAF let the payload's *shape* through (that's `waf_bypass_probe`'s
     canary). Reads only universally-present, non-sensitive files (never app source,
     credentials, or config) — proving reachability, not extracting data (deeper
-    extraction is weaponization → Strix). Intrusive; in scope only.
+    extraction is weaponization → Strix). `dry_run=True` returns the exact payloads
+    it would send without sending them. Intrusive; in scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
+    if dry_run:
+        return dryrunmod.preview(probe="lfi_probe", target=url, param=param, method=m,
+                                 payloads=[p for _lbl, p, _raw in probesmod.LFI_PAYLOADS])
     sc = _scope_check()
 
     async def _get(value: str, is_raw: bool):
@@ -4723,7 +4739,8 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def interp_probe(target: str, param: str, method: str = "GET") -> dict:
+async def interp_probe(target: str, param: str, method: str = "GET",
+                       dry_run: bool = False) -> dict:
     """**Generic differential "interpretation" prober** (Backslash Powered
     Scanner-style) — a meta-probe, not a class-specific one. Sends five small,
     distinctive markers into `param` — each revealing ONE kind of character-level
@@ -4743,6 +4760,11 @@ async def interp_probe(target: str, param: str, method: str = "GET") -> dict:
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
+    if dry_run:
+        return dryrunmod.preview(
+            probe="interp_probe", target=url, param=param, method=m,
+            payloads=[f"{name}: {interpmod.build_probe('mcpCONTROL', template)}"
+                      for name, template, _t, _d in interpmod.MARKERS])
     sc = _scope_check()
     control = f"mcp{secrets.token_hex(4)}"
 
@@ -4766,7 +4788,8 @@ async def interp_probe(target: str, param: str, method: str = "GET") -> dict:
 
 @mcp.tool()
 @active_tool(intrusive=True)
-async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
+async def nosqli_probe(target: str, param: str, method: str = "POST",
+                       dry_run: bool = False) -> dict:
     """**NoSQL (MongoDB) operator-injection** probe — non-destructive. Sends an
     *object* where the app expects a *string* — `$ne`/`$gt`/`$nin` in both the
     bracket form (`param[$ne]=x`) and JSON form (`{"param":{"$ne":null}}`) — plus a
@@ -4774,13 +4797,19 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     Confirmed when a *reproducible* operator twin flips the outcome vs a plain-string
     baseline (auth bypass / more records), the `$where` boolean differs, or a MongoDB
     error signature fires. No data extraction (no `$regex` char-oracle, no `sleep()` —
-    those go to NoSQLMap/Strix). Intrusive; in scope only.
+    those go to NoSQLMap/Strix). `dry_run=True` returns the operator payloads it
+    would send without sending them. Intrusive; in scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
     m = method.upper()
+    if dry_run:
+        pv = [f"{param}[{op}]={val}" for _lbl, op, val in nosqlimod.BRACKET_TWINS]
+        pv += [f"json {label}: {obj}" for label, obj in nosqlimod.JSON_TWINS]
+        return dryrunmod.preview(probe="nosqli_probe", target=url, param=param, method=m,
+                                 payloads=pv)
     bodies: list[str] = []
 
     async def _send(req, http_method):
