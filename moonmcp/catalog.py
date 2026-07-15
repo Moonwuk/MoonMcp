@@ -53,7 +53,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "crawl", "analyze_js", "js_library_scan", "recover_sourcemaps", "parse_openapi",
             "extract_secrets",
             "firebase_exposure", "supabase_exposure",
-            "cors_audit", "access_control_check", "authz_probe", "graphql_check",
+            "cors_audit", "authz_probe", "graphql_check",
             "graphql_probe", "ws_probe", "discover_parameters", "waf_detect", "takeover_check",
             "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
             "git_forensics",
@@ -154,7 +154,7 @@ WORKFLOW: list[str] = [
     "Light active — recon_target for a one-shot sweep, then http_probe / fingerprint / "
     "analyze_headers / well_known / tls_inspect.",
     "Web-app — crawl, analyze_js, discover_parameters, cors_audit, graphql_check, "
-    "extract_secrets; access_control_check / authz_probe after auth_set for IDOR/BOLA.",
+    "extract_secrets; authz_probe after auth_set for IDOR/BOLA.",
     "Intrusive (only with explicit consent + MOONMCP_ALLOW_INTRUSIVE) — port_scan, "
     "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe.",
     "Confirm — turn a probe's review lead into a proof: promote_lead(kind=…) routes it to "

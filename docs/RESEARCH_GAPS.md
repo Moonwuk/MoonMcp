@@ -199,7 +199,7 @@ structurally *cannot* express — those have a higher marginal hit-rate on alrea
 scanned targets. The split is encoded (and testable) in `moonmcp/external/nuclei.py`
 (`NUCLEI_DELEGATE` vs `NATIVE_EDGE`) and surfaced live by the `scan_coverage` tool;
 `vuln_scan` returns `also_run_native` to steer the agent to the edge probes after the
-nuclei pass. **Native-edge (keep + sharpen):** access_control_check, logic_probe,
+nuclei pass. **Native-edge (keep + sharpen):** authz_probe, logic_probe,
 race_probe, desync_probe/desync_modern_probe, path_bypass_probe, cache_deception_probe,
 response_leak_probe, reset_poison_probe, ssrf_metadata_probe, confirm_finding,
 surface_diff, the behavioural-infra probes, oauth_probe, the config_audit forge-chain

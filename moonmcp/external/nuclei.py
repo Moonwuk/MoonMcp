@@ -49,10 +49,9 @@ NUCLEI_DELEGATE: dict[str, str] = {
 # MoonMCP capabilities nuclei STRUCTURALLY cannot (or only clumsily) express — these
 # are the higher-hit-rate probes to keep and sharpen. native_tool -> why nuclei can't.
 NATIVE_EDGE: dict[str, str] = {
-    "access_control_check": "compares TWO authenticated identities against the same object "
-                            "(IDOR/BOLA) — nuclei is single-template, no cross-identity diff",
-    "authz_probe": "multi-step BOLA chain: read the owner's response, extract the object ids it "
-                   "exposes, then access them as another identity — cross-request + cross-identity "
+    "authz_probe": "cross-identity broken-access-control / multi-step BOLA: replays a request as "
+                   "owner/user-B/anon and diffs, and reads the owner's response to extract object "
+                   "ids then accesses them as another identity — cross-request + cross-identity "
                    "state a stateless template engine cannot carry",
     "logic_probe": "business-logic abuse — param tampering + mass-assignment + money-aware value "
                    "manipulation (negative/overflow/precision/>100% discount, currency swap, "

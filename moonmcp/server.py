@@ -1547,46 +1547,65 @@ async def cors_audit(target: str) -> dict:
 
 @mcp.tool()
 @active_tool()
-async def access_control_check(target: str, method: str = "GET", body: str | None = None,
-                               second_headers: dict[str, str] | None = None) -> dict:
-    """Probe an in-scope URL for broken access control / IDOR by replaying the
-    SAME request under multiple identities and diffing the responses:
+async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
+                      max_refs: int = 8, method: str = "GET", body: str | None = None,
+                      direct_only: bool = False) -> dict:
+    """**Broken access control / BOLA / IDOR** — the object-level authorization test
+    a stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
+    `second_headers` (a lower-priv user B).
 
-    - **A** = the current engagement auth (`auth_set` — user A),
-    - **B** = `second_headers` if given (a second, lower-priv user's headers/cookies),
-    - **anon** = no credentials at all.
+    Default (a GET with no body) runs the full **multi-step BOLA chain**: (1) **direct**
+    — B/anon get the *same* object from the same URL; (2) **sibling sweep** — walk the
+    id space (id±1, low ids) as B/anon and flag any object they read; (3) **multi-step
+    chain** — extract the object ids the owner's response exposes, then fetch each as
+    B/anon.
 
-    If a protected resource returns a similar 2xx body to the anonymous or the
-    other-user request, that is a strong broken-access-control / IDOR signal. The
-    verdict is a lead to verify — it reports each identity's status/length and the
-    body-similarity so you can judge. Set `auth_set` first for a meaningful A.
-    In scope only; sends benign, identical requests (no payloads).
+    For a **non-GET request, a request with a `body`, or `direct_only=True`**, it runs
+    the single-request **cross-identity diff** instead (replay the *same* request as
+    owner A / user B / anon and flag when a lower-priv identity gets a near-identical
+    2xx) — the arbitrary-method access-control check (e.g. a protected POST). Read-only
+    (never mutates — state change → Strix); findings are `review` leads. In scope only.
     """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    m = method.upper()
+
+    # Non-GET / with-body / direct_only → single-request cross-identity diff (the
+    # id-space sweep + multi-step chain are inherently GET-based).
+    if direct_only or m != "GET" or body is not None:
+        return await _authz_direct_diff(ctx, url, m, body, second_headers)
+
+    result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
+                                       max_refs=max_refs, scope_check=_scope_check())
+    result["hint"] = (None if ctx.auth.is_set()
+                      else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
+    n = len(result.get("findings", []))
+    result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
+                      "object" if n else "no cross-identity object access observed")
+    return result
+
+
+async def _authz_direct_diff(ctx, url: str, method: str, body: str | None,
+                             second_headers: dict[str, str] | None) -> dict:
+    """Replay the SAME request under owner-A / user-B / anon and flag when a lower-priv
+    identity gets a near-identical 2xx (broken access control / IDOR on one request)."""
 
     import hashlib
     from difflib import SequenceMatcher
 
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    ctx = get_context()
     bodyb = body.encode() if body else None
-    m = method.upper()
 
     async def _probe(*, headers=None, suppress_auth=False):
-        r = await ctx.http.fetch(url, method=m, headers=headers, body=bodyb,
+        r = await ctx.http.fetch(url, method=method, headers=headers, body=bodyb,
                                  follow_redirects=False, suppress_auth=suppress_auth)
         snippet = r.body[:4096]
-        return {
-            "status": r.status,
-            "length": len(r.body),
-            "sha1": hashlib.sha1(snippet).hexdigest()[:12] if snippet else None,
-            "_snippet": snippet,
-            "error": r.error,
-            "blocked": r.blocked_reason,
-        }
+        return {"status": r.status, "length": len(r.body),
+                "sha1": hashlib.sha1(snippet).hexdigest()[:12] if snippet else None,
+                "_snippet": snippet, "error": r.error, "blocked": r.blocked_reason}
 
-    identities: dict[str, dict] = {}
-    identities["auth_A"] = await _probe()  # current engagement auth
+    identities: dict[str, dict] = {"auth_A": await _probe()}
     if second_headers:
         identities["user_B"] = await _probe(headers=second_headers, suppress_auth=True)
     identities["anonymous"] = await _probe(suppress_auth=True)
@@ -1604,10 +1623,8 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
         if not other:
             continue
         sim = _similar(a, other)
-        comparisons[f"auth_A_vs_{name}"] = {
-            "similarity": sim,
-            "same_status": a["status"] == other["status"],
-        }
+        comparisons[f"auth_A_vs_{name}"] = {"similarity": sim,
+                                            "same_status": a["status"] == other["status"]}
         a_ok = a["status"] is not None and 200 <= a["status"] < 300
         other_ok = other["status"] is not None and 200 <= other["status"] < 300
         if a_ok and other_ok and sim >= 0.95:
@@ -1615,43 +1632,14 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
             concerns.append(
                 f"{who} receives a response nearly identical to the authenticated one "
                 f"(status {other['status']}, similarity {sim}) — possible broken access "
-                f"control / IDOR; verify the resource is meant to be private to user A."
-            )
+                f"control / IDOR; verify the resource is meant to be private to user A.")
 
     for v in identities.values():
         v.pop("_snippet", None)
     hint = None if ctx.auth.is_set() else "No engagement auth set — call auth_set first so 'auth_A' is authenticated."
-    return {"target": url, "method": m, "identities": identities,
+    return {"target": url, "method": method, "identities": identities,
             "comparisons": comparisons, "concerns": concerns,
             "verdict": "review" if concerns else "no_obvious_idor", "hint": hint}
-
-
-@mcp.tool()
-@active_tool()
-async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
-                      max_refs: int = 8) -> dict:
-    """**Multi-step BOLA / IDOR chain** — the object-level authorization test a
-    stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
-    `second_headers` (a lower-priv user B); this runs three GET-only signals:
-    (1) **direct** — B/anon get the *same* object from the same URL; (2) **sibling
-    sweep** — walk the id space (id±1, low ids) as B/anon and flag any object they
-    read; (3) **multi-step chain** — extract the object ids the owner's response
-    exposes, then fetch each as B/anon (owner response → cross-identity access).
-    Read-only (never mutates — state change → Strix). Findings are `review` leads.
-    In scope only.
-    """
-
-    ctx = get_context()
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
-                                       max_refs=max_refs, scope_check=_scope_check())
-    result["hint"] = (None if ctx.auth.is_set()
-                      else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
-    n = len(result.get("findings", []))
-    result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
-                      "object" if n else "no cross-identity object access observed")
-    return result
 
 
 @mcp.tool()
@@ -1681,7 +1669,7 @@ async def graphql_probe(target: str, endpoint: str | None = None, batch_n: int =
     **field-suggestion schema recovery** (a typo'd field → *"Did you mean …?"* leaks
     real names, recovering the schema without introspection), and **aliases** (many
     operations per document). Nested-traversal **BOLA** is surfaced as a lead to
-    confirm with `access_control_check` / Strix. Detection-only — benign queries, small
+    confirm with `authz_probe` / Strix. Detection-only — benign queries, small
     batch, no mutations. Run `graphql_check` first for introspection. In scope only.
     """
 

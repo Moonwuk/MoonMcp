@@ -40,7 +40,7 @@ leaves under-reported.
 ## Tiers (what to keep, what to stop)
 
 **NUCLEI-CANNOT — genuine structural edge, invest here:**
-`authz_probe` & `access_control_check` (two-identity BOLA), `workflow_probe`
+`authz_probe` (cross-identity + multi-step BOLA), `workflow_probe`
 (step-skipping), `cache_deception_probe` (session differential), `desync_modern_probe`
 + `http_behavior` (raw-socket timeout-differential framing), `backend_probe` /
 behavioural-infra (cross-sample statistical inference), `config_audit` forge-chain

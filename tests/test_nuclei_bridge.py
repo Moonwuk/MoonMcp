@@ -14,7 +14,7 @@ def test_coverage_report_splits_delegate_vs_edge():
     # commodity detection is delegated to nuclei
     assert {"cve_lookup", "vcs_exposure", "takeover_check"} <= delegate
     # stateful / differential / timing / logic probes are the native edge
-    assert {"access_control_check", "logic_probe", "race_probe",
+    assert {"authz_probe", "logic_probe", "race_probe",
             "desync_modern_probe", "path_bypass_probe"} <= edge
     # a capability is never on both sides of the split
     assert delegate.isdisjoint(edge)

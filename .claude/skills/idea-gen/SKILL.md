@@ -77,7 +77,7 @@ low-severity reflected XSS (`true_positive` — excluded below); one open lead,
 "possible open redirect on `/login?next=`" — not re-listed, flagged for
 `confirm_finding` instead.
 
-1. **GraphQL authorization bypass** — Signal: `/graphql` endpoint from `memory_graph`. Cross-ref: `vuln_info(query="graphql")`, `injection_info(query="graphql")`. Test: `graphql_check` → `graphql_probe` → `access_control_check`. High×High×Medium.
+1. **GraphQL authorization bypass** — Signal: `/graphql` endpoint from `memory_graph`. Cross-ref: `vuln_info(query="graphql")`, `injection_info(query="graphql")`. Test: `graphql_check` → `graphql_probe` → `authz_probe`. High×High×Medium.
 2. **JWT alg-confusion / weak signing** — Signal: JWT cookie seen during fingerprinting. Cross-ref: `technique_info("jwt")`. Test: `jwt_analyze` → `jwt_alg_confusion` → `jwt_crack`. High×High×Low.
 3. **SSRF via cloud metadata** — Signal: AWS hosting confirmed by `host_intel`. Cross-ref: `rootcause_info("ssrf")`, `vuln_info`. Test: `ssrf_metadata_probe` (intrusive, needs consent). High×Medium×Medium.
 4. **Sourcemap-leaked API surface** — Signal: `.map` files seen in `crawl`. Cross-ref: `technique_info(query="sourcemap")`. Test: `analyze_js` (detects the map) → `recover_sourcemaps` (reconstructs it) → `discover_parameters`. Medium×High×Low.
