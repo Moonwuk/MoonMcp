@@ -121,9 +121,31 @@ def test_classify_unknown_stack_is_empty():
     assert rep["applicable_cves"] == []
 
 
-# -- e2e: the tool is wired and scope-gated ----------------------------------
+# -- admin exposure sweep ----------------------------------------------------
+def test_assess_admin_hit():
+    assert ing.assess_admin_hit(200, '{"routers": {}, "middlewares": {}}', ['"routers"'])
+    assert not ing.assess_admin_hit(200, "unrelated page", ['"routers"'])
+    assert not ing.assess_admin_hit(404, '"routers"', ['"routers"'])   # not 200
+    assert not ing.assess_admin_hit(None, "", ['"routers"'])
+
+
+def test_admin_endpoints_are_readonly_and_cover_controllers():
+    ctrls = {e["controller"] for e in ing.ADMIN_ENDPOINTS}
+    assert {"Traefik", "Kong", "ingress-nginx"} <= ctrls
+    # every swept path is read-only — never a mutating control endpoint
+    for e in ing.ADMIN_ENDPOINTS:
+        assert "quitquit" not in e["path"] and "config_dump" not in e["path"]
+
+
+# -- e2e: the tools are wired and scope-gated --------------------------------
 @pytest.mark.asyncio
 async def test_ingress_fingerprint_scope_gated(fresh_context):
     res = await srv.ingress_fingerprint(target="definitely-not-in-scope.invalid")
     assert res["error"] == "out_of_scope"
     assert res["action"]
+
+
+@pytest.mark.asyncio
+async def test_ingress_admin_exposure_scope_gated(fresh_context):
+    res = await srv.ingress_admin_exposure(target="definitely-not-in-scope.invalid")
+    assert res["error"] == "out_of_scope"

@@ -1231,6 +1231,44 @@ async def ingress_fingerprint(target: str) -> dict:
 
 @mcp.tool()
 @active_tool()
+async def ingress_admin_exposure(target: str) -> dict:
+    """**Sweep the ingress / service-mesh control-plane surface** for unauthenticated
+    exposure — read-only, detection-only. These panels leak the whole ingress
+    topology (and often plugin secrets or the Envoy SecretsConfigDump) when left
+    open: Traefik dashboard/`api/rawdata` (:8080), Kong Admin API (:8001/:8444),
+    Envoy/Istio admin `/server_info` (:9901/:15000), ingress-nginx Prometheus
+    metrics (:10254, the version oracle), HAProxy stats (:1024), Ambassador diag
+    (:8877). GET-only; never touches a mutating endpoint (no `/quitquitquit`, no
+    admin writes). Most hosts refuse these ports (cluster-internal) — a hit means a
+    genuinely exposed control plane. Pairs with `ingress_fingerprint`. In scope only.
+    """
+
+    raw = target.strip()
+    host = normalize_target(raw if "://" in raw else f"https://{raw}")
+    ctx = get_context()
+    exposed: list[dict] = []
+    for ep in ingressmod.ADMIN_ENDPOINTS:
+        url = f"{ep['scheme']}://{host}:{ep['port']}{ep['path']}"
+        r = await ctx.http.fetch(url, method="GET", follow_redirects=False,
+                                 timeout=6.0, scope_check=_scope_check())
+        if ingressmod.assess_admin_hit(r.status, r.text(limit=20_000), ep["signatures"]):
+            exposed.append({
+                "controller": ep["controller"], "url": url, "what": ep["what"],
+                "status": r.status, "severity": ep["severity"], "verdict": "confirmed",
+            })
+    return {
+        "target": host,
+        "checked": len(ingressmod.ADMIN_ENDPOINTS),
+        "exposed": exposed,
+        "note": (f"{len(exposed)} control-plane endpoint(s) exposed unauthenticated — "
+                 "high-value recon/secret leakage" if exposed
+                 else "no ingress/mesh admin surface reachable on the swept ports"),
+        "suggested_next": ["ingress_fingerprint"] if exposed else [],
+    }
+
+
+@mcp.tool()
+@active_tool()
 async def well_known(target: str) -> dict:
     """Fetch and parse a host's disclosure files: robots.txt (extracting the
     referenced paths), sitemap.xml (extracting <loc> URLs), security.txt and

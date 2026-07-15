@@ -221,6 +221,52 @@ _ADMIN_SURFACE: dict[str, list[dict[str, object]]] = {
 }
 
 
+# -- admin / metrics exposure sweep -----------------------------------------
+# Read-only GET targets for the ingress_admin_exposure sweep. Each is a
+# well-known control-plane endpoint that leaks topology/secrets when exposed.
+# GET-only, and never a mutating endpoint (no /quitquitquit, no admin POST).
+# (controller, scheme, port, path, signatures, what, severity)
+ADMIN_ENDPOINTS: list[dict] = [
+    {"controller": "Traefik", "scheme": "http", "port": 8080, "path": "/api/rawdata",
+     "signatures": ['"routers"', '"middlewares"', '"entryPoints"'],
+     "what": "full router/service/middleware/TLS map", "severity": "high"},
+    {"controller": "Traefik", "scheme": "http", "port": 8080, "path": "/dashboard/",
+     "signatures": ["<title>Traefik", "ng-app", "traefik"],
+     "what": "dashboard SPA (api.insecure=true)", "severity": "high"},
+    {"controller": "Kong", "scheme": "http", "port": 8001, "path": "/",
+     "signatures": ['"plugins"', '"configuration"', "lua_version"],
+     "what": "Admin API (read/write routes + plugin secrets)", "severity": "high"},
+    {"controller": "Kong", "scheme": "https", "port": 8444, "path": "/",
+     "signatures": ['"plugins"', '"configuration"', "lua_version"],
+     "what": "Admin API over HTTPS", "severity": "high"},
+    {"controller": "Envoy/Istio", "scheme": "http", "port": 9901, "path": "/server_info",
+     "signatures": ['"version"', "command_line_options", '"state"'],
+     "what": "Envoy admin — build/version", "severity": "high"},
+    {"controller": "Envoy/Istio", "scheme": "http", "port": 15000, "path": "/server_info",
+     "signatures": ['"version"', "command_line_options", '"state"'],
+     "what": "Istio sidecar Envoy admin", "severity": "high"},
+    {"controller": "ingress-nginx", "scheme": "http", "port": 10254, "path": "/metrics",
+     "signatures": ["nginx_ingress_controller_", "nginx_ingress_controller_build_info"],
+     "what": "Prometheus metrics — the version oracle", "severity": "medium"},
+    {"controller": "HAProxy", "scheme": "http", "port": 1024, "path": "/",
+     "signatures": ["Statistics Report for HAProxy", "pxname"],
+     "what": "HAProxy stats — frontend/backend map", "severity": "medium"},
+    {"controller": "Ambassador/Emissary", "scheme": "http", "port": 8877, "path": "/ambassador/v0/diag/",
+     "signatures": ["Ambassador", "Emissary", "diag"],
+     "what": "diagnostics UI — route table", "severity": "medium"},
+]
+
+
+def assess_admin_hit(status: int | None, body: str, signatures: list[str]) -> bool:
+    """An admin endpoint is exposed if it answers 200 and its body carries one of
+    the expected control-plane signatures (pure)."""
+
+    if status != 200 or not body:
+        return False
+    low = body.lower()
+    return any(s.lower() in low for s in signatures)
+
+
 # -- version comparison ------------------------------------------------------
 def _parse_ver(value: str | None) -> tuple[int, ...] | None:
     """Parse ``1.11.4`` → ``(1, 11, 4)`` taking the leading integer of each dotted
