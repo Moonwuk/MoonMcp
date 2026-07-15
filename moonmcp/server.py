@@ -38,6 +38,7 @@ from . import cvss as cvssmod
 from . import errors as errmod
 from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
+from . import lessons as lessonsmod
 from . import metrics as metricsmod
 from . import nextstep as nextstepmod
 from . import obsidian as obsidianmod
@@ -3476,34 +3477,52 @@ async def plan_target(target: str) -> dict:
 @mcp.tool()
 @safe_tool
 async def memory_lesson(action: str = "recall", title: str = "", body: str = "",
-                        query: str = "", tags: str = "", limit: int = 10) -> dict:
+                        query: str = "", tags: str = "", limit: int = 10,
+                        ttl_days: int = 180) -> dict:
     """The agent's **learning loop** — durable, cross-target lessons so mistakes and
-    tradecraft carry forward between sessions and agents.
+    tradecraft carry forward between sessions and agents, **with hygiene** so the
+    store doesn't rot into stale, unvetted, or contradictory noise.
 
-    - `action="add"`: record a lesson (needs `title`; `body` = what was learned, e.g.
-      "GraphQL introspection was off but field-suggestion still leaked the schema").
-      Stored CURATED (a vetted conclusion, not scraped content).
+    - `action="add"`: record a lesson (needs `title`; `body` = what was learned,
+      e.g. "GraphQL introspection was off but field-suggestion still leaked the
+      schema"). Re-asserting the same lesson **corroborates** it (bumps a
+      confidence count — voting) rather than silently overwriting. Stored CURATED.
     - `action="recall"` (default): retrieve the most relevant lessons for `query`
-      (empty = most recent). Use this before starting a class of test to apply what
-      earlier work already established.
+      (empty = most recent), each annotated with `confidence`/`confidence_label`
+      (unverified→supported→corroborated), `age_days`, and a `stale` flag (older
+      than `ttl_days`); the result also lists any **contradictions** (same-subject
+      lessons with opposite claims) to reconcile before trusting them.
+    - `action="prune"`: drop lessons that are BOTH stale (> `ttl_days`) AND
+      uncorroborated (a well-supported lesson is kept regardless of age; an undated
+      lesson is never pruned).
 
     Lessons are `kind="lesson"` memory items — general tradecraft, not target-scoped.
     Offline; local store.
     """
 
+    from datetime import datetime, timezone
+
     mem = get_context().memory
     act = (action or "recall").strip().lower()
+    now = datetime.now(timezone.utc).isoformat()
     if act == "add":
         if not title.strip():
-            return {"error": "missing_title", "detail": "a lesson needs a title"}
-        mid = mem.add(kind="lesson", title=title.strip(), body=body,
-                      trust="curated", provenance="manual",
-                      tags=("lesson," + tags if tags else "lesson"), source="memory_lesson")
-        return {"added": {"id": mid, "title": title.strip()}}
-    hits = mem.search(query, kind="lesson", limit=limit)
-    return {"query": query, "count": len(hits),
-            "lessons": [{"id": h["id"], "title": h["title"], "body": h["body"],
-                         "tags": h["tags"]} for h in hits]}
+            return errmod.err("invalid_input", detail="a lesson needs a title")
+        rec = mem.record_lesson(title=title, body=body, now=now,
+                                tags=("lesson," + tags if tags else "lesson"))
+        rec["confidence_label"] = lessonsmod.confidence_label(rec["confidence"])
+        return {"added": rec}
+    if act == "prune":
+        n = mem.prune_lessons(now=now, ttl_days=ttl_days)
+        return {"pruned": n, "ttl_days": ttl_days,
+                "note": f"removed {n} stale, uncorroborated lesson(s)"}
+    hits = mem.lessons(query, limit=limit)
+    lessons = lessonsmod.annotate(hits, now_iso=now, ttl_days=ttl_days)
+    contradictions = lessonsmod.find_contradictions(hits)
+    return {"query": query, "count": len(lessons), "lessons": lessons,
+            "contradictions": contradictions,
+            "note": ("contradictory lessons detected — reconcile before relying on them"
+                     if contradictions else "")}
 
 
 @mcp.tool()
