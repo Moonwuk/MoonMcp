@@ -2781,9 +2781,13 @@ async def path_bypass_probe(target: str) -> dict:
     and this replays normalization twins (`/admin/..;/`, `/%2e/admin`, matrix `;x`,
     trailing `%2f`/`%2e`, double slash, `%`-encoded char) — a front proxy and the
     backend disagreeing on normalization can skip the ACL while still resolving the
-    resource (CVE-2024-0204-class). Flags any twin that flips the status to 2xx
-    (verdict `review` — confirm the body is the real protected content). GET-only,
-    non-destructive. In scope only.
+    resource (CVE-2024-0204-class). Also carries the ingress/service-mesh twins
+    (`//admin`, `%2f`, fragment `%23`, first-segment case toggle — the Istio/Envoy
+    authz-bypass family) and an **external-auth lane** (`/x/..%2fadmin`) that defeats
+    an nginx `auth_request` / ingress-nginx `auth-url` acting on the un-normalized
+    `$request_uri`. Flags any twin that flips the status to 2xx (verdict `review` —
+    confirm the body is the real protected content). GET-only, non-destructive.
+    Pairs with `ingress_fingerprint`. In scope only.
     """
 
     ctx = get_context()

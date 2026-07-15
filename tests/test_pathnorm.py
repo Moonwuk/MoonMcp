@@ -23,6 +23,23 @@ def test_variants_preserve_query():
     assert all("tab=1" in u for _, u in twins)
 
 
+def test_ingress_mesh_and_external_auth_twins():
+    twins = pn.bypass_variants("https://x.test/admin")
+    labels = {label for label, _ in twins}
+    urls = [u for _, u in twins]
+    assert "double-slash prefix" in labels
+    assert any(u.endswith("//admin") for u in urls)          # Istio //
+    assert any("%2fadmin" in u for u in urls)                # Envoy %2f
+    assert any("/ADMIN" in u for u in urls)                  # Istio case
+    assert any("%23" in u for u in urls)                     # Istio fragment
+    # external-auth ($request_uri) traversal lane
+    assert any("moonmcp/..%2fadmin" in u for u in urls)
+    assert any("moonmcp/../admin" in u for u in urls)
+    # invariants still hold with the new twins
+    assert len(urls) == len(set(urls))
+    assert "https://x.test/admin" not in urls
+
+
 def test_assess_bypass_only_on_protected_to_2xx():
     assert pn.assess_bypass(403, 200) is True
     assert pn.assess_bypass(401, 204) is True
