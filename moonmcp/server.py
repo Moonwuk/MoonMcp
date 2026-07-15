@@ -937,13 +937,24 @@ async def wayback_urls(domain: str, limit: int = 500, include_subdomains: bool =
 
 @mcp.tool()
 @safe_tool
-async def cve_lookup(cve_id: str) -> dict:
+async def cve_lookup(cve_id: str, triage: bool = False) -> dict:
     """Look up a single CVE by ID (e.g. CVE-2021-44228) from the NVD database.
 
     Returns description, CVSS score/severity/vector, CWE mappings and references.
+
+    Pass **`triage=True`** to **prioritise by real exploitation risk** instead of
+    just CVSS: the record is enriched with **EPSS** (FIRST.org exploitation
+    probability), **CISA KEV** (actively exploited in the wild?) and a public-**PoC**
+    signal, folded into one composite score (`0.35·EPSS + 0.30·KEV + 0.20·CVSS +
+    0.15·PoC`, KEV clamps to the CRITICAL band) — turning a `fingerprint`/`cve_search`
+    hit into a patch-order decision. Costs an extra EPSS call + a CISA-KEV fetch, so
+    it defaults off. Passive third-party data (NVD/FIRST/CISA) — no packets to any
+    target.
     """
 
     ctx = get_context()
+    if triage:
+        return await cverisk.triage(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
     record = await cve.lookup_cve(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
     if record is None:
         return errmod.err("not_found", detail=f"No NVD record for {cve_id}")
@@ -962,25 +973,6 @@ async def cve_search(keyword: str, limit: int = 15) -> dict:
     ctx = get_context()
     result = await cve.search_cves(ctx.http, keyword, limit=limit, api_key=ctx.settings.nvd_api_key)
     return to_dict(result)
-
-
-@mcp.tool()
-@safe_tool
-async def cve_triage(cve_id: str) -> dict:
-    """**Prioritise a CVE by real exploitation risk**, not just CVSS. Enriches the
-    NVD record with **EPSS** (FIRST.org exploitation probability), **CISA KEV**
-    (is it *actively* exploited in the wild?), and a **public-PoC** signal (NVD
-    "Exploit"-tagged reference), then folds them into one composite score:
-    `0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC`. Anything on the KEV list is
-    clamped to the CRITICAL band (≥76) regardless of CVSS, and a KEV+PoC pair gets
-    a boost — so a "medium CVSS but actively-exploited" bug sorts above a "critical
-    CVSS but no known exploitation" one. Turns a `fingerprint`/`cve_search` hit
-    into a patch-order decision. Passive third-party data (NVD/FIRST/CISA) — no
-    packets to any target.
-    """
-
-    ctx = get_context()
-    return await cverisk.triage(ctx.http, cve_id, api_key=ctx.settings.nvd_api_key)
 
 
 @mcp.tool()
@@ -1186,7 +1178,7 @@ async def fingerprint(target: str) -> dict:
 async def ingress_fingerprint(target: str) -> dict:
     """**Identify the Kubernetes ingress controller / service-mesh data plane** in
     front of a host and map it to its high-severity CVEs — the keystone that lets
-    `cve_triage` fire on the ingress layer. Detection-only.
+    `cve_lookup(triage=True)` fire on the ingress layer. Detection-only.
 
     Classifies ingress-nginx, Traefik, Kong, Istio/Envoy, HAProxy Ingress,
     Ambassador and the managed cloud LBs (Google Frontend/GKE, AWS ALB, Azure
@@ -1226,7 +1218,7 @@ async def ingress_fingerprint(target: str) -> dict:
     report = ingressmod.classify(main, unmatched=unmatched, cert=cert)
     nxt: list[str] = []
     if report["applicable_cves"]:
-        nxt.append("cve_triage")
+        nxt.append("cve_lookup")
     if report["controller"]:
         nxt.append("path_bypass_probe")
     if report["admin_surface"]:

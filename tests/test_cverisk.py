@@ -93,6 +93,10 @@ def test_parse_vuln_no_exploit_tag_no_poc():
 
 # -- registration ------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_cve_triage_registered(fresh_context):
+async def test_cve_triage_folded_into_cve_lookup(fresh_context):
     tools = {t.name for t in await srv.mcp.list_tools()}
-    assert "cve_triage" in tools
+    assert "cve_lookup" in tools
+    assert "cve_triage" not in tools     # triage folded into cve_lookup(triage=True)
+    # the registered cve_lookup tool now accepts the triage flag
+    tool = next(t for t in srv.mcp._tool_manager.list_tools() if t.name == "cve_lookup")
+    assert "triage" in tool.parameters.get("properties", {})

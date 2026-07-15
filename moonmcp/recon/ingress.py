@@ -20,7 +20,7 @@ high-severity controller CVEs (IngressNightmare and friends). Because most data
 planes run with ``server_tokens off``, the version is frequently unknown from the
 response — in that case the CVEs are returned as *candidates* (``version_status:
 "unknown"``) with a pointer at the ``:10254/metrics`` build-info oracle. This is
-the missing keystone that lets the existing ``cve_triage`` fire on the ingress
+the missing keystone that lets the existing ``cve_lookup(triage=True)`` fire on the ingress
 layer; it sends nothing beyond the fingerprint fetch and never injects.
 """
 

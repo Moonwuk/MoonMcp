@@ -51,14 +51,14 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **165 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
 | --- | --- |
 | `server_status` | Report config, active program, detected enhancers and external CLIs. |
 | `tool_catalog` | Self-describing **map of all tools** grouped by family, each tagged `scope_gated` / `intrusive`, plus the recommended recon→report workflow — call it second to orient. |
-| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~166 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
+| `search_tools` | **Find the few tools relevant to what you're doing** instead of scanning all ~165 — keyword/phrase in (`"graphql"`, `"jwt"`, `"cache poisoning"`), a short ranked list out (name match > family > gist). Progressive discovery for a large tool surface. |
 | `scope_list` / `scope_add` / `scope_exclude` / `scope_remove` | Manage the authorization scope at runtime. |
 | `program_add` / `program_use` / `program_list` / `program_remove` | **Bug-bounty program profiles.** Each program carries its own scope **and its own identifying header** (e.g. `X-HackerOne-Research: <handle>`) + optional User-Agent; activating one swaps in its scope and auto-attaches its header/UA to every in-scope request. Persist across restarts via `MOONMCP_STATE_DIR`. |
 | `auth_set` / `auth_clear` | Set the engagement auth context (bearer / cookie / basic / headers) so the web tools test the **authenticated** surface — merged into every in-scope request only. |
@@ -73,8 +73,7 @@ MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grou
 | `search_dorks` | Generate ready-to-run **Google/Bing dorks** for a target (exposed files, login panels, config/secrets, dir listings, code leaks, SSRF params). |
 | `enumerate_subdomains` | Passive subdomain enum via crt.sh, HackerTarget, AnubisDB, AlienVault OTX. |
 | `wayback_urls` | Historical URLs from the Internet Archive (flags interesting endpoints). |
-| `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID or by keyword (e.g. a product+version). |
-| `cve_triage` | **Prioritise a CVE by real exploitation risk**, not just CVSS — enriches the NVD record with **EPSS** (exploitation probability), **CISA KEV** (actively exploited in the wild?) and a public-**PoC** signal, folded into one composite score (`0.35·EPSS + 0.30·KEV + 0.20·CVSS + 0.15·PoC`, KEV clamps to CRITICAL). Turns a `fingerprint`/`cve_search` hit into a patch-order decision. Passive. |
+| `cve_lookup` / `cve_search` | Query the NVD for a CVE by ID (pass `triage=True` to rank by real exploitation risk — EPSS + CISA-KEV + PoC) or by keyword. |
 | `host_intel` | IP exposure via Shodan InternetDB (free) or the full Shodan API. |
 | `ip_intel` | Map an IP → ASN, org, ISP, cloud/CDN provider, hosting flag, reverse DNS, geo. |
 | `reverse_ip` | Other domains co-hosted on the same IP (reverse-IP lookup). |
@@ -475,7 +474,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 166 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 165 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
