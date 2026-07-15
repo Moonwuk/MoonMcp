@@ -69,3 +69,12 @@ async def test_scan_coverage_tool_runs_offline():
     assert "delegate_to_nuclei" in res and "native_edge" in res
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "scan_coverage" in tools
+
+
+def test_build_args_rejects_comma_target():
+    # nuclei -u treats a comma as a target-LIST separator, so a comma would smuggle
+    # extra targets the scope guard (which only checked the first host) never saw.
+    with pytest.raises(ValueError):
+        n.build_args("https://legit.test/,http://169.254.169.254/latest/meta-data/")
+    args = n.build_args("https://legit.test/")          # a single URL is fine
+    assert args[0] == "-u" and args[1] == "https://legit.test/"

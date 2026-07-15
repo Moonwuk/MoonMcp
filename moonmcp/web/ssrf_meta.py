@@ -87,7 +87,13 @@ async def probe_ssrf_metadata(client: HttpClient, url: str, param: str, *,
         if r.status is None:
             continue
         matched = scan_metadata_leak(tgt, r.text(limit=50_000))
-        if matched:
+        # Require >=2 distinct signatures. Each provider's real metadata body carries
+        # several (a genuine AWS root reflects ami-id AND instance-id AND hostname; a
+        # token endpoint reflects access_token AND token_type), so this loses no true
+        # positive — but it kills the CRITICAL false alarms a single short, generic
+        # substring ('iam' in "Miami", a bare 'hostname'/'region'/'token_type' in an
+        # ordinary page) would otherwise raise.
+        if len(matched) >= 2:
             findings.append({
                 "provider": tgt["provider"], "metadata_url": tgt["url"],
                 "matched_signatures": matched, "severity": "critical", "verdict": "confirmed",

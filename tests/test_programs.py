@@ -116,3 +116,23 @@ async def test_auth_overrides_program_header_on_collision(local_server, fresh_co
     await srv.auth_set(headers={"X-Team": "auth"})
     r = await fresh_context.http.fetch(f"{base}/echo")
     assert json.loads(r.text()).get("x-team") == "auth"
+
+
+def test_program_load_coerces_scalar_scope_fields(tmp_path):
+    import json
+    import os
+
+    from moonmcp.programs import ProgramStore
+    d = str(tmp_path)
+    # A hand-edited profile stores scope / scope_exclude as bare strings (and a null).
+    with open(os.path.join(d, "programs.json"), "w") as fh:
+        json.dump({"active": "acme", "programs": [
+            {"name": "acme", "scope": "example.com",
+             "scope_exclude": "admin.example.com"},
+        ]}, fh)
+    store = ProgramStore(state_dir=d)
+    prog = store.get("acme")
+    assert prog is not None
+    # coerced to single-element lists — NOT iterated per character
+    assert prog.scope == ["example.com"]
+    assert prog.scope_exclude == ["admin.example.com"]

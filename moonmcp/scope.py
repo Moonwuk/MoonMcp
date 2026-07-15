@@ -52,6 +52,16 @@ def normalize_target(raw: str) -> str:
             return host.rstrip(".").lower()
         value = parsed.path  # fall through with whatever remained
 
+    # Strip userinfo from a scheme-less bare authority ("user@host",
+    # "user:pass@host"). urlsplit already does this on the URL branch above, but a
+    # scheme-less "user@169.254.169.254" would otherwise keep the "user@" prefix —
+    # canonical_ip then fails to parse it, the private/metadata SSRF checks all
+    # pass, and a later scheme-prepend ("https://user@169.254.169.254") connects
+    # straight to the smuggled host. Align the guard with what the client resolves.
+    at = value.rfind("@")
+    if at != -1:
+        value = value[at + 1:]
+
     # Bracketed IPv6 literal, optionally with a port: [::1]:8080
     if value.startswith("["):
         end = value.find("]")

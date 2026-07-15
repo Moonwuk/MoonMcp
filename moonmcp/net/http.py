@@ -172,7 +172,10 @@ def _blocking_fetch(
             elapsed_ms=round(elapsed, 1),
             truncated=truncated,
         )
-    except (urllib.error.URLError, ssl.SSLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, ssl.SSLError, TimeoutError, OSError, ValueError) as exc:
+        # ValueError: http.client raises it for an illegal header value (embedded
+        # CR/LF) during opener.open — catch it here so a bad caller header yields a
+        # clean HttpResult(error=...) instead of crashing fetch().
         elapsed = (time.monotonic() - started) * 1000
         reason = getattr(exc, "reason", None)
         return HttpResult(

@@ -78,3 +78,18 @@ async def test_flags_db_admin_consoles():
 async def test_debug_exposure_tool_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "debug_exposure" in tools
+
+
+@pytest.mark.asyncio
+async def test_generic_console_phrase_not_flagged_as_werkzeug():
+    # A benign /console page that merely says "The console" must not be reported as
+    # a CRITICAL Werkzeug pre-auth RCE (the generic signature was removed).
+    site = _Site({"/console": (200, "<html>The console lets you manage your account.</html>")})
+    res = await dp.probe_debug_panels(site, "https://x.test")
+    assert all(f["label"] != "Werkzeug/Flask debugger" for f in res)
+    # a REAL Werkzeug debugger is still flagged critical.
+    site2 = _Site({"/console": (200, "<html><div>Werkzeug Debugger</div>"
+                                      "<script>__debugger__</script></html>")})
+    res2 = await dp.probe_debug_panels(site2, "https://x.test")
+    assert any(f["label"] == "Werkzeug/Flask debugger" and f["severity"] == "critical"
+               for f in res2)
