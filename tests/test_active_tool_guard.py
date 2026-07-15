@@ -33,7 +33,7 @@ PASSIVE = {
     "add_finding", "promote_lead", "label_finding", "metrics",
     "list_findings", "clear_findings", "triage_findings", "cvss_score",
     "audit_log",
-    "export_obsidian", "surface_diff", "surface_snapshots", "export_findings",
+    "export_obsidian", "surface_diff", "export_findings",
     # offline knowledge bases
     "injection_info", "injection_search", "match_injection_signatures",
     "technique_info", "technique_search",

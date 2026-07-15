@@ -122,7 +122,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "add_finding", "promote_lead", "label_finding", "metrics",
             "list_findings", "clear_findings", "triage_findings",
             "cvss_score", "export_findings", "export_obsidian",
-            "surface_diff", "surface_snapshots",
+            "surface_diff",
         ],
     )),
     ("memory", (
