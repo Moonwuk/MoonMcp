@@ -6,6 +6,18 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`dry_run=True` preview on the intrusive injection probes (ergonomics).** Before
+  letting an intrusive probe loose, an operator (or a human confirming an agent's
+  plan) often wants to see *exactly* what it would send. A wired probe now takes
+  `dry_run=True` and returns the method, the injected parameter, and the payload
+  list it WOULD send — **without sending anything** (`moonmcp/dryrun.py` formats the
+  preview envelope). The `@active_tool` gate is dry-run-aware: a preview sends no
+  packets, so it doesn't require the intrusive switch — but the **scope guard stays
+  on**, so even a mis-wired preview can't reach an off-scope target. Wired into the
+  clean single-battery injection probes — `lfi_probe`, `ssti_probe`, `nosqli_probe`,
+  `interp_probe` (the multi-lane OAST probes — sqli/cmdi/xxe/ssrf — keep the pattern
+  as follow-up). No new tool; the see-before-you-fire counterpart to the detection
+  run, weaponisation still delegated to Strix.
 - **`response_format=concise|detailed` on the heavy-output tools (ergonomics).**
   Recon tools can emit large payloads (hundreds of subdomains, a full crawl tree,
   a long request history); streaming all of it into the agent's context every call
