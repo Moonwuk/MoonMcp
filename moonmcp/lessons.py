@@ -110,6 +110,10 @@ def age_days(created_at: str | None, now_iso: str) -> int | None:
     c, n = _parse(created_at), _parse(now_iso)
     if c is None or n is None:
         return None
+    # Tolerate a naive/aware mix (both are UTC in practice) — subtracting one of
+    # each would raise TypeError, so compare on a common naive basis.
+    if (c.tzinfo is None) != (n.tzinfo is None):
+        c, n = c.replace(tzinfo=None), n.replace(tzinfo=None)
     return max(0, (n - c).days)
 
 

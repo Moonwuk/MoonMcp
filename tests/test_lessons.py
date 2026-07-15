@@ -51,6 +51,13 @@ def test_no_contradiction_when_different_subject():
     assert L.find_contradictions(rows) == []
 
 
+def test_age_days_tolerates_naive_aware_mix():
+    # a naive stored timestamp vs an aware now (or vice versa) must not raise
+    assert L.age_days("2025-01-01T00:00:00", _NOW) is not None       # naive vs aware
+    assert L.age_days(_OLD, "2026-07-15T00:00:00") is not None       # aware vs naive
+    assert L.is_stale("2025-01-01T00:00:00", _NOW, ttl_days=180) is True
+
+
 def test_staleness():
     assert L.is_stale(_OLD, _NOW, ttl_days=180) is True
     assert L.is_stale(_NOW, _NOW, ttl_days=180) is False
