@@ -5501,12 +5501,19 @@ async def vhost_probe(target: str) -> dict:
     the Host** (routes/errors) or serve the same app regardless (host-header
     attacks — cache poisoning, password-reset poisoning, routing to internal
     vhosts)? Also checks whether the bogus host is **reflected** (host-header
-    injection) directly or via `X-Forwarded-Host`. In scope only.
+    injection) directly or via `X-Forwarded-Host`. Because the bogus-Host request
+    rides the real host's TLS connection (SNI = real host), a *not-validated* result
+    is also the **SNI≠Host** signal — ingress-nginx does not enforce SNI==Host, so a
+    request routed by Host while the cert is chosen by SNI can slip past an
+    SNI-keyed WAF/mTLS front. Finally probes whether the edge **trusts the internal
+    `X-Envoy-Original-Path` header** from an outside client (Envoy CVE-2023-27487 —
+    a jwt_authn / access-log path-spoofing surface). In scope only.
     """
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     ctx = get_context()
+    scheme = "http" if url.startswith("http://") else "https"
     bogus = "moonvhost-notreal.example"
     # Two identical baseline requests first → measure the page's natural jitter so
     # a dynamic page (timestamps, CSRF tokens) isn't mistaken for host validation.
@@ -5515,10 +5522,18 @@ async def vhost_probe(target: str) -> dict:
     bh = await ctx.http.fetch(url, headers={"Host": bogus}, follow_redirects=False, scope_check=_scope_check())
     xfh = await ctx.http.fetch(url, headers={"X-Forwarded-Host": bogus}, follow_redirects=False,
                                scope_check=_scope_check())
+    xeop = await ctx.http.fetch(url, headers={"X-Envoy-Original-Path": "/moonmcp-envoy-probe"},
+                                follow_redirects=False, scope_check=_scope_check())
 
     base_body = base.text(200_000)
     jitter = abs(len(base.body) - len(base2.body))
-    host_validated = (bh.status != base.status) or (abs(len(bh.body) - len(base.body)) > jitter + 256)
+
+    def _diverges(r) -> bool:
+        return r.status is not None and (
+            (r.status != base.status) or (abs(len(r.body) - len(base.body)) > jitter + 256))
+
+    host_validated = _diverges(bh)
+    envoy_path_trusted = _diverges(xeop)
 
     def _reflects(r) -> bool:
         # Reflected in the body OR echoed into a routing/redirect header.
@@ -5535,15 +5550,24 @@ async def vhost_probe(target: str) -> dict:
     if not host_validated:
         concerns.append("the edge serves the same app for an arbitrary Host — host-header not "
                         "validated (routing / cache-poisoning / reset-poisoning surface)")
+        if scheme == "https":
+            concerns.append("SNI≠Host not enforced: the app answered for a bogus Host over the real "
+                            "host's TLS/SNI — an SNI-keyed WAF/mTLS front can be bypassed while "
+                            "routing by Host (ingress-nginx does not require SNI==Host)")
     if reflected_host or reflected_xfh:
         via = "Host" if reflected_host else "X-Forwarded-Host"
         concerns.append(f"bogus host reflected via {via} — host-header injection "
                         "(open-redirect / cache-poisoning / password-reset poisoning)")
+    if envoy_path_trusted:
+        concerns.append("edge trusts client-supplied X-Envoy-Original-Path — path spoofing into "
+                        "jwt_authn / access logs (Envoy CVE-2023-27487); verify the routing change")
     return {
         "target": url,
         "host_validated": host_validated,
+        "sni_host_enforced": host_validated if scheme == "https" else None,
         "host_header_reflected": reflected_host,
         "x_forwarded_host_reflected": reflected_xfh,
+        "envoy_original_path_trusted": envoy_path_trusted,
         "baseline": {"status": base.status, "length": len(base.body)},
         "bogus_host": {"status": bh.status, "length": len(bh.body)},
         "concerns": concerns,
