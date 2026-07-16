@@ -73,29 +73,43 @@ fixed, what was consciously deferred, and why.
   *best-effort* shared across agent processes via a common `memory.db`. This is the
   documented SQLite tradeoff, not a regression.
 
-## Documented — detection tuning (needs the real-target metrics harness)
+## Detection tuning — the metrics pass
 
-These are real false-positive / false-negative observations, but each is a
-**threshold** on a probe's verdict. Tightening a threshold to kill a false positive
-can silently introduce false negatives, and MoonMCP does not yet have the
-real-target precision/recall harness (see the open metrics work) needed to measure
-that trade. Blind-tuning them here would be exactly the mistake the project's own
-critique warned against — so they are recorded precisely for the metrics-driven pass:
+The eight FP/FN observations were each a **threshold** on a probe's verdict.
+Tightening a threshold to kill a false positive can silently introduce a false
+negative, so each was tuned only where the change is FP-suppressing *without* FN
+risk, and every change ships with a **test pair** (the FP now suppressed **and** the
+true positive still detected).
 
-- `web/nosqli.assess_operator` — a status change *to* a 4xx/5xx error is scored as a
-  "strong" injection hit (should weight a flip toward success, not toward an error).
-- `web/interp.assess_marker` — JSON-mandatory escaping of `\` / NUL in a reflected
-  value reads as "interpretation" (needs response content-type awareness).
-- `web/value.probe_currency_swap` — no invalid-value control, so a field that accepts
-  any value flags every swap as currency confusion.
-- `web/authz` (3 signals) — the sibling sweep flags any ≥16-byte 2xx without
-  differencing against the owner; the multi-step chain injects an extracted id into a
-  fixed slot regardless of collection; `similar()` compares only the first 4 KiB, so
-  two objects sharing a large static shell collapse to identical.
-- `web/authflow.scan_response_leak` — a bare 4–8 digit number is reported as an
-  in-band OTP whenever an OTP-context word appears anywhere in the body (no proximity).
-- `web/desync.interpret_modern` — the `0.CL candidate` indicator fires on any
-  Expect-handling status divergence, including the RFC-compliant 100-continue vs 417.
+**Tuned (5):**
+- `web/nosqli.assess_operator` — a status flip is "strong" (auth bypass) only *toward*
+  success (twin reaches 2xx where the control didn't); a flip to a 4xx/5xx error is a
+  weak "reached the engine" signal, not a confirmed bypass.
+- `web/value.probe_currency_swap` — added the same negative-value control the sibling
+  money probes use: if a garbage currency is accepted like the base, the field doesn't
+  validate at all → suppress (not currency confusion).
+- `web/authz.similar` — compares the **head and tail** so a large shared static shell
+  (server-rendered nav) can't mask two objects that differ only in the data below the
+  first 4 KiB.
+- `web/authflow.scan_response_leak` — a bare code is an in-band OTP only when an
+  OTP-context word sits **near** it (~60 chars), not merely somewhere in the body.
+- `web/desync.interpret_modern` — the `0.CL candidate` no longer fires when the
+  malformed-Expect twin was cleanly rejected with a 4xx (417 Expectation Failed is the
+  RFC-compliant reply — normal, not desync).
+
+**Left as-is — needs an app-adaptive control, not a threshold (FN risk):**
+- `web/authz` sibling-sweep & multi-step chain — the honest way to suppress the
+  soft-200 FP is a negative control (does a *nonexistent* id also return an object?) or
+  differencing against the owner. But BOLA objects routinely share a template and
+  differ only in an id substring, so any similarity/differencing threshold that kills
+  the soft-200 FP also risks suppressing a **real** IDOR (demonstrated: the `_VulnApp`
+  test objects are ~0.95 similar). Correctly separating "returns distinct data per id"
+  (IDOR) from "returns the same body per id" (soft-200) needs per-app calibration from
+  labelled real-target data — deferred rather than trade a visible FP for an invisible FN.
+- `web/interp.assess_marker` — treating JSON-mandatory `\`/NUL escaping as "not
+  interpretation" needs the response **content-type** plumbed into the marker check (a
+  signature change to `assess_marker` + its caller), not a threshold; deferred to a
+  focused change so the escaping heuristic isn't weakened blindly for non-JSON bodies.
 
 ---
 

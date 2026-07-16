@@ -137,7 +137,15 @@ def assess_operator(control: tuple[Resp, Resp], twin: tuple[Resp, Resp]) -> dict
     strong = False
     if r1.status is not None and r1.status != c1.status:
         reasons.append(f"status {c1.status}→{r1.status}")
-        strong = True
+        # A status change is "strong" (auth bypass) ONLY when it flips TOWARD success —
+        # the twin reaches 2xx where the control did not. A flip to a 4xx/5xx error means
+        # the operator object reached the query engine but was rejected/errored: a real
+        # interpretation signal worth surfacing (weak), but NOT an auth bypass, so a
+        # benign type-coercion crash isn't mis-scored as a confirmed NoSQL auth bypass.
+        twin_ok = 200 <= r1.status < 300
+        ctrl_ok = c1.status is not None and 200 <= c1.status < 300
+        if twin_ok and not ctrl_ok:
+            strong = True
     if r1.session_cookie and not c1.session_cookie:
         reasons.append("new session Set-Cookie appeared")
         strong = True
