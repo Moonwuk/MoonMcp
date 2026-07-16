@@ -202,46 +202,61 @@ class ScopeManager:
             return []  # unresolvable / malformed host → cannot be connected to → safe
         return [str(ai[4][0]) for ai in infos]
 
-    def blocked_connect_reason(self, target: str) -> str | None:
-        """SSRF guard applied at *connect* time: return a reason string if
-        connecting to *target* is unsafe, else ``None``.
+    def resolve_pin(self, target: str) -> tuple[str | None, str | None]:
+        """Resolve *target* ONCE for the SSRF guard and return ``(pinned_ip, reason)``.
 
-        Unlike :meth:`evaluate` (which only sees IP literals), this resolves a
-        hostname and blocks it if **any** resolved address is private/reserved —
-        closing the "in-scope hostname that points at 127.0.0.1 / cloud-metadata"
-        SSRF hole. No-op when ``block_private`` is disabled.
+        Connecting to the returned ``pinned_ip`` (instead of re-resolving at connect
+        time) closes the **DNS-rebinding TOCTOU**: a short-TTL attacker cannot swap
+        the address between this check and the connection. ``reason`` is set when the
+        resolved address is private/reserved (the caller must refuse the connection).
+
+        When ``block_private`` is disabled we neither check nor pin (authorised
+        internal testing) — returns ``(None, None)`` so the caller connects normally.
+        A literal IP returns itself as the pin; an unresolvable host returns
+        ``(None, None)`` (the connection will fail on its own).
         """
 
         if not self.block_private:
-            return None
+            return None, None
         try:
             host = normalize_target(target)
         except ValueError:
-            return None
+            return None, None
         ip = canonical_ip(host)
         if ip is not None:
             if _ip_is_blocked(ip):
-                return f"{host} is a private/reserved address ({ip}) blocked by the SSRF guard"
-            return None
+                return None, f"{host} is a private/reserved address ({ip}) blocked by the SSRF guard"
+            return str(ip), None
         try:
             resolved = self._resolve(host)
         except Exception:
             # We could not verify where this host points; fail closed rather than
             # let a resolver error open a private-IP path (defence against a resolver
             # that disagrees with the one urllib/socket will use at connect time).
-            return (f"{host} could not be resolved for the SSRF guard — blocked (fail-closed; "
-                    "set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)")
+            return None, (f"{host} could not be resolved for the SSRF guard — blocked (fail-closed; "
+                          "set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)")
+        picked: str | None = None
         for raw in resolved:
             try:
                 addr = ipaddress.ip_address(raw)
             except ValueError:
                 continue
             if _ip_is_blocked(addr):
-                return (
+                return None, (
                     f"{host} resolves to {addr}, a private/reserved address — blocked by the "
                     "SSRF guard (set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)"
                 )
-        return None
+            if picked is None:
+                picked = raw   # all addresses verified safe below; pin to the first
+        return picked, None
+
+    def blocked_connect_reason(self, target: str) -> str | None:
+        """SSRF guard applied at *connect* time: a reason string if connecting to
+        *target* is unsafe, else ``None``. Thin wrapper over :meth:`resolve_pin` for
+        callers that only need the yes/no decision (no IP pinning). No-op when
+        ``block_private`` is disabled."""
+
+        return self.resolve_pin(target)[1]
 
     # -- mutation ----------------------------------------------------------
     @staticmethod

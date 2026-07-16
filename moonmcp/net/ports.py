@@ -98,7 +98,12 @@ async def scan_ports(
     concurrency: int = 100,
     grab_banner: bool = False,
     limiter=None,
+    connect_host: str | None = None,
 ) -> ScanResult:
+    # Connect to connect_host (a pre-validated IP) when given, so every port hits the
+    # address the SSRF guard checked — no per-connection re-resolution a rebinding
+    # attacker could swap. `host` stays the display name.
+    target = connect_host or host
     loop = asyncio.get_event_loop()
     start = loop.time()
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -109,7 +114,7 @@ async def scan_ports(
             # must respect MOONMCP_RATE_LIMIT like everything else).
             if limiter is not None:
                 await limiter.acquire()
-            return await _probe_port(host, p, timeout, grab_banner)
+            return await _probe_port(target, p, timeout, grab_banner)
 
     states = await asyncio.gather(*(bounded(p) for p in ports))
     duration = (loop.time() - start) * 1000

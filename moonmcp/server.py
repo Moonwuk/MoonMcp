@@ -2957,6 +2957,14 @@ async def port_scan(
     if len(port_list) > 5000:
         return {"error": "too_many_ports", "detail": f"{len(port_list)} ports requested; cap is 5000"}
     ctx = get_context()
+    # Resolve ONCE and pin the validated IP: this both blocks a hostname that points
+    # at a private/reserved address and closes the DNS-rebinding window (every port
+    # hits the address we checked, not a re-resolved one).
+    pinned_ip, reason = await asyncio.to_thread(ctx.scope.resolve_pin, host)
+    if reason is not None:
+        return errmod.err("blocked_by_ssrf_guard", reason,
+                          "The host resolves to a private/reserved address; set "
+                          "MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing.")
     result = await portsmod.scan_ports(
         host,
         port_list,
@@ -2964,6 +2972,7 @@ async def port_scan(
         concurrency=min(200, ctx.settings.max_concurrency * 10),
         grab_banner=grab_banner,
         limiter=ctx.governor.limiter,
+        connect_host=pinned_ip,
     )
     return to_dict(result)
 

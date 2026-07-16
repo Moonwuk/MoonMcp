@@ -60,6 +60,8 @@ fixed, what was consciously deferred, and why.
   loopback/metadata. A correct fix is *resolve-once, connect-by-IP, pin the SNI/Host*
   applied uniformly across every connect path — a cross-cutting change to the
   networking layer that deserves its own focused PR, not a partial patch in one probe.
+  **→ Addressed:** implemented as `ScopeManager.resolve_pin` + pinned HTTP(S)
+  connections + `scan_ports(connect_host=…)`; see [`docs/SSRF_HARDENING.md`](SSRF_HARDENING.md).
 - **Cross-origin caller-header replay on redirect** (`net/http.fetch`). Already
   bounded: a cross-origin redirect is refused unless the next hop is *in scope*, and
   the fixed sensitive set + engagement-auth keys are stripped. The residual is a
