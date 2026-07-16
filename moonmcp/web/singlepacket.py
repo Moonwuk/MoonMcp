@@ -23,6 +23,7 @@ import asyncio
 import ssl
 from collections.abc import Awaitable, Callable
 
+from ..pin import connect_host
 from .desync import _status_of  # reuse the status-line parser
 
 Connect = Callable[[str, int, bool, float], Awaitable[tuple]]
@@ -75,7 +76,8 @@ async def _default_connect(host: str, port: int, tls: bool, timeout: float) -> t
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
-    fut = asyncio.open_connection(host, port, ssl=ssl_ctx, server_hostname=host if tls else None)
+    fut = asyncio.open_connection(connect_host(host), port, ssl=ssl_ctx,
+                                  server_hostname=host if tls else None)
     return await asyncio.wait_for(fut, timeout=timeout)
 
 

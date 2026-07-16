@@ -43,6 +43,7 @@ from . import lessons as lessonsmod
 from . import metrics as metricsmod
 from . import nextstep as nextstepmod
 from . import obsidian as obsidianmod
+from . import pin as pinmod
 from . import planner as plannermod
 from . import prompts as promptmod
 from . import shape as shapemod
@@ -234,12 +235,16 @@ async def _require_scope(target: str, *, intrusive: bool = False, tool: str | No
     # Resolve-then-check SSRF guard — covers raw-socket tools (port_scan,
     # tls_inspect, jarm, desync) as well as an in-scope hostname that points at a
     # private/internal/cloud-metadata IP. No-op when block_private is disabled.
-    # The resolve is a blocking getaddrinfo, so run it off the event loop.
-    reason = await asyncio.to_thread(ctx.scope.blocked_connect_reason, target)
+    # The resolve is a blocking getaddrinfo, so run it off the event loop. The
+    # validated IP is pinned (per-call contextvar) so the raw-socket probes connect
+    # to exactly this address, not a re-resolved one — closing the DNS-rebinding
+    # window between this check and the connection.
+    pinned_ip, reason = await asyncio.to_thread(ctx.scope.resolve_pin, target)
     if reason is not None:
         ctx.audit.record("ssrf_blocked", tool=tool, target=str(target),
                          decision="deny", reason=reason)
         raise ScopeError(reason)
+    pinmod.set_pin(host, pinned_ip)
     ctx.audit.record("scope_check", tool=tool, target=host, decision="allow")
     return host
 

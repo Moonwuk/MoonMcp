@@ -282,3 +282,33 @@ def test_will_use_proxy_reads_env(monkeypatch):
     assert _will_use_proxy("http", "example.com") is True           # proxied → skip pinning
     monkeypatch.setenv("no_proxy", "example.com")
     assert _will_use_proxy("http", "example.com") is False          # bypassed → pin allowed
+
+
+# ── Gate-level pinned-IP contextvar (covers the raw-socket probes) ───────────
+
+def test_pin_connect_host_matches_only_gated_host():
+    from moonmcp import pin
+    pin.set_pin("Example.COM", "93.184.216.34")
+    assert pin.connect_host("example.com") == "93.184.216.34"    # case-insensitive match
+    assert pin.connect_host("other.com") == "other.com"          # a different host is never pinned
+    pin.set_pin("example.com", None)                             # block_private off → cleared
+    assert pin.connect_host("example.com") == "example.com"
+    pin.set_pin(None, None)
+
+
+@pytest.mark.asyncio
+async def test_gate_pins_resolved_ip_for_raw_socket_probes(fresh_context):
+    # The scope gate resolves the target once and pins the IP, so raw-socket probes
+    # (tls/jarm/desync/ws) connect to exactly that address via pin.connect_host.
+    from moonmcp import pin
+    from moonmcp.server import _require_scope
+    fresh_context.scope.block_private = True
+    fresh_context.scope._resolver = lambda h: ["93.184.216.34"]
+    fresh_context.scope.add("gated.example")
+    try:
+        host = await _require_scope("gated.example", intrusive=False, tool="test")
+        assert host == "gated.example"
+        assert pin.connect_host("gated.example") == "93.184.216.34"   # gate pinned it
+        assert pin.connect_host("elsewhere.example") == "elsewhere.example"
+    finally:
+        pin.set_pin(None, None)

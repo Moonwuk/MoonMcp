@@ -23,6 +23,8 @@ import os
 import struct
 from dataclasses import dataclass
 
+from ..pin import connect_host
+
 _GREASE = [b"\x0a\x0a", b"\x1a\x1a", b"\x2a\x2a", b"\x3a\x3a", b"\x4a\x4a", b"\x5a\x5a",
            b"\x6a\x6a", b"\x7a\x7a", b"\x8a\x8a", b"\x9a\x9a", b"\xaa\xaa", b"\xba\xba",
            b"\xca\xca", b"\xda\xda", b"\xea\xea", b"\xfa\xfa"]
@@ -293,7 +295,8 @@ class JarmResult:
 
 async def _probe(host: str, port: int, details: list, timeout: float) -> str:
     try:
-        fut = asyncio.open_connection(host, port)
+        # Connect to the gate-pinned IP (the crafted ClientHello carries its own SNI).
+        fut = asyncio.open_connection(connect_host(host), port)
         reader, writer = await asyncio.wait_for(fut, timeout=timeout)
     except (asyncio.TimeoutError, OSError):
         return "|||"

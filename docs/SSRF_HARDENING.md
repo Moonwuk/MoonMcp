@@ -43,22 +43,32 @@ runs in every case; only the connect-by-IP step is proxy-gated.
 
 ## Coverage
 
-Every `@active_tool` already resolves-and-checks its target at the scope gate
-(`_require_scope` → `blocked_connect_reason`), so a hostname pointing at a private
-address is refused for **all** active tools. Pinning additionally closes the *rebind
-between the gate check and the connect* for the direct-connection paths MoonMCP owns:
+The scope gate (`_require_scope`) resolves each active tool's target **once**: it
+refuses a hostname that points at a private/reserved address (so that's blocked for
+**all** active tools) and stashes the validated IP in a per-call context variable
+(`moonmcp/pin.py`). Pinning then closes the *rebind between the gate check and the
+connect* across every direct-connection path:
 
-- **HTTP client** (`net/http.py`) — pinned on the initial request and every redirect hop.
-- **Port scanner** (`net/ports.py` / `port_scan`) — resolves once, connects every port by IP.
-- **Datastore sweep** (`db_exposure`) — the raw-TCP handshakes (Redis / Memcached / MongoDB)
-  connect to the once-resolved IP; the HTTP datastore kinds pin via the HTTP client.
+- **HTTP client** (`net/http.py`) — pinned on the initial request and every redirect hop
+  (its own per-hop `resolve_pin`, since a redirect can change host).
+- **Port scanner** (`net/ports.py` / `port_scan`) and **datastore sweep** (`db_exposure`)
+  — resolve once and connect the raw sockets by IP.
+- **Raw-socket probes via the gate contextvar** — `tls_inspect` / `jarm` (cert + active
+  fingerprint), the `desync` and single-packet smuggling probes, and `ws_probe` call
+  `pin.connect_host(host)` before connecting, so the socket goes to the gate-validated IP.
 
-## Limits / next
+**Safety of the contextvar**: `pin.connect_host(host)` returns the pin **only** for the
+exact gated host. A tool that connects to a *different* host (candidate origins during
+origin discovery, a sibling SAN, …) falls back to the hostname — the pin can never send a
+connection to the wrong address. It's a `contextvars.ContextVar`, so concurrent tool calls
+(each its own task context) don't see each other's pin, and every active tool overwrites
+it at its own gate.
 
-- Other raw-socket probes (`tls_inspect` / `jarm` cert + fingerprint, the `desync` /
-  single-packet smuggling probes, `ws_probe`) are **scope-gated and gate-checked** but
-  still re-resolve at connect. A clean follow-up is to have `_require_scope` stash the
-  pinned IP in a contextvar the low-level connect helpers read, pinning all of them at
-  once instead of per-tool.
+## Limits
+
+- Behaviour is unchanged when `MOONMCP_BLOCK_PRIVATE=0` (authorised internal testing):
+  the gate neither checks nor pins.
+- When an outbound proxy carries an HTTP request, pinning is skipped (the proxy is the
+  egress-control point); the private/reserved check still runs.
 - Delegated external tools (nuclei, sqlmap, Strix) do their own resolution under their own
   network policy — out of scope for client-side pinning.
