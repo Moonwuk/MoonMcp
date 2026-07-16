@@ -37,12 +37,18 @@ CRLF_PAYLOADS = [
 
 
 def assess(headers: dict[str, str], set_cookies: list[str]) -> bool:
-    """Did an injected marker surface as a real response header / cookie?"""
+    """Did an injected marker surface as a real response header / cookie?
+
+    The cookie check matches the marker as a cookie NAME, not a substring: a genuine
+    response-split emits ``Set-Cookie: moonmcpcrlf=1`` as its own header line, so the
+    parsed cookie starts with ``moonmcpcrlf=``. A server that SAFELY strips the CR/LF
+    but reflects the payload into another cookie's value (``lang=moon…moonmcpcrlf=1``)
+    starts with that cookie's name instead — a substring check falsely confirmed it."""
 
     low = {k.lower(): (v or "") for k, v in headers.items()}
     if low.get(_MARKER_HEADER, "").strip() == _MARKER_VALUE:
         return True
-    return any(_MARKER_COOKIE in (c or "").lower() for c in set_cookies)
+    return any((c or "").strip().lower().startswith(f"{_MARKER_COOKIE}=") for c in set_cookies)
 
 
 async def probe_crlf(client: HttpClient, url: str, param: str, *, method: str = "GET",

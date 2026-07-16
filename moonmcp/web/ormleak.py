@@ -75,11 +75,21 @@ def candidates(orm: str, base: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def assess_lookup(all_pair: tuple, none_pair: tuple) -> bool:
+def assess_lookup(all_pair: tuple, none_pair: tuple, *, none_reflected: bool = False) -> bool:
     """An injected lookup is a hit when the empty-prefix ("all") and unlikely-prefix
     ("none") probes are each REPRODUCIBLE (both sends agree) and DIFFER from each
-    other — i.e. the lookup is applied as a filter. Each element is ``(status, len)``."""
+    other — i.e. the lookup is applied as a filter. Each element is ``(status, len)``.
 
+    ``none_reflected`` guards the reflection false positive: the "all" value is empty and
+    the "none" value is the 17-char ``CONTROL_NONE``, so an endpoint that merely ECHOES
+    the param verbatim makes the "none" body ~17 bytes longer and manufactures a
+    differential with no ORM filter involved. When the unlikely value is found reflected
+    in the body, the differential is attributable to the echo, not to filtering, so it is
+    suppressed. FN-safe: ``CONTROL_NONE`` matches no rows, so a genuine relational filter
+    never surfaces it in the result data."""
+
+    if none_reflected:
+        return False
     a1, a2 = all_pair
     n1, n2 = none_pair
     return bool(a1 == a2 and n1 == n2 and a1 != n1)

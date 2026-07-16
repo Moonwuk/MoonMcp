@@ -30,7 +30,10 @@ CLOUD_METADATA_TARGETS: list[dict] = [
      "signatures": ["AccessKeyId", "SecretAccessKey", "security-credentials"]},
     {"provider": "AWS (metadata root)", "header": None,
      "url": "http://169.254.169.254/latest/meta-data/",
-     "signatures": ["ami-id", "instance-id", "hostname", "iam"]},
+     # 'iam' is anchored as the IMDS listing entry 'iam/' — the bare token matched
+     # 'iam' inside 'Miami'/'William', pairing with the generic 'hostname' to fake a
+     # >=2 confirmation from ordinary prose.
+     "signatures": ["ami-id", "instance-id", "hostname", "iam/"]},
     {"provider": "GCP", "header": ("Metadata-Flavor", "Google"),
      "url": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
      "signatures": ["access_token", "token_type"]},
@@ -40,7 +43,10 @@ CLOUD_METADATA_TARGETS: list[dict] = [
     {"provider": "Azure", "header": ("Metadata", "true"),
      "url": ("http://169.254.169.254/metadata/identity/oauth2/token"
              "?api-version=2018-02-01&resource=https://management.azure.com/"),
-     "signatures": ["access_token", "client_id"]},
+     # 'token_type' (always present in the IMDS token body) replaces 'client_id',
+     # which is absent from the canonical SYSTEM-assigned MSI response — the pair
+     # access_token+client_id downgraded a genuine Azure credential leak to no-finding.
+     "signatures": ["access_token", "token_type"]},
     {"provider": "Alibaba Cloud", "header": None,
      "url": "http://100.100.100.200/latest/meta-data/ram/security-credentials/",
      "signatures": ["AccessKeyId", "SecurityToken", "security-credentials"]},
@@ -49,7 +55,10 @@ CLOUD_METADATA_TARGETS: list[dict] = [
      "signatures": ["compartmentId", "ociAdName", "canonicalRegionName"]},
     {"provider": "DigitalOcean", "header": None,
      "url": "http://169.254.169.254/metadata/v1.json",
-     "signatures": ["droplet_id", "interfaces", "region"]},
+     # the generic 'interfaces'/'region' are anchored as JSON keys ('"interfaces"',
+     # '"region"') so ordinary prose ('our API interfaces … in every region') can no
+     # longer pair to a >=2 confirmation; the real v1.json carries them as quoted keys.
+     "signatures": ["droplet_id", '"interfaces"', '"region"']},
     # --- Kubernetes cluster-internal (full-read SSRF from a pod reaches the API
     # server, which reflects an identifiable JSON body). ---
     {"provider": "Kubernetes API server (kube-dns /version)", "header": None,
@@ -60,7 +69,10 @@ CLOUD_METADATA_TARGETS: list[dict] = [
      "signatures": ["gitVersion", "goVersion", "buildDate"]},
     {"provider": "Kubernetes API server (API index)", "header": None,
      "url": "https://kubernetes.default.svc/",
-     "signatures": ['"paths"', "/apis", "/healthz"]},
+     # require the k8s-discriminating quoted '"/apis"' array entry (the aggregated API
+     # groups root, which app OpenAPI/Swagger docs don't carry) alongside the '"paths"'
+     # key — the generic '"paths"'+'/healthz' pair confirmed off a reflected Swagger spec.
+     "signatures": ['"paths"', '"/apis"']},
 ]
 
 

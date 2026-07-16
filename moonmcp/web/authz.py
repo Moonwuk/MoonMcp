@@ -113,16 +113,26 @@ def _field_collection(field: str) -> str:
 def _canon_collection(c: str) -> str:
     """Canonical collection key for comparison: strip an ``_id`` suffix (or a bare
     ``id``/``uuid``/… type name → generic ``""``), then singular/plural-fold
-    (``orders`` → ``order``). Reconciles the three namespaces we compare — a path
-    segment (``orders``), a query key (``order_id``) and a JSON field's collection
-    (``order``) — into one comparable key."""
+    (``orders`` → ``order``, ``companies`` → ``compan``, ``statuses`` → ``statu``).
+    Reconciles the three namespaces we compare — a path segment (``orders``), a query
+    key (``order_id``) and a JSON field's collection (``order``) — into one comparable
+    key. The fold is crude, but both sides of every comparison run through it, so a
+    collection and its own plural collapse alike even for ``-ies``/``-ses`` forms — the
+    naive single-``s`` strip silently dropped a real chained IDOR whenever the URL slot
+    was e.g. ``/companies/`` (``companies`` ≠ ``company``)."""
 
     c = c.lower()
     if c.endswith("_id"):
         c = c[:-3]
     elif c in ("id", "uuid", "guid", "ref", "number"):
         c = ""
-    return c[:-1] if len(c) > 1 and c.endswith("s") else c
+    if c.endswith("ies") and len(c) > 3:
+        c = c[:-3] + "y"                       # companies -> company, categories -> category
+    elif c.endswith(("ses", "xes", "zes", "ches", "shes")) and len(c) > 3:
+        c = c[:-2]                             # statuses -> status, boxes -> box, matches -> match
+    if c.endswith("s") and not c.endswith("ss") and len(c) > 1:
+        c = c[:-1]                             # orders -> order (but address stays address)
+    return c
 
 
 def _ref_collection(url: str, ref: ObjectRef) -> str:
