@@ -97,7 +97,7 @@ true positive still detected).
   malformed-Expect twin was cleanly rejected with a 4xx (417 Expectation Failed is the
   RFC-compliant reply — normal, not desync).
 
-**Tuned via a control / plumbing (2 more, follow-up):**
+**Tuned via a control / plumbing (3 more, follow-up):**
 - `web/interp.assess_marker` — now content-type aware: when the response is JSON, the
   JSON-mandatory escapes of the marker chars (a backslash serialised as `\\`, a NUL as its backslash-u escape
   a `` escape) are treated as transport encoding, not interpretation — so a plain JSON echo
@@ -108,9 +108,17 @@ true positive still detected).
   endpoint returns an object-like body for an id that can't exist AND a neighbour body is
   ~identical to it (`similar >= 0.99`), it's a soft-200 catch-all, not per-object data, so
   those neighbours are suppressed. This is FN-safe — a real endpoint returns distinct data
-  per id (or 404 for the bogus id), so the `_VulnApp` IDOR still fires. (The residual
-  multi-step *collection-mismatch* FP — a same-numbered but unrelated object — genuinely
-  needs collection-aware id matching and is left for a later change.)
+  per id (or 404 for the bogus id), so the `_VulnApp` IDOR still fires.
+- `web/authz` multi-step chain — **collection-aware id matching** closes the residual
+  same-numbered-but-unrelated FP. `extract_body_refs` now carries each exposed id's
+  *collection* (the JSON field's `_id` prefix, or the href path segment), and the chain
+  only injects an id into the URL's object slot when that collection is a generic
+  relationship pointer (`next`/`prev`/`parent`/… or a bare `id`) or names the **same**
+  collection as the slot (singular/plural-insensitive). A `product_id` pulled from an
+  `/orders/<id>` response no longer chains into `/orders/<product_id>` (a same-number
+  coincidence, not a chain). FN-safe: a real `order_id` / `next_id` still chains — the
+  test pair asserts `301` (same collection) fires while `205` (a foreign `product_id`
+  listed first, so an order-blind chain would grab it and stop) is suppressed.
 
 ---
 

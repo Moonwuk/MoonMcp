@@ -32,8 +32,26 @@ def test_with_ref_replaces_path_and_query():
 
 def test_extract_body_refs_from_json_and_hrefs():
     body = '{"id":100,"order_id":205,"link":"/invoices/77","uuid":"550e8400-e29b-41d4-a716-446655440000"}'
-    got = set(az.extract_body_refs(body))
-    assert {"205", "77"} <= got and "550e8400-e29b-41d4-a716-446655440000" in got
+    pairs = az.extract_body_refs(body)
+    vals = {v for v, _c in pairs}
+    assert {"205", "77"} <= vals and "550e8400-e29b-41d4-a716-446655440000" in vals
+    # each id carries the collection it was named under (field `_id` prefix / href segment)
+    by_val = dict(pairs)
+    assert by_val["205"] == "order"       # "order_id"  -> order
+    assert by_val["77"] == "invoices"     # /invoices/77 -> invoices
+    assert by_val["100"] == ""            # bare "id"   -> generic
+
+
+def test_collection_compatibility_rules():
+    # generic relationship pointers and bare ids chain into any slot
+    assert az._collection_compatible("", "orders") is True
+    assert az._collection_compatible("next", "orders") is True
+    # same collection, singular/plural-insensitive
+    assert az._collection_compatible("order", "orders") is True
+    assert az._collection_compatible("orders", "order") is True
+    # a foreign collection must not chain into this slot
+    assert az._collection_compatible("product", "orders") is False
+    assert az._collection_compatible("user", "orders") is False
 
 
 def test_looks_like_object_and_similar():
@@ -167,3 +185,37 @@ async def test_sibling_sweep_suppressed_on_soft_200_catch_all():
     kinds = {f["kind"] for f in res["findings"]}
     assert "sibling_idor" not in kinds
     assert "multistep_bola" not in kinds
+
+
+class _CollectionApp:
+    """Object-level authz IS broken, but only along its OWN collection. /orders/100
+    (owner) exposes two ids: order_id=301 (SAME collection) and product_id=205 (a
+    DIFFERENT collection that merely shares the number 205). A non-owner can read both
+    /orders/301 and /orders/205. The multi-step chain must inject the ORDER id (a real
+    chained IDOR) but NOT the PRODUCT id — /orders/205 is an unrelated object reached by
+    a same-number coincidence, not by chaining the exposed product reference."""
+
+    async def fetch(self, url, *, method="GET", headers=None, body=None,
+                    suppress_auth=False, **kwargs):
+        m = re.search(r"/orders/(\d+)", url)
+        if not m:
+            return _R(404, "not found")
+        oid = m.group(1)
+        if not suppress_auth and oid == "100":            # owner's object exposes both ids
+            # product_id is listed FIRST: the old order-blind chain would grab 205 and stop
+            # before ever reaching the real order_id — so this ordering makes the test fail
+            # loudly if the collection filter regresses.
+            return _R(200, '{"id":100,"owner":"A","product_id":205,"order_id":301,'
+                           '"data":"owner-order-100-xxxxxxxx"}')
+        if suppress_auth and oid in ("205", "301"):       # distinct real objects, no authz
+            return _R(200, f'{{"id":{oid},"owner":"Z","data":"distinct-object-{oid}-xxxxxxxx"}}')
+        return _R(403, "forbidden")                       # everything else blocked (keeps signals clean)
+
+
+@pytest.mark.asyncio
+async def test_multistep_chains_same_collection_but_not_a_foreign_id():
+    res = await az.probe_bola(_CollectionApp(), "https://x.test/orders/100",
+                              b_headers={"Cookie": "b=1"})
+    owner_refs = {f["owner_ref"] for f in res["findings"] if f["kind"] == "multistep_bola"}
+    assert "301" in owner_refs        # TP: same-collection order_id → chained IDOR still fires
+    assert "205" not in owner_refs    # FP suppressed: product_id must not chain into /orders/<id>
