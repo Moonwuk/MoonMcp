@@ -16,6 +16,8 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from ..pin import connect_host
+
 
 @dataclass
 class TlsResult:
@@ -78,7 +80,7 @@ def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | N
     ctx.verify_mode = ssl.CERT_NONE
     der = b""
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with socket.create_connection((connect_host(host), port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=server_name or host) as tls:
                 result.connected = True
                 result.version = tls.version()
@@ -173,7 +175,7 @@ def _try_version(host: str, port: int, version, timeout: float) -> tuple[bool, s
     except (ValueError, OSError):
         return False, None
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with socket.create_connection((connect_host(host), port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as tls:
                 c = tls.cipher()
                 return True, (c[0] if c else None)
@@ -190,7 +192,7 @@ def _probe_alpn(host: str, port: int, timeout: float) -> list[str]:
     except NotImplementedError:
         return []
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with socket.create_connection((connect_host(host), port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as tls:
                 selected = tls.selected_alpn_protocol()
                 return [selected] if selected else []

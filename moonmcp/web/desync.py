@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from ..pin import connect_host
+
 
 @dataclass
 class DesyncResult:
@@ -55,7 +57,8 @@ async def _raw_request(host: str, port: int, tls: bool, raw: bytes, timeout: flo
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
     try:
-        fut = asyncio.open_connection(host, port, ssl=ssl_ctx, server_hostname=host if tls else None)
+        fut = asyncio.open_connection(connect_host(host), port, ssl=ssl_ctx,
+                                      server_hostname=host if tls else None)
         reader, writer = await asyncio.wait_for(fut, timeout=timeout)
     except (asyncio.TimeoutError, ssl.SSLError, OSError):
         return None
@@ -170,7 +173,7 @@ async def _timed_request(host: str, port: int, tls: bool, raw: bytes,
         ssl_ctx.verify_mode = ssl.CERT_NONE
     start = time.monotonic()
     try:
-        fut = asyncio.open_connection(host, port, ssl=ssl_ctx,
+        fut = asyncio.open_connection(connect_host(host), port, ssl=ssl_ctx,
                                       server_hostname=host if tls else None)
         reader, writer = await asyncio.wait_for(fut, timeout=timeout)
     except (asyncio.TimeoutError, ssl.SSLError, OSError):

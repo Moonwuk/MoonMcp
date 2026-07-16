@@ -31,6 +31,8 @@ import ssl
 import struct
 from dataclasses import dataclass, field
 
+from ..pin import connect_host
+
 # RFC 6455 handshake GUID, concatenated with the client key to derive the accept.
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 # The foreign Origin used for the CSWSH check — a domain we obviously don't control
@@ -214,7 +216,7 @@ async def _handshake(host: str, port: int, tls: bool, path: str, host_header: st
     writer = None
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=ssl_ctx,
+            asyncio.open_connection(connect_host(host), port, ssl=ssl_ctx,
                                     server_hostname=host if tls else None),
             timeout=timeout)
         writer.write(request)
@@ -252,7 +254,7 @@ async def _echo(host: str, port: int, tls: bool, path: str, host_header: str,
     writer = None
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=ssl_ctx,
+            asyncio.open_connection(connect_host(host), port, ssl=ssl_ctx,
                                     server_hostname=host if tls else None),
             timeout=timeout)
         writer.write(request)
