@@ -156,5 +156,37 @@ before any change. **7 fixed** (each FP+TP test pair, FN-safe) · **2 declined**
 
 ---
 
+## Precision audit — round 2b (2026-07)
+
+Round 2's multi-agent sweep was cut short by a session limit before it reached 10 of the
+16 detector groups. This run covered exactly those 10 (deser/xxe, auth-tokens, client-web,
+behaviour/waf, exposure/vcs, datastore/cloud, recon-fingerprint, recon-surface,
+net-transport, scoring/shape) and **completed fully** — 68 agents, 0 errors, each candidate
+through the same 3-lens adversarial verification, then re-checked by hand against the code.
+**19 fixed**, each with an FP+TP test pair, each FN-safe.
+
+### Fixed
+| Area | Defect | FP/FN |
+|------|--------|-------|
+| `web/redirect._points_to_canary` | matched the canary as a substring, so a same-site absolute redirect that preserved the payload in a query param (`Location: …/x?next=<canary>`) was a false open redirect — now requires the canary to be the destination **authority**. | FP |
+| `web/debugpanel` | `/app_dev.php` listed `app_dev.php` (the requested path) as a signature and `/rails/info/routes` listed `rails/info`, with no status gate → a soft-404 echoing the path confirmed a HIGH panel (the `/console` round-1 trap in neighbours). Removed the self-referential tokens; gate on a non-error status. | FP |
+| `web/exposure` | empty-signature VCS paths (and `/.env`'s `"="`) confirmed on any **non-HTML** 200 soft-404 — added structural validators (a 40-hex reflog line, a `KEY=` env assignment, SVN/hg structure). | FP |
+| `web/waf.detect_waf` | block-page signatures mixed WAF-discriminating tokens with ultra-generic phrases (`forbidden`/`not acceptable`/`security policy`) matched on a **200** body → benign page read as a WAF block. Partitioned the list; the 200-body path trusts only the discriminating subset. | FP |
+| `web/behavior` | the error-disclosure list carried ultra-generic substrings (`" on line "`, `"Warning: "`, `"stack trace"`) and never suppressed a phrase already in the normal page — dropped the generics, added baseline suppression. | FP |
+| `web/oauth` | flagged only HS256, dropping HS384/HS512 symmetric-signing (alg-confusion) posture — now flags any `HS*`. | FN |
+| `web/saml` | `reflected_forged_identity` confirmed an XSW from a marker echoed in a **rejection** body — the confirmed gate now also requires the variant to behave like an **acceptance** (`matches_accepted_baseline`). | FP |
+| `recon/buckets` | the dump-key regex's bare `backup`/`dumps?`/`snapshot` words escalated benign keys (`__snapshots__/…`, `backup/*.jpg`) to a CRITICAL breach — tightened to dump extensions + dump-tool names. | FP |
+| `recon/firebase` | a bare `"error"` substring marked an OPEN RTDB whose data has a top-level `error` node as protected — rely on 401/403 + `"permission denied"`. | FN |
+| `recon/config_audit` | a secret-named key with a benign value (`PASSWORD_MIN_LENGTH=8`, `JWT_ALGORITHM=HS256`, `API_KEY_HEADER=Authorization`) emitted HIGH "exposed credential" — added a value-shape guard (skip numbers, short enums/algorithms, provider tokens, header names). | FP |
+| `recon/jslibs` | a single-boundary version compare flagged patched Bootstrap 3.4.x (3.4.0 backported the fixes) as vulnerable — made the boundary branch-aware. | FP |
+| `recon/csp` | a bare scheme source (`https:`/`ws:`/`wss:`/`filesystem:`) allows scripts from any host of that scheme but was not penalised → a trivially-bypassable CSP graded 1.0 — now penalised like `*`. | FN |
+| `recon/openapi` | `security: [{}]` / `[{…}, {}]` (optional auth) was classified auth-required, dropping an anonymously-reachable endpoint. | FN |
+| `recon/origin` | round-1's public-suffix set omitted common ccTLD suffixes (`org.br`, `co.id`, `com.ng`, …), so `example.org.br` derived base=`org.br` and generated candidate hosts under the public suffix — extended the set. | FP |
+| `net/tls._try_version` | on OpenSSL 3.x (SECLEVEL 2) the client couldn't offer TLS 1.0/1.1, so `weak_versions` was always empty against a genuinely weak server — lowered the security level for the legacy probes. | FN |
+| `recon/deserialize` | the short 2-byte magics (pickle/ruby/viewstate) matched on base64-decoded opaque tokens with no corroboration → a false CRITICAL — on the base64 path require a cheap structural check (pickle ends with the STOP opcode `.`, ruby type-tag, viewstate length); the 4-byte Java magic and the raw path are unchanged. | FP |
+| `findings.dedupe` / `findings.triage` | kept the earliest-id representative, so a later confirmed-critical duplicate was ranked/deleted under an earlier low-severity lead — now severity-aware, like `unique()` (round 1). | FN |
+
+---
+
 *Verification method: every fixed finding above ships with a regression test that
 fails before the fix and passes after. Full suite green; ruff clean.*

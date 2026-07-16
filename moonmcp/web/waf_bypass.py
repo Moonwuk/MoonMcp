@@ -18,9 +18,15 @@ from urllib.parse import quote
 from ..net.http import HttpClient
 
 _BLOCK_STATUSES = {403, 406, 429, 501, 999}
-_BLOCK_SIGNS = ("access denied", "request blocked", "forbidden", "not acceptable",
-                "web application firewall", "blocked by", "security policy",
-                "incident id", "ray id", "mod_security", "406 not acceptable")
+# WAF-discriminating block-page tokens — a real block page carries one of these; safe to
+# trust on a body ALONE (even a 200-status "challenge" page).
+_BLOCK_SIGNS_STRONG = ("web application firewall", "blocked by", "incident id",
+                       "ray id", "mod_security")
+# ultra-generic phrases — appear in benign copy ("Security Policy" footer, "forbidden for
+# guests"); only meaningful ALONGSIDE a block status, never as a lone body signal.
+_BLOCK_SIGNS_GENERIC = ("access denied", "request blocked", "forbidden", "not acceptable",
+                        "security policy", "406 not acceptable")
+_BLOCK_SIGNS = _BLOCK_SIGNS_STRONG + _BLOCK_SIGNS_GENERIC
 
 # category -> benign canary payload
 _PAYLOADS = {

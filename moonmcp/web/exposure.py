@@ -30,6 +30,44 @@ _CHECKS: dict[str, tuple[str, str]] = {
 
 _REMOTE_URL_RE = re.compile(r"url\s*=\s*(\S+)")
 
+# Structural validators for paths whose "real file" has no single distinctive substring
+# (previously an empty signature confirmed on ANY non-HTML 200 — a JSON/plain soft-404
+# like `{"error":"not found"}` was read as an exposed reflog/entries; `/.env`'s `"="`
+# matched any body with an equals sign). A real file has recognisable structure.
+_REFLOG_RE = re.compile(r"(?m)^[0-9a-f]{40} [0-9a-f]{40} ")   # <old-sha> <new-sha> ...
+_ENV_LINE_RE = re.compile(r"(?m)^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=")
+_HG_TOKENS = {"revlogv1", "store", "dotencode", "fncache", "generaldelta", "sparserevlog",
+              "treemanifest", "share-safe", "persistent-nodemap", "revlog-compression-zstd"}
+
+
+def _valid_reflog(text: str) -> bool:
+    return bool(_REFLOG_RE.search(text))
+
+
+def _valid_svn_entries(text: str) -> bool:
+    head = text.lstrip()[:32]
+    first = head.split()[0] if head.split() else ""
+    return head.startswith("<?xml") or first.isdigit()
+
+
+def _valid_hg_requires(text: str) -> bool:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return bool(lines) and all(re.fullmatch(r"[a-z0-9.\-]+", ln) for ln in lines) \
+        and any(ln in _HG_TOKENS for ln in lines)
+
+
+def _valid_env(text: str) -> bool:
+    return bool(_ENV_LINE_RE.search(text))
+
+
+# path -> predicate(text) that the real file's body must satisfy (overrides the substring)
+_STRUCT_VALIDATORS = {
+    "/.git/logs/HEAD": _valid_reflog,
+    "/.svn/entries": _valid_svn_entries,
+    "/.hg/requires": _valid_hg_requires,
+    "/.env": _valid_env,
+}
+
 
 @dataclass
 class ExposedFile:
@@ -68,8 +106,11 @@ async def check_exposure(client: HttpClient, base_url: str, *, scope_check=None)
         # /.hg/requires) — a real commit log / entries file is plain text, never an
         # HTML document, so an HTML body there is a soft-404, not an exposed VCS file.
         # (Previously empty signatures skipped this guard and were always confirmed.)
+        validator = _STRUCT_VALIDATORS.get(path)
         if _looks_like_html(text) and signature != "<":
             confirmed = False
+        elif validator is not None:
+            confirmed = validator(text)   # structural check, not a bare substring
         else:
             confirmed = (signature == "") or (signature in text) or (signature.encode() in r.body[:64])
         entry = ExposedFile(path=path, label=label, status=r.status, size=len(r.body), confirmed=confirmed)

@@ -436,6 +436,31 @@ def classify_ingress_annotation(key: str) -> tuple[str, str, str] | None:
     return None
 
 
+# Values that sit under a secret-ish key name but are NOT secrets: algorithm/enum names,
+# credential-provider tokens, and common auth header names. A secret-named key carrying one
+# of these (JWT_ALGORITHM=HS256, CREDENTIAL_PROVIDER=env, API_KEY_HEADER=Authorization) is
+# a policy/config line, not an exposed credential.
+_NON_SECRET_VALUES = frozenset({
+    "hs256", "hs384", "hs512", "rs256", "rs384", "rs512", "es256", "es384", "ps256", "none",
+    "authorization", "bearer", "basic", "cookie", "x-auth-token", "x-api-key", "content-type",
+    "env", "file", "vault", "aws", "kms", "gcp", "azure", "secretsmanager", "ssm",
+    "true", "false", "required", "optional",
+})
+_HEADER_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$")
+
+
+def _looks_secretish(v: str) -> bool:
+    """Does *v* plausibly look like an actual secret VALUE, rather than a number
+    (PASSWORD_MIN_LENGTH=8), a short enum/algorithm (HS256), a provider token (env), or a
+    header name (X-Auth-Token) that merely sits under a secret-ish key? (pure)"""
+
+    if v.isdigit() or len(v) < 6:
+        return False
+    if v.lower() in _NON_SECRET_VALUES:
+        return False
+    return not _HEADER_NAME_RE.fullmatch(v)
+
+
 def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
     k, v = key.lower(), (value or "").strip()
     vlow = v.lower()
@@ -446,9 +471,11 @@ def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
         if vlow in _WEAK_CREDS:
             findings.append(ConfigFinding("high", key, "default/weak credential",
                                           f"credential-like setting uses a weak value ({v!r})"))
-        else:
+        elif _looks_secretish(v):
             findings.append(ConfigFinding("high", key, "exposed credential",
                                           "a secret/credential value is present in the config"))
+        # else: a secret-NAMED key with a benign non-secret value (a length limit, an
+        # algorithm/enum, a provider token, a header name) — not an exposed credential.
 
     # Debug / non-prod env
     if re.search(r"\b(debug|display[_-]?errors|app[_-]?debug|whoops)\b", k) and vlow in _TRUTHY:

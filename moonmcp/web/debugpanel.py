@@ -30,7 +30,10 @@ _PANELS: dict[str, tuple[str, list[str], str, str]] = {
         "Symfony profiler exposed — leaks requests/config and often APP_SECRET "
         "(→ /_fragment forge chain via config_audit)"),
     "/app_dev.php": (
-        "Symfony dev front controller", ["sf-toolbar", "sf-dump", "app_dev.php"], "high",
+        # NB: 'app_dev.php' (the requested path) is NOT a signature — a soft-404 that
+        # echoes the path would otherwise confirm a HIGH panel. Only framework-internal
+        # profiler markers confirm.
+        "Symfony dev front controller", ["sf-toolbar", "sf-dump"], "high",
         "dev front controller reachable in prod — debug + profiler enabled"),
     "/telescope/requests": (
         "Laravel Telescope", ["Telescope", "laravel_telescope"], "high",
@@ -64,7 +67,8 @@ _PANELS: dict[str, tuple[str, list[str], str, str]] = {
         "phpMyAdmin", ["phpMyAdmin", "pmahomme"], "medium",
         "phpMyAdmin exposed"),
     "/rails/info/routes": (
-        "Rails dev info", ["Routing Error", "Path / Url", "rails/info"], "medium",
+        # 'rails/info' (the requested path) is NOT a signature — see /app_dev.php.
+        "Rails dev info", ["Routing Error", "Path / Url"], "medium",
         "Rails dev routes/properties exposed — running in development env"),
     # DB admin consoles left reachable in prod — a direct browse/query/delete surface.
     "/db/admin": (
@@ -91,7 +95,9 @@ async def probe_debug_panels(client: HttpClient, base_url: str, *,
     for path, (label, sigs, severity, note) in _PANELS.items():
         url = urljoin(base_url, path)
         r = await client.fetch(url, follow_redirects=False, timeout=10.0, scope_check=scope_check)
-        if r.status is None or not r.body:
+        # an exposed panel serves a 2xx/3xx body; a 4xx/5xx (soft-404 that echoes the
+        # requested path, or an error page) must not confirm an "exposed" panel.
+        if r.status is None or not r.body or not (200 <= r.status < 400):
             continue
         text = r.text(limit=12000)
         if any(s in text for s in sigs):

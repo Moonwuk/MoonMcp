@@ -69,7 +69,17 @@ def _points_to_canary(value: str) -> bool:
     # reflected `/\canary/` or `https:\\canary` backslash-confusion payload IS an
     # off-site redirect and must be recognised (it is in _PAYLOADS).
     v = value.strip().lower().replace("\\", "/")
-    return _CANARY in v and v.startswith(("http://", "https://", "//", "https:/", "http:/"))
+    if not v.startswith(("http://", "https://", "//", "https:/", "http:/")):
+        return False
+    # The canary must be the redirect's destination AUTHORITY, not merely a substring:
+    # a same-site absolute redirect that PRESERVES the payload in a query param
+    # (`https://www.app.test/x?next=https://canary/`) reflects the canary without
+    # redirecting to it — an exact-host check kills that false positive.
+    m = re.match(r"(?:https?:)?/{1,2}([^/?#]+)", v)
+    if not m:
+        return False
+    host = m.group(1).rsplit("@", 1)[-1].split(":", 1)[0]  # strip any userinfo / port
+    return host == _CANARY
 
 
 async def check_open_redirect(

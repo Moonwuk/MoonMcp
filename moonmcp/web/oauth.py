@@ -73,9 +73,10 @@ def analyze_oidc_metadata(meta: dict) -> list[dict]:
     if "none" in algs:
         add("high", "id_token signing alg 'none' allowed",
             "id_token_signing_alg_values_supported includes none — unsigned id_tokens accepted")
-    if "hs256" in algs:
-        add("medium", "id_token HS256 offered",
-            "symmetric HS256 signing advertised — alg-confusion / weak-secret surface")
+    if any(a.startswith("hs") for a in algs):   # HS256/HS384/HS512 all symmetric
+        hs = ", ".join(sorted(a.upper() for a in algs if a.startswith("hs")))
+        add("medium", "id_token symmetric (HMAC) signing offered",
+            f"symmetric {hs} signing advertised — alg-confusion / weak-secret surface")
     issuer = str(meta.get("issuer") or "")
     if issuer.startswith("http://"):
         add("medium", "issuer over plaintext http", f"issuer is {issuer!r} — cleartext token exchange")

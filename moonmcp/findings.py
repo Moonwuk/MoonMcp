@@ -137,6 +137,11 @@ class FindingsStore:
                 kept.append(f)
                 continue
             removed += 1
+            # Promote the survivor to the most-severe duplicate's severity (mirroring
+            # unique()); otherwise a later confirmed-critical duplicate is silently
+            # deleted under an earlier low-severity lead of the same signature.
+            if _sev_rank(f.severity) < _sev_rank(first.severity):
+                first.severity = f.severity
             if f.evidence and f.evidence not in first.evidence:
                 first.evidence = (f"{first.evidence} | {f.evidence}" if first.evidence
                                   else f.evidence)[:2000]
@@ -164,7 +169,10 @@ class FindingsStore:
 
         unique: list[dict] = []
         for _sig, fs in groups.items():
-            rep = min(fs, key=lambda x: x.id)
+            # represent the group by its HIGHEST-severity member (earliest id on a tie),
+            # like unique() — min-by-id alone ranked a critical duplicate at the earlier
+            # lead's low severity.
+            rep = min(fs, key=lambda x: (_sev_rank(x.severity), x.id))
             targets = sorted({x.target for x in fs})
             key = (_norm(rep.type), rep.severity, _norm(rep.title))
             all_targets = sorted(systemic_groups.get(key, set(targets)))

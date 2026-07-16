@@ -5250,12 +5250,16 @@ async def saml_xsw_probe(acs_url: str, saml_response: str, relay_state: str = ""
             forged_marker=forged_marker)
 
     scored = {v: a for v, a in variants.items() if "error" not in a}
-    # Only the strong, replay-noise-independent signal earns a spot in this
-    # top-level summary -- matches_accepted_baseline alone is too noisy to
-    # report as "vulnerable" (see the docstring); it's still visible per-variant.
-    hit_variants = [v for v, a in scored.items() if a["reflected_forged_identity"]]
-    strongest = next((v for v, a in scored.items() if a["reflected_forged_identity"]), None)
-    reflected_hits = [f"saml-xsw/{v}" for v, a in scored.items() if a["reflected_forged_identity"]]
+    # A reflected forged marker only proves CONSUMPTION when the variant also behaved like
+    # an ACCEPTANCE (status matches the accepted baseline, not the rejected control). A
+    # secure SP that rejects the XSW but echoes the submitted NameID in its ERROR body
+    # would otherwise reflect the marker inside a rejection -> a false confirmed bypass.
+    # (matches_accepted_baseline alone stays too noisy to report; it's visible per-variant.)
+    consumed = {v for v, a in scored.items()
+                if a["reflected_forged_identity"] and a["matches_accepted_baseline"]}
+    hit_variants = [v for v in scored if v in consumed]
+    strongest = next((v for v in scored if v in consumed), None)
+    reflected_hits = [f"saml-xsw/{v}" for v in scored if v in consumed]
     verdict = confirmmod.evaluate(
         reflected=bool(reflected_hits),
         injection_hits=reflected_hits,

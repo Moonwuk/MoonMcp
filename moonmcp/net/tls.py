@@ -172,6 +172,15 @@ def _try_version(host: str, port: int, version, timeout: float) -> tuple[bool, s
             warnings.simplefilter("ignore", DeprecationWarning)
             ctx.minimum_version = version
             ctx.maximum_version = version
+            # OpenSSL 3.x defaults to SECLEVEL 2, which refuses to OFFER TLS 1.0/1.1 and
+            # their ciphers — so the probe could never negotiate the very legacy versions
+            # it is meant to flag as weak (weak_versions stayed empty against a genuinely
+            # weak server). Lower the security level for the legacy probes only.
+            if version in (ssl.TLSVersion.TLSv1, ssl.TLSVersion.TLSv1_1):
+                try:
+                    ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+                except ssl.SSLError:
+                    pass
     except (ValueError, OSError):
         return False, None
     try:

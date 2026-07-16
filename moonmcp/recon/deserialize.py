@@ -50,25 +50,37 @@ def _try_b64(text: str) -> bytes | None:
         return None
 
 
+# Common Ruby Marshal top-level type tags (the byte right after the \x04\x08 header).
+_MARSHAL_TYPE_TAGS = frozenset(b'0TFilI":;@[{oceUumf/}')
+
+
 def _check_binary(data: bytes, encoding: str, hits: list[SerializationHit]) -> None:
+    # On the base64 path a random opaque token frequently decodes to arbitrary leading
+    # bytes, so the SHORT 2-byte magics (pickle \x80\x0N, ruby \x04\x08, viewstate \xff\x01)
+    # collide by chance (~1/65k each) and cried "critical" on benign tokens. Require a cheap
+    # structural check there before confirming. The 4-byte Java magic (\xac\xed\x00\x05) is
+    # specific enough to trust on either path; the raw path is unchanged.
+    b64 = encoding == "base64"
     if data.startswith(_JAVA_MAGIC):
         hits.append(SerializationHit(
             "java-serialization", "Java native serialization", "critical",
             "Starts with the Java serialization magic bytes (ACED0005) — a classic "
             "gadget-chain deserialization sink (ysoserial).", encoding))
-    if data.startswith(_NET_VIEWSTATE_MAGIC):
+    if data.startswith(_NET_VIEWSTATE_MAGIC) and (not b64 or len(data) >= 16):
         hits.append(SerializationHit(
             ".net-viewstate", ".NET ViewState (LosFormatter)", "high",
             "Starts with the LosFormatter FF01 header — unencrypted ASP.NET ViewState "
             "(check EnableViewStateMac; ViewGen/ysoserial.net if MAC is off or the "
             "machineKey is known).", encoding))
     for proto, magic in _PICKLE_PROTOS.items():
-        if data.startswith(magic):
+        # a real pickle terminates with the STOP opcode '.' — a strong, cheap corroboration
+        if data.startswith(magic) and (not b64 or (len(data) >= 4 and data.endswith(b"."))):
             hits.append(SerializationHit(
                 "python-pickle", f"Python pickle (protocol {proto})", "critical",
                 "Starts with a Python pickle protocol marker — arbitrary-code-execution "
                 "sink on unpickle.", encoding))
-    if data.startswith(_RUBY_MARSHAL_MAGIC):
+            break
+    if data.startswith(_RUBY_MARSHAL_MAGIC) and (not b64 or (len(data) >= 3 and data[2:3] in _MARSHAL_TYPE_TAGS)):
         hits.append(SerializationHit(
             "ruby-marshal", "Ruby Marshal", "critical",
             "Starts with the Ruby Marshal 4.8 header — a gadget-chain deserialization "

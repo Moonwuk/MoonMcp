@@ -14,12 +14,16 @@ from dataclasses import dataclass, field
 
 from ..net.http import HttpClient
 
+# Distinctive framework/language error+stack-trace markers. The ultra-generic phrases
+# " on line ", "Warning: " and "stack trace" were removed: they appear in ordinary page
+# copy (form helpers, cookie banners, docs), and a real error already trips a specific
+# marker below ("Fatal error", "Traceback", ".java:", "SQLSTATE", ...).
 _ERROR_SIGNATURES = [
     "Traceback (most recent call last)", "Whitelabel Error Page", "NullPointerException",
-    "System.Web", "at java.", "ORA-", "SQLSTATE", "Fatal error", "Warning: ",
-    "Microsoft OLE DB", "You have an error in your SQL syntax", "stack trace",
+    "System.Web", "at java.", "ORA-", "SQLSTATE", "Fatal error",
+    "Microsoft OLE DB", "You have an error in your SQL syntax",
     "/var/www/", "DEBUG = True", "Werkzeug Debugger", "django.", "Rails.root",
-    "Exception Details", ".java:", " on line ", "Undefined index",
+    "Exception Details", ".java:", "Undefined index",
 ]
 _CANARY_HOST = "moonmcp-behaviour-canary.example"
 
@@ -70,7 +74,9 @@ async def profile_behavior(client: HttpClient, url: str, *, scope_check=None) ->
             continue
         body = er.text(limit=50_000)
         for sig in _ERROR_SIGNATURES:
-            if sig in body and sig not in result.error_disclosure:
+            # a marker already present in the NORMAL page isn't error disclosure — it's
+            # ordinary page copy that happens to contain the phrase.
+            if sig in body and sig not in base_body and sig not in result.error_disclosure:
                 result.error_disclosure.append(sig)
     if result.error_disclosure:
         result.notes.append("error/stack-trace signatures leaked in responses")
