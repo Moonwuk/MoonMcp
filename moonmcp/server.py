@@ -3008,6 +3008,15 @@ async def db_exposure(target: str, ports: str = "db", timeout: float = 4.0) -> d
     host, p = _split_host_port(target, 0)
     explicit_port = p if p else None
     ctx = get_context()
+    # Resolve ONCE and pin: the raw-TCP handshakes below connect by socket, so a
+    # rebinding host could otherwise land a Redis/Mongo probe on an internal store.
+    # (The HTTP datastore kinds already pin via ctx.http.) Refuse a private resolve.
+    pinned_ip, reason = await asyncio.to_thread(ctx.scope.resolve_pin, host)
+    if reason is not None:
+        return errmod.err("blocked_by_ssrf_guard", reason,
+                          "The host resolves to a private/reserved address; set "
+                          "MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing.")
+    connect_host = pinned_ip or host   # pinned IP when guarding; hostname otherwise
     port_list = datastoresmod.ports_to_check(explicit_port, ports)
     result = datastoresmod.DatastoreResult(host=host, checked=port_list)
     sem = asyncio.Semaphore(min(20, max(1, ctx.settings.max_concurrency * 4)))
@@ -3023,7 +3032,7 @@ async def db_exposure(target: str, ports: str = "db", timeout: float = 4.0) -> d
             if limiter is not None:
                 await limiter.acquire()
             if kind in datastoresmod.RAW_PROBES:
-                hit = await datastoresmod.RAW_PROBES[kind](host, port, to)
+                hit = await datastoresmod.RAW_PROBES[kind](connect_host, port, to)
             else:
                 hit = await _http_datastore(ctx, host, port, kind, to)
         return {"port": port, "service": service, **hit} if hit else None

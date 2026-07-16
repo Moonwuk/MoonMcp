@@ -41,12 +41,24 @@ IP would be wrong. `_will_use_proxy(scheme, host)` detects that case and **skips
 leaving the proxy as the egress-control point. The private/reserved **reason** check still
 runs in every case; only the connect-by-IP step is proxy-gated.
 
-## Coverage / limits
+## Coverage
 
-- Covers the two direct-connection paths MoonMCP owns: the urllib HTTP client and the
-  asyncio TCP port scanner.
-- Raw-socket probes that build their own connections (e.g. datastore sweeps) resolve at
-  connect time; they are scope-gated but not yet IP-pinned — a follow-up can route them
-  through the same `resolve_pin` helper.
-- Delegated external tools (nuclei, sqlmap, Strix) do their own resolution and are out of
-  scope for client-side pinning; they run under their own network policy.
+Every `@active_tool` already resolves-and-checks its target at the scope gate
+(`_require_scope` → `blocked_connect_reason`), so a hostname pointing at a private
+address is refused for **all** active tools. Pinning additionally closes the *rebind
+between the gate check and the connect* for the direct-connection paths MoonMCP owns:
+
+- **HTTP client** (`net/http.py`) — pinned on the initial request and every redirect hop.
+- **Port scanner** (`net/ports.py` / `port_scan`) — resolves once, connects every port by IP.
+- **Datastore sweep** (`db_exposure`) — the raw-TCP handshakes (Redis / Memcached / MongoDB)
+  connect to the once-resolved IP; the HTTP datastore kinds pin via the HTTP client.
+
+## Limits / next
+
+- Other raw-socket probes (`tls_inspect` / `jarm` cert + fingerprint, the `desync` /
+  single-packet smuggling probes, `ws_probe`) are **scope-gated and gate-checked** but
+  still re-resolve at connect. A clean follow-up is to have `_require_scope` stash the
+  pinned IP in a contextvar the low-level connect helpers read, pinning all of them at
+  once instead of per-tool.
+- Delegated external tools (nuclei, sqlmap, Strix) do their own resolution under their own
+  network policy — out of scope for client-side pinning.

@@ -172,3 +172,35 @@ async def test_db_exposure_intrusive_gated(fresh_context):
 async def test_db_exposure_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "db_exposure" in tools
+
+
+@pytest.mark.asyncio
+async def test_db_exposure_pins_raw_probe_to_resolved_ip(fresh_context, monkeypatch):
+    # With the SSRF guard on, db_exposure must connect the raw-TCP handshake to the
+    # ONCE-resolved IP (not re-resolve the hostname at connect time) — so a rebinding
+    # swap can't land a Redis/Mongo probe on an internal store.
+    object.__setattr__(fresh_context.settings, "allow_intrusive", True)
+    fresh_context.scope.block_private = True
+    fresh_context.scope._resolver = lambda h: ["93.184.216.34"]   # a public address
+    fresh_context.scope.add("db.example")
+
+    captured = {}
+
+    async def _fake_redis(connect_host, port, timeout):
+        captured["host"] = connect_host
+        return None
+
+    monkeypatch.setitem(ds.RAW_PROBES, "redis", _fake_redis)
+    await srv.db_exposure(target="db.example:6379")
+    assert captured["host"] == "93.184.216.34"    # pinned IP, not the hostname
+
+
+@pytest.mark.asyncio
+async def test_db_exposure_refuses_host_resolving_private(fresh_context):
+    # a hostname that resolves to a private/reserved address is refused.
+    object.__setattr__(fresh_context.settings, "allow_intrusive", True)
+    fresh_context.scope.block_private = True
+    fresh_context.scope._resolver = lambda h: ["127.0.0.1"]
+    fresh_context.scope.add("rebind.example")
+    res = await srv.db_exposure(target="rebind.example:6379")
+    assert res.get("error")   # blocked by the SSRF guard (gate or in-tool pin check)
