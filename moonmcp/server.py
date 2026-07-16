@@ -4742,7 +4742,8 @@ async def interp_probe(target: str, param: str, method: str = "GET",
         u, b = _with_param(url, param, value, m)
         r = await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
         body = r.text(50_000) if r.status is not None else ""
-        assessed = interpmod.assess_marker(control, template, body)
+        json_body = "json" in (r.header("Content-Type") or "").lower()
+        assessed = interpmod.assess_marker(control, template, body, json_body=json_body)
         hits.append({"marker": name, "description": description, **assessed})
 
     return {

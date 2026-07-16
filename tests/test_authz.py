@@ -148,3 +148,22 @@ def test_similar_compares_head_and_tail_not_just_first_4kib():
     assert similar(a[:4096], b[:4096]) == 1.0             # first-4KiB-only would call them identical
     assert similar(a, b) < 0.9                            # head+tail sees the differing tail
     assert similar(a, a) == 1.0                           # truly identical bodies still 1.0
+
+
+class _SoftApp:
+    """Soft-200 catch-all: returns the SAME object-like body for EVERY id (no real
+    per-object data). The sibling sweep must not report a false IDOR against it."""
+
+    async def fetch(self, url, *, method="GET", headers=None, body=None,
+                    suppress_auth=False, **kwargs):
+        return _R(200, '{"page":"catch-all","content":"' + "x" * 40 + '"}')
+
+
+@pytest.mark.asyncio
+async def test_sibling_sweep_suppressed_on_soft_200_catch_all():
+    # A nonexistent-id control returns the same body as every neighbour → soft-200,
+    # so no false sibling/chained IDOR is reported (real IDOR still fires — see _VulnApp).
+    res = await az.probe_bola(_SoftApp(), "https://x.test/orders/100", b_headers={"Cookie": "b=1"})
+    kinds = {f["kind"] for f in res["findings"]}
+    assert "sibling_idor" not in kinds
+    assert "multistep_bola" not in kinds

@@ -159,18 +159,33 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
 
     # Signal 2 — sibling sweep: walk the id space as the other identity.
     sweeper_name, sweeper_hdr = others[0]
+    # Negative control: read a clearly-NONEXISTENT id as the sweeper. If the endpoint
+    # returns an object-like body even for an id that can't exist, it serves a catch-all
+    # / soft-200 for every id — so a neighbour body that is ~identical to that control is
+    # NOT per-object data. Suppressing those kills the soft-200 false IDOR while a real
+    # endpoint (distinct data per id, 404 for a bogus id) is unaffected.
+    soft_body: bytes | None = None
+    num_ref = next((r for r in refs if r.kind == "numeric" and r.value.isdigit()), None)
+    if num_ref is not None:
+        bogus = str(int(num_ref.value) + 9_000_017)
+        rc = await fetch_as(with_ref(url, num_ref, bogus), headers=sweeper_hdr, suppress_auth=True)
+        if looks_like_object(rc.status, rc.body):
+            soft_body = rc.body
     for ref in refs:
         for sib in sibling_values(ref):
             swapped = with_ref(url, ref, sib)
             r = await fetch_as(swapped, headers=sweeper_hdr, suppress_auth=True)
-            if looks_like_object(r.status, r.body):
-                findings.append({
-                    "kind": "sibling_idor", "identity": sweeper_name, "url": swapped,
-                    "ref": ref.value, "reached": sib, "severity": "high", "verdict": "review",
-                    "detail": f"{sweeper_name} read object id={sib} (neighbour of {ref.value}) — "
-                              "horizontal IDOR / object enumeration; confirm it is another user's data",
-                })
-                break  # one neighbour hit per ref is enough signal
+            if not looks_like_object(r.status, r.body):
+                continue
+            if soft_body is not None and similar(soft_body, r.body) >= 0.99:
+                continue  # same body as a nonexistent id → soft-200 catch-all, not real data
+            findings.append({
+                "kind": "sibling_idor", "identity": sweeper_name, "url": swapped,
+                "ref": ref.value, "reached": sib, "severity": "high", "verdict": "review",
+                "detail": f"{sweeper_name} read object id={sib} (neighbour of {ref.value}) — "
+                          "horizontal IDOR / object enumeration; confirm it is another user's data",
+            })
+            break  # one neighbour hit per ref is enough signal
 
     # Signal 3 — multi-step chain: extract ids the OWNER exposes, access them as another identity.
     if a_ok and refs:
@@ -181,14 +196,17 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
             for v in owned:
                 swapped = with_ref(url, ref0, v)
                 r = await fetch_as(swapped, headers=hdr, suppress_auth=True)
-                if looks_like_object(r.status, r.body):
-                    findings.append({
-                        "kind": "multistep_bola", "identity": name, "url": swapped,
-                        "owner_ref": v, "severity": "high", "verdict": "review",
-                        "detail": f"{name} accessed object id={v} that the owner's response exposed "
-                                  "— chained IDOR (owner response → cross-identity access)",
-                    })
-                    break
+                if not looks_like_object(r.status, r.body):
+                    continue
+                if soft_body is not None and similar(soft_body, r.body) >= 0.99:
+                    continue  # catch-all / soft-200 body, not a real chained object
+                findings.append({
+                    "kind": "multistep_bola", "identity": name, "url": swapped,
+                    "owner_ref": v, "severity": "high", "verdict": "review",
+                    "detail": f"{name} accessed object id={v} that the owner's response exposed "
+                              "— chained IDOR (owner response → cross-identity access)",
+                })
+                break
 
     return {
         "target": url, "refs_found": [{"value": r.value, "where": r.where} for r in refs],

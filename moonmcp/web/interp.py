@@ -53,7 +53,8 @@ def build_probe(control: str, template: str) -> str:
 _DUPLICABLE_TRAILERS = "\\'\"{}"
 
 
-def assess_marker(control: str, template: str, body: str, *, window: int = 40) -> dict:
+def assess_marker(control: str, template: str, body: str, *, window: int = 40,
+                  json_body: bool = False) -> dict:
     """Does *body* show evidence the marker's special character(s) were consumed
     or transformed, rather than passed through literally? (pure)
 
@@ -67,19 +68,35 @@ def assess_marker(control: str, template: str, body: str, *, window: int = 40) -
     escaping) — the original prefix stays intact regardless of what follows,
     so a mismatch-only check would miss it. When the sent payload's last
     character is one of the common escape/structural characters, also flag a
-    literal repeat of that character immediately after as interpreted."""
+    literal repeat of that character immediately after as interpreted.
+
+    When *json_body* is set (the response is JSON), the JSON-MANDATORY string
+    escapes of our marker chars — a backslash serialised as ``\\\\`` and a NUL as
+    ``\\u0000`` — are transport encoding, NOT value interpretation. A plain JSON
+    echo of the value would otherwise false-fire the backslash and null-byte
+    markers (two markers → a spurious "corroborated" verdict)."""
 
     sent = build_probe(control, template)
     idx = body.find(control)
     if idx < 0:
         return {"observed": False, "interpreted": False}
     slice_ = body[idx: idx + len(sent) + window]
-    if not slice_.startswith(sent):
-        return {"observed": True, "interpreted": True}
-    trailing = sent[-1]
-    if trailing in _DUPLICABLE_TRAILERS and slice_[len(sent): len(sent) + 1] == trailing:
-        return {"observed": True, "interpreted": True}
-    return {"observed": True, "interpreted": False}
+    if slice_.startswith(sent):
+        trailing = sent[-1]
+        if trailing in _DUPLICABLE_TRAILERS and slice_[len(sent): len(sent) + 1] == trailing:
+            # A doubled backslash in a JSON body is mandatory JSON escaping, not interp.
+            if json_body and trailing == "\\":
+                return {"observed": True, "interpreted": False}
+            return {"observed": True, "interpreted": True}
+        return {"observed": True, "interpreted": False}
+    # The sent payload didn't appear literally. In a JSON body, check whether the ONLY
+    # change was JSON-mandatory escaping (\ -> \\, NUL -> a backslash-u escape) — if so, the value was
+    # echoed opaquely (not interpreted). A real strip/truncation won't match this echo.
+    if json_body:
+        json_echo = sent.replace("\\", "\\\\").replace("\x00", "\\u0000")
+        if body[idx: idx + len(json_echo) + window].startswith(json_echo):
+            return {"observed": True, "interpreted": False}
+    return {"observed": True, "interpreted": True}
 
 
 def suggest_next(hits: list[dict]) -> list[str]:
