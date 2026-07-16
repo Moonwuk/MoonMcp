@@ -105,3 +105,23 @@ async def test_interp_probe_none_on_safe_endpoint(local_server, fresh_context):
     assert res["verdict"] == "none"
     assert res["corroborating_markers"] == 0
     assert res["suggested_next"] == []
+
+
+def test_assess_marker_json_escaping_not_interpreted():
+    # In a JSON response, a backslash is serialised as \\ and a NUL as the six chars
+    # backslash-u-0-0-0-0. That is mandatory JSON transport encoding, NOT value
+    # interpretation, so a plain JSON echo must not fire the backslash / null-byte markers.
+    markers = dict((n, t) for n, t, *_ in interpmod.MARKERS)
+    bs, nb = markers["backslash"], markers["null_byte"]
+
+    sent_bs = interpmod.build_probe("ctl123", bs)                    # ends with one backslash
+    body_bs = '{"echo":"' + sent_bs.replace("\\", "\\\\") + '"}'     # JSON-doubled backslash
+    assert interpmod.assess_marker("ctl123", bs, body_bs, json_body=True)["interpreted"] is False
+    assert interpmod.assess_marker("ctl123", bs, body_bs)["interpreted"] is True   # non-JSON still fires
+
+    sent_nb = interpmod.build_probe("ctl123", nb)                    # contains a raw NUL
+    body_nb = '{"echo":"' + sent_nb.replace("\x00", "\\u0000") + '"}'
+    assert interpmod.assess_marker("ctl123", nb, body_nb, json_body=True)["interpreted"] is False
+
+    body_strip = '{"echo":"ctl123"}'                                 # backslash gone entirely
+    assert interpmod.assess_marker("ctl123", bs, body_strip, json_body=True)["interpreted"] is True

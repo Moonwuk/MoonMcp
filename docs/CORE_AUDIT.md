@@ -97,19 +97,28 @@ true positive still detected).
   malformed-Expect twin was cleanly rejected with a 4xx (417 Expectation Failed is the
   RFC-compliant reply — normal, not desync).
 
-**Left as-is — needs an app-adaptive control, not a threshold (FN risk):**
-- `web/authz` sibling-sweep & multi-step chain — the honest way to suppress the
-  soft-200 FP is a negative control (does a *nonexistent* id also return an object?) or
-  differencing against the owner. But BOLA objects routinely share a template and
-  differ only in an id substring, so any similarity/differencing threshold that kills
-  the soft-200 FP also risks suppressing a **real** IDOR (demonstrated: the `_VulnApp`
-  test objects are ~0.95 similar). Correctly separating "returns distinct data per id"
-  (IDOR) from "returns the same body per id" (soft-200) needs per-app calibration from
-  labelled real-target data — deferred rather than trade a visible FP for an invisible FN.
-- `web/interp.assess_marker` — treating JSON-mandatory `\`/NUL escaping as "not
-  interpretation" needs the response **content-type** plumbed into the marker check (a
-  signature change to `assess_marker` + its caller), not a threshold; deferred to a
-  focused change so the escaping heuristic isn't weakened blindly for non-JSON bodies.
+**Tuned via a control / plumbing (3 more, follow-up):**
+- `web/interp.assess_marker` — now content-type aware: when the response is JSON, the
+  JSON-mandatory escapes of the marker chars (a backslash serialised as `\\`, a NUL as its backslash-u escape
+  a `` escape) are treated as transport encoding, not interpretation — so a plain JSON echo
+  no longer false-fires the backslash + null-byte markers into a spurious "corroborated".
+  A real strip/truncation in a JSON body is still detected; non-JSON behaviour unchanged.
+- `web/authz` sibling-sweep & multi-step chain — a **negative control** replaces the
+  fragile owner-differencing idea: the sweep reads a clearly-nonexistent id first; if the
+  endpoint returns an object-like body for an id that can't exist AND a neighbour body is
+  ~identical to it (`similar >= 0.99`), it's a soft-200 catch-all, not per-object data, so
+  those neighbours are suppressed. This is FN-safe — a real endpoint returns distinct data
+  per id (or 404 for the bogus id), so the `_VulnApp` IDOR still fires.
+- `web/authz` multi-step chain — **collection-aware id matching** closes the residual
+  same-numbered-but-unrelated FP. `extract_body_refs` now carries each exposed id's
+  *collection* (the JSON field's `_id` prefix, or the href path segment), and the chain
+  only injects an id into the URL's object slot when that collection is a generic
+  relationship pointer (`next`/`prev`/`parent`/… or a bare `id`) or names the **same**
+  collection as the slot (singular/plural-insensitive). A `product_id` pulled from an
+  `/orders/<id>` response no longer chains into `/orders/<product_id>` (a same-number
+  coincidence, not a chain). FN-safe: a real `order_id` / `next_id` still chains — the
+  test pair asserts `301` (same collection) fires while `205` (a foreign `product_id`
+  listed first, so an order-blind chain would grab it and stop) is suppressed.
 
 ---
 

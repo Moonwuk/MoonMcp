@@ -28,12 +28,21 @@ _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 # NB: the UUID alternative comes BEFORE \d{1,12} so a UUID's leading digits aren't
 # captured as a short numeric id.
 _BODY_ID_RE = re.compile(
-    r'"(?:id|[a-z0-9_]{0,24}_id|uuid|guid|ref|number)"\s*:\s*"?('
+    r'"(id|[a-z0-9_]{0,24}_id|uuid|guid|ref|number)"\s*:\s*"?('
     r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
     r'|\d{1,12})"?', re.I)
 _HREF_ID_RE = re.compile(
-    r'/[a-zA-Z][\w-]{1,40}/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+    r'/([a-zA-Z][\w-]{1,40})/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
     r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\d{1,12})')
+
+# A multi-step chain may only inject an owner-exposed id into the URL's object slot
+# when the id belongs to the SAME collection as that slot, or is a generic relationship
+# pointer (next/prev/parent/… or a bare id). A `product_id` pulled from an /orders/<id>
+# response and pushed back into /orders/<product_id> addresses a same-NUMBERED but
+# unrelated object — a false chained IDOR the sibling sweep would already cover if real.
+_GENERIC_COLLECTIONS = frozenset({
+    "", "next", "prev", "previous", "parent", "child", "sibling", "related", "self", "root",
+})
 
 
 @dataclass
@@ -93,15 +102,69 @@ def with_ref(url: str, ref: ObjectRef, new_value: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(newq), ""))
 
 
-def extract_body_refs(text: str, max_n: int = 20) -> list[str]:
-    """Object ids the owner's response exposes (to try as another identity)."""
+def _field_collection(field: str) -> str:
+    """Collection a JSON id field names: ``order_id`` → ``order``; a bare ``id`` /
+    ``uuid`` / ``guid`` / ``ref`` / ``number`` names no specific collection (generic)."""
 
-    out: list[str] = []
-    for rx in (_BODY_ID_RE, _HREF_ID_RE):
+    f = field.lower()
+    return f[:-3] if f.endswith("_id") else ""
+
+
+def _canon_collection(c: str) -> str:
+    """Canonical collection key for comparison: strip an ``_id`` suffix (or a bare
+    ``id``/``uuid``/… type name → generic ``""``), then singular/plural-fold
+    (``orders`` → ``order``). Reconciles the three namespaces we compare — a path
+    segment (``orders``), a query key (``order_id``) and a JSON field's collection
+    (``order``) — into one comparable key."""
+
+    c = c.lower()
+    if c.endswith("_id"):
+        c = c[:-3]
+    elif c in ("id", "uuid", "guid", "ref", "number"):
+        c = ""
+    return c[:-1] if len(c) > 1 and c.endswith("s") else c
+
+
+def _ref_collection(url: str, ref: ObjectRef) -> str:
+    """The collection the URL slot *ref* addresses: the path segment before a path id,
+    or the query key for a query id."""
+
+    parts = urlsplit(url)
+    kind, _, loc = ref.where.partition(":")
+    if kind == "path":
+        segs = parts.path.split("/")
+        idx = int(loc)
+        return segs[idx - 1] if 0 < idx < len(segs) else ""
+    return loc
+
+
+def _collection_compatible(body_coll: str, ref_coll: str) -> bool:
+    """May an id exposed under *body_coll* be tried in a URL slot of *ref_coll*? Yes when
+    *body_coll* is a generic relationship pointer (next/prev/parent/…), when EITHER side
+    is a generic id sink (a bare ``id``/``uuid`` field or a ``?id=`` query — the
+    collection is unknowable, so don't suppress), or when both name the SAME collection
+    (singular/plural- and ``_id``-insensitive). A ``product_id`` injected into
+    ``/orders/<id>`` is a collection mismatch and is rejected."""
+
+    if body_coll in _GENERIC_COLLECTIONS:
+        return True
+    b, r = _canon_collection(body_coll), _canon_collection(ref_coll)
+    return b == "" or r == "" or b == r
+
+
+def extract_body_refs(text: str, max_n: int = 20) -> list[tuple[str, str]]:
+    """Object ids the owner's response exposes, each paired with the COLLECTION it was
+    named under — the JSON field's ``_id`` prefix (``order_id`` → ``order``) or the
+    href's path segment (``/invoices/77`` → ``invoices``). The collection lets the
+    multi-step chain avoid injecting a same-numbered but unrelated id into the wrong slot."""
+
+    out: list[tuple[str, str]] = []
+    for rx, is_href in ((_BODY_ID_RE, False), (_HREF_ID_RE, True)):
         for m in rx.finditer(text or ""):
-            v = m.group(1)
-            if v not in out:
-                out.append(v)
+            name, value = m.group(1), m.group(2)
+            pair = (value, name.lower() if is_href else _field_collection(name))
+            if pair not in out:
+                out.append(pair)
                 if len(out) >= max_n:
                     return out
     return out
@@ -159,36 +222,63 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
 
     # Signal 2 — sibling sweep: walk the id space as the other identity.
     sweeper_name, sweeper_hdr = others[0]
+    # Negative control: read a clearly-NONEXISTENT id as the sweeper. If the endpoint
+    # returns an object-like body even for an id that can't exist, it serves a catch-all
+    # / soft-200 for every id — so a neighbour body that is ~identical to that control is
+    # NOT per-object data. Suppressing those kills the soft-200 false IDOR while a real
+    # endpoint (distinct data per id, 404 for a bogus id) is unaffected.
+    soft_body: bytes | None = None
+    num_ref = next((r for r in refs if r.kind == "numeric" and r.value.isdigit()), None)
+    if num_ref is not None:
+        bogus = str(int(num_ref.value) + 9_000_017)
+        rc = await fetch_as(with_ref(url, num_ref, bogus), headers=sweeper_hdr, suppress_auth=True)
+        if looks_like_object(rc.status, rc.body):
+            soft_body = rc.body
     for ref in refs:
         for sib in sibling_values(ref):
             swapped = with_ref(url, ref, sib)
             r = await fetch_as(swapped, headers=sweeper_hdr, suppress_auth=True)
-            if looks_like_object(r.status, r.body):
-                findings.append({
-                    "kind": "sibling_idor", "identity": sweeper_name, "url": swapped,
-                    "ref": ref.value, "reached": sib, "severity": "high", "verdict": "review",
-                    "detail": f"{sweeper_name} read object id={sib} (neighbour of {ref.value}) — "
-                              "horizontal IDOR / object enumeration; confirm it is another user's data",
-                })
-                break  # one neighbour hit per ref is enough signal
+            if not looks_like_object(r.status, r.body):
+                continue
+            if soft_body is not None and similar(soft_body, r.body) >= 0.99:
+                continue  # same body as a nonexistent id → soft-200 catch-all, not real data
+            findings.append({
+                "kind": "sibling_idor", "identity": sweeper_name, "url": swapped,
+                "ref": ref.value, "reached": sib, "severity": "high", "verdict": "review",
+                "detail": f"{sweeper_name} read object id={sib} (neighbour of {ref.value}) — "
+                          "horizontal IDOR / object enumeration; confirm it is another user's data",
+            })
+            break  # one neighbour hit per ref is enough signal
 
     # Signal 3 — multi-step chain: extract ids the OWNER exposes, access them as another identity.
     if a_ok and refs:
         url_vals = {r.value for r in refs}
-        owned = [v for v in extract_body_refs(a.text(limit=50_000)) if v not in url_vals][:max_refs]
         ref0 = refs[0]
+        ref0_coll = _ref_collection(url, ref0)
+        # Only chain ids that belong to ref0's collection (or a generic pointer); a
+        # same-numbered id from a DIFFERENT collection is an unrelated object, not a chain.
+        owned: list[str] = []
+        for v, coll in extract_body_refs(a.text(limit=50_000)):
+            if v in url_vals or v in owned or not _collection_compatible(coll, ref0_coll):
+                continue
+            owned.append(v)
+            if len(owned) >= max_refs:
+                break
         for name, hdr in others:
             for v in owned:
                 swapped = with_ref(url, ref0, v)
                 r = await fetch_as(swapped, headers=hdr, suppress_auth=True)
-                if looks_like_object(r.status, r.body):
-                    findings.append({
-                        "kind": "multistep_bola", "identity": name, "url": swapped,
-                        "owner_ref": v, "severity": "high", "verdict": "review",
-                        "detail": f"{name} accessed object id={v} that the owner's response exposed "
-                                  "— chained IDOR (owner response → cross-identity access)",
-                    })
-                    break
+                if not looks_like_object(r.status, r.body):
+                    continue
+                if soft_body is not None and similar(soft_body, r.body) >= 0.99:
+                    continue  # catch-all / soft-200 body, not a real chained object
+                findings.append({
+                    "kind": "multistep_bola", "identity": name, "url": swapped,
+                    "owner_ref": v, "severity": "high", "verdict": "review",
+                    "detail": f"{name} accessed object id={v} that the owner's response exposed "
+                              "— chained IDOR (owner response → cross-identity access)",
+                })
+                break
 
     return {
         "target": url, "refs_found": [{"value": r.value, "where": r.where} for r in refs],
