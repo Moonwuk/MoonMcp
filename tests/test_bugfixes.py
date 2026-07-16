@@ -181,8 +181,9 @@ async def test_exposure_empty_signature_soft404_not_confirmed():
     class _GitSite:                            # a REAL commit log (plain text) still confirms
         async def fetch(self, url, **kw):
             if url.endswith("/.git/logs/HEAD"):
+                # a real reflog line: <40-hex old-sha> <40-hex new-sha> <who> <ts> <action>
                 return _R(200, b"0000000000000000000000000000000000000000 "
-                               b"abc1234 Bob <b@x> 0 commit (initial)")
+                               b"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678 Bob <b@x> 0 commit (initial)")
             return _R(404, b"")
 
     res2 = await check_exposure(_GitSite(), "https://x.test/")

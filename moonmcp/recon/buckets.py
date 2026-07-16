@@ -30,9 +30,13 @@ _SUFFIXES = [
 # breach): a dump extension, or a dump/backup keyword in the key. <Key> is S3/GCS,
 # <Name> is Azure Blob.
 _KEY_TAG_RE = re.compile(r"<(?:Key|Name)>([^<]+)</(?:Key|Name)>", re.I)
+# Precise DB-dump signals only. The bare word alternatives (backup/dumps?/snapshot) were
+# removed: they escalated benign keys (`__snapshots__/Button.test.js.snap`, a photo under
+# `backup/`) to a CRITICAL "data breach". A real dump carries a dump extension or a
+# dump-tool name — and those keys still match.
 _BACKUP_KEY_RE = re.compile(
     r"(?i)(?:\.(?:sql|bak|dump|bson)(?:\.(?:gz|tar|tgz|zip|bz2|xz))?$|"
-    r"mongodump|mysqldump|pg_?dump|[-_/](?:backup|dumps?|snapshot|db[-_]?export))")
+    r"mongodump|mysqldump|pg_?dump|db[-_]?export)")
 
 
 def extract_dump_keys(listing_body: str) -> list[str]:

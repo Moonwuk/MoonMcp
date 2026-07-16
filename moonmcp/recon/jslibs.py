@@ -42,9 +42,32 @@ def _lib_pattern(name: str) -> str:
            rf"|{name}\s+v(\d+\.\d+\.\d+)")
 
 
-# (library, pattern, first-fixed version, CVEs, summary, severity). A small,
-# deliberately-curated set — see the module docstring on maintenance scope.
-_SIGNATURES: list[tuple[str, str, str, tuple[str, ...], str, str]] = [
+def _is_vulnerable(version: str, fixed: str | tuple[str, ...]) -> bool:
+    """Is *version* below its own branch's first-fixed version? *fixed* is a single
+    boundary, OR — for a library with parallel maintained lines (e.g. Bootstrap 3.4.x
+    backported the fixes into the 3.x line) — a tuple of per-major-branch fixes. A version
+    on a major line with a recorded fix is vulnerable iff it precedes that fix; a version
+    on an OLDER unfixed major is vulnerable; a version on a NEWER major (a later rewrite) is
+    not covered (patched)."""
+
+    vt = _v(version)
+    fixes = (fixed,) if isinstance(fixed, str) else tuple(fixed)
+    same_major = [f for f in fixes if _v(f)[0] == vt[0]]
+    if same_major:
+        return vt < _v(same_major[0])
+    return vt[0] < max(_v(f)[0] for f in fixes)
+
+
+def _applicable_fix(version: str, fixed: str | tuple[str, ...]) -> str:
+    fixes = (fixed,) if isinstance(fixed, str) else tuple(fixed)
+    same_major = [f for f in fixes if _v(f)[0] == _v(version)[0]]
+    return same_major[0] if same_major else fixes[-1]
+
+
+# (library, pattern, first-fixed version(s), CVEs, summary, severity). A small,
+# deliberately-curated set — see the module docstring on maintenance scope. `fixed` is a
+# single version, or a tuple of per-branch fixes for libraries with parallel lines.
+_SIGNATURES: list[tuple[str, str, str | tuple[str, ...], tuple[str, ...], str, str]] = [
     ("jQuery", _lib_pattern("jquery"), "3.5.0", ("CVE-2020-11022", "CVE-2020-11023"),
      "jQuery <3.5.0: .html()/.htmlPrefilter() can execute untrusted <option>/<script>-"
      "like markup passed to .html(), .append(), etc. — a DOM XSS sink.", "high"),
@@ -61,10 +84,11 @@ _SIGNATURES: list[tuple[str, str, str, tuple[str, ...], str, str]] = [
     ("Handlebars", _lib_pattern("handlebars"), "4.5.3", ("CVE-2019-19919",),
      "Handlebars <4.5.3: a prototype-pollution gadget via crafted templates "
      "({{__proto__}} lookup chains) that can lead to arbitrary code execution.", "high"),
-    ("Bootstrap", _lib_pattern("bootstrap"), "4.1.2", ("CVE-2018-14041", "CVE-2018-14042"),
-     "Bootstrap <4.1.2: XSS via the tooltip/popover/scrollspy data-target/"
-     "data-container attributes (untrusted HTML reaching the collapse/affix "
-     "targets).", "medium"),
+    ("Bootstrap", _lib_pattern("bootstrap"), ("3.4.0", "4.1.2"),
+     ("CVE-2018-14041", "CVE-2018-14042"),
+     "Bootstrap <3.4.0 (3.x) / <4.1.2 (4.x): XSS via the tooltip/popover/scrollspy "
+     "data-target/data-container attributes (untrusted HTML reaching the collapse/affix "
+     "targets). 3.4.0 backported the fixes into the 3.x line.", "medium"),
 ]
 
 _COMPILED = [(lib, re.compile(pat, re.IGNORECASE), fixed, cves, summary, sev)
@@ -82,9 +106,9 @@ def scan(source: str) -> list[dict]:
         if not m:
             continue
         version = next((g for g in m.groups() if g), None)
-        if not version or _v(version) >= _v(fixed):
+        if not version or not _is_vulnerable(version, fixed):
             continue
-        hits.append({"library": lib, "version": version, "fixed_version": fixed,
+        hits.append({"library": lib, "version": version, "fixed_version": _applicable_fix(version, fixed),
                     "cves": list(cves), "severity": sev, "summary": summary,
                     "source": source[:200]})
     return hits

@@ -99,6 +99,17 @@ def analyze_csp(policy: str) -> dict:
             src_dir, "high",
             "wildcard '*' script source — a script may be loaded from any origin"))
         penalty += 0.5
+    # A bare scheme source (`https:`, `ws:`, `wss:`, `filesystem:`) permits scripts from
+    # ANY host of that scheme — an attacker hosts malicious.js on any https origin and
+    # passes the policy. Same effective bypass as '*' (http: kept at medium below for its
+    # extra plaintext-downgrade nuance).
+    _any_host = [s for s in ("https:", "ws:", "wss:", "filesystem:") if s in script_lc]
+    if _any_host:
+        weaknesses.append((
+            src_dir, "high",
+            f"scheme-only source ({', '.join(_any_host)}) — a script may be loaded from "
+            "any host of that scheme"))
+        penalty += 0.5
     if any(s in ("data:", "blob:") for s in script_lc):
         weaknesses.append((
             src_dir, "high",

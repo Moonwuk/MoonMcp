@@ -35,9 +35,19 @@ _MULTI_SUFFIXES = frozenset({
     "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk",
     "com.au", "net.au", "org.au", "edu.au", "gov.au", "co.nz", "org.nz", "govt.nz",
     "co.jp", "or.jp", "ne.jp", "go.jp", "co.kr", "or.kr", "co.za", "org.za",
-    "com.br", "net.br", "gov.br", "com.cn", "net.cn", "org.cn", "gov.cn",
+    "com.br", "net.br", "gov.br", "org.br", "com.cn", "net.cn", "org.cn", "gov.cn",
     "co.in", "net.in", "org.in", "gov.in", "com.mx", "com.tr", "com.sg",
     "com.hk", "com.tw", "co.il", "com.ar", "com.ua", "com.ru", "com.pl",
+    # additional common two-label ccTLD suffixes (round-1's set omitted these, so
+    # example.org.br etc. derived base=org.br and generated candidate hosts under the
+    # public suffix). Not a full PSL — a curated extension of the frequent ones.
+    "co.id", "or.id", "web.id", "ac.id", "go.id", "com.ng", "org.ng", "gov.ng",
+    "co.ke", "or.ke", "com.my", "org.my", "gov.my", "com.ph", "net.ph",
+    "com.vn", "net.vn", "org.vn", "gov.vn", "co.th", "or.th", "ac.th", "go.th", "in.th",
+    "com.eg", "org.eg", "com.sa", "org.sa", "com.co", "net.co", "com.pk", "net.pk",
+    "org.pk", "gov.pk", "com.bd", "com.np", "com.gh", "co.tz", "co.ug", "com.kw",
+    "com.qa", "com.bh", "com.pe", "com.ve", "com.ec", "com.uy", "com.py", "com.do",
+    "com.gt", "com.pa", "com.sv", "com.ni", "com.hn", "com.lb",
 })
 
 

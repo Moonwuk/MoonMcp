@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from ..net.http import HttpClient
-from .waf_bypass import _BLOCK_SIGNS  # shared block-page body signatures
+from .waf_bypass import _BLOCK_SIGNS_STRONG  # WAF-discriminating block-page signatures
 
 # name -> list of (where, needle) signatures. where ∈ {header:<h>, cookie, server, body}
 _SIGNATURES: dict[str, list[tuple[str, str]]] = {
@@ -113,8 +113,11 @@ async def detect_waf(client: HttpClient, url: str, *, scope_check=None, active: 
             # body, not a 4xx status — so also match the block page's body signature.
             blocked = pr.status in (403, 406, 429, 501, 503, 999)
             if not blocked and pr.status is not None and pr.body:
+                # a non-block STATUS (e.g. 200) only counts as a block when the body
+                # carries a WAF-DISCRIMINATING token — not a generic 'forbidden'/'security
+                # policy' phrase that a benign page routinely contains.
                 low = pr.text(limit=20_000).lower()
-                blocked = any(s in low for s in _BLOCK_SIGNS)
+                blocked = any(s in low for s in _BLOCK_SIGNS_STRONG)
             if blocked:
                 result.blocked_probe = True
                 result.block_status = pr.status

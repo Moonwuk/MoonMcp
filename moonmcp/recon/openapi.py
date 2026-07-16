@@ -71,7 +71,8 @@ def parse_spec(content: str) -> dict:
     version = ("openapi:" + str(spec["openapi"])) if spec.get("openapi") else (
         "swagger:" + str(spec["swagger"]) if spec.get("swagger") else "unknown")
     info = spec.get("info") if isinstance(spec.get("info"), dict) else {}
-    global_security = bool(spec.get("security"))
+    _gsec = spec.get("security") or []
+    global_security = bool(_gsec) and not any(not req for req in _gsec)   # [{}] => optional auth
 
     schemes = {}
     comp = spec.get("components") if isinstance(spec.get("components"), dict) else {}
@@ -92,10 +93,14 @@ def parse_spec(content: str) -> dict:
             op = item.get(method)
             if not isinstance(op, dict):
                 continue
-            # An explicit (even empty) op-level `security` overrides the global
-            # requirement; `security: []` means the operation needs NO auth.
+            # An explicit op-level `security` overrides the global requirement. Per the
+            # OpenAPI spec an EMPTY list (`security: []`) OR a list containing an empty
+            # requirement object (`security: [{}]`, or `[{...}, {}]`) makes auth OPTIONAL —
+            # the endpoint is anonymously reachable. `bool([{}])` was True, so `[{}]` was
+            # wrongly marked auth-required and dropped from public_operations.
             if "security" in op:
-                has_security = bool(op.get("security"))
+                sec = op.get("security") or []
+                has_security = bool(sec) and not any(not req for req in sec)
             else:
                 has_security = global_security
             body_types = []

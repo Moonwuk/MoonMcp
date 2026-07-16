@@ -63,7 +63,10 @@ def assess_rtdb(status: int | None, body: str) -> dict | None:
     if status is None:
         return None
     low = (body or "").lower()
-    if status in (401, 403) or "permission denied" in low or '"error"' in low:
+    # A real Firebase deny is 401/403 or a body containing "Permission denied". The bare
+    # `"error"` key was too broad — an OPEN RTDB whose data has a top-level node named
+    # "error" (e.g. an app storing error logs at /error) was misread as protected (FN).
+    if status in (401, 403) or "permission denied" in low:
         return {"verdict": "protected", "severity": "info",
                 "detail": "RTDB rules deny anonymous read (Permission denied)."}
     if status == 200:
