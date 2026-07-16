@@ -124,7 +124,10 @@ def format_markdown(report: dict, *, generated_at: str | None = None) -> str:
             if f.get("detail"):
                 lines.append(f"{f['detail']}")
             if f.get("evidence"):
-                lines.append(f"> {f['evidence']}")
+                # Prefix EVERY line so multi-line (attacker-controlled) evidence stays
+                # inside the blockquote instead of injecting report structure.
+                ev = str(f["evidence"]).replace("\r\n", "\n").replace("\r", "\n")
+                lines.append("> " + ev.replace("\n", "\n> "))
             lines.append("")
 
     if not findings and not surface and not grades:

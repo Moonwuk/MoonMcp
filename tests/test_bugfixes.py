@@ -115,3 +115,129 @@ def test_memory_upsert_never_downgrades_curated_trust():
                body="scraped claim")
     assert i1 == i2                                              # same dedup key → upsert
     assert m.get(i1)["trust"] == "curated"                      # trust NOT downgraded
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Deep core bug-hunt (adversarial, multi-agent verified). Each test pins one
+# confirmed defect from the scope / http / config / recon core.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# [core #3] a scheme-less "user@host" authority must not smuggle a host past the
+# SSRF guard — normalize_target now strips userinfo the way urlsplit does for URLs.
+def test_scope_strips_userinfo_from_bare_authority():
+    from moonmcp import scope as sc
+    assert sc.normalize_target("user@169.254.169.254") == "169.254.169.254"
+    assert sc.normalize_target("user:pass@10.0.0.5:8080") == "10.0.0.5"
+    assert sc.normalize_target("bob@[::1]:443") == "::1"
+    assert sc.is_blocked_address(sc.normalize_target("user@169.254.169.254")) is True
+    s = ScopeManager(block_private=True)
+    assert s.evaluate("user@169.254.169.254")[0] is False                 # literal SSRF block fires
+    assert s.blocked_connect_reason("user@169.254.169.254") is not None   # connect guard fires
+
+
+# [core #18] blanking a safety flag (MOONMCP_BLOCK_PRIVATE=) must keep the safe
+# default, not silently disable it — an empty value now reads as "leave at default".
+def test_env_bool_empty_string_keeps_default(monkeypatch):
+    monkeypatch.setenv("MOONMCP_TEST_FLAG", "")
+    assert cfg._env_bool("MOONMCP_TEST_FLAG", True) is True
+    monkeypatch.setenv("MOONMCP_TEST_FLAG", "   ")
+    assert cfg._env_bool("MOONMCP_TEST_FLAG", True) is True
+    monkeypatch.setenv("MOONMCP_TEST_FLAG", "false")     # explicit falsey still disables
+    assert cfg._env_bool("MOONMCP_TEST_FLAG", True) is False
+
+
+# [core #23] an illegal CR/LF header value must yield a clean HttpResult(error=…),
+# never crash fetch() with an uncaught ValueError from http.client.
+def test_blocking_fetch_illegal_header_does_not_crash(local_server):
+    from moonmcp.net.http import _blocking_fetch
+    base, _ = local_server
+    res = _blocking_fetch(f"{base}/", "GET", {"X-Bad": "a\r\nInjected: 1"},
+                          None, 5.0, True, 4096)
+    assert res is not None                    # did not raise
+    assert res.status is None and res.error   # rejected gracefully
+
+
+# [core #5] an empty-signature VCS path returning a 200 HTML soft-404 must NOT be
+# confirmed as an exposed .git (the HTML guard now covers empty signatures too).
+@pytest.mark.asyncio
+async def test_exposure_empty_signature_soft404_not_confirmed():
+    from moonmcp.web.exposure import check_exposure
+
+    class _R:
+        def __init__(self, s, b):
+            self.status, self.body = s, b
+
+        def text(self, limit=None):
+            return self.body.decode()
+
+    class _SoftSite:
+        async def fetch(self, url, **kw):
+            return _R(200, b"<!doctype html><html><body>app shell</body></html>")
+
+    res = await check_exposure(_SoftSite(), "https://x.test/")
+    assert res.git_exposed is False
+    assert all(not e.confirmed for e in res.exposed)
+
+    class _GitSite:                            # a REAL commit log (plain text) still confirms
+        async def fetch(self, url, **kw):
+            if url.endswith("/.git/logs/HEAD"):
+                return _R(200, b"0000000000000000000000000000000000000000 "
+                               b"abc1234 Bob <b@x> 0 commit (initial)")
+            return _R(404, b"")
+
+    res2 = await check_exposure(_GitSite(), "https://x.test/")
+    assert res2.git_exposed is True
+
+
+# [core #19/#20] dedup keeps the higher-severity representative; clear() is
+# subdomain-aware (same host scope as list()).
+def test_findings_dedup_keeps_higher_severity_and_clear_is_subdomain_aware():
+    from moonmcp.findings import FindingsStore
+    fs = FindingsStore()
+    fs.add(target="acme.com", severity="low", title="Same finding", type="x")
+    fs.add(target="acme.com", severity="high", title="Same finding", type="x")
+    uniq = fs.unique()
+    assert len(uniq) == 1 and uniq[0].severity == "high"      # higher severity survives
+    fs.add(target="sub.acme.com", severity="medium", title="Sub finding", type="y")
+    assert fs.clear("acme.com") == 3                          # apex + subdomain findings
+    assert fs.list("acme.com") == []
+
+
+# [core #11] a malformed OIDC discovery doc with scalar (non-iterable) fields must
+# not crash the probe.
+def test_oidc_metadata_tolerates_scalar_fields():
+    from moonmcp.web.oauth import analyze_oidc_metadata
+    out = analyze_oidc_metadata({"response_types_supported": 1,       # int, not a list
+                                 "code_challenge_methods_supported": 5})
+    assert isinstance(out, list)                              # no TypeError
+
+
+# [core #35] language filter is an exact token match, not a substring.
+def test_techniques_by_language_is_exact_not_substring():
+    from moonmcp.knowledge import techniques as tk
+    # 'ava' is a substring of java/javascript but is not itself a language token.
+    assert tk.by_language("ava") == []
+
+
+# [core #34] a DDG uddg value is already decoded once — no second decode.
+def test_ddg_real_url_no_double_decode():
+    from moonmcp.intel.search import _real_url
+    href = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fx.com%2Fpath%253Fkeep&rut=abc"
+    assert _real_url(href) == "https://x.com/path%3Fkeep"    # literal %3F survives
+
+
+# [core #32] ModSecurity must not be fingerprinted on the generic phrase.
+def test_modsecurity_not_matched_on_generic_phrase():
+    from moonmcp.web import waf
+    assert ("body", "not acceptable") not in waf._SIGNATURES["ModSecurity"]
+
+
+# [core #9] registrable-domain derivation must handle multi-label public suffixes,
+# so origin discovery doesn't emit candidate hosts under the public suffix.
+def test_origin_registrable_base_handles_public_suffixes():
+    from moonmcp.recon.origin import _registrable_base
+    assert _registrable_base("example.com") == "example.com"
+    assert _registrable_base("sub.example.com") == "example.com"
+    assert _registrable_base("example.co.uk") == "example.co.uk"       # NOT "co.uk"
+    assert _registrable_base("sub.example.co.uk") == "example.co.uk"
+    assert _registrable_base("shop.example.com.au") == "example.com.au"

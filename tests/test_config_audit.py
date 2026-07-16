@@ -161,3 +161,10 @@ async def test_analyze_config_tool_reports_forge_chains():
         filename="web.config")
     chains = res["summary"]["forge_chains"]
     assert any(c["framework"] == "ASP.NET" for c in chains)
+
+
+def test_bind_all_not_flagged_inside_private_cidr():
+    a = analyze_config("allowlist=10.0.0.0/8\nrange=192.168.0.0/16", filename="a.env")
+    assert "bound to all interfaces" not in _issues(a)     # CIDR is not a bind-all
+    b = analyze_config("host=0.0.0.0", filename="b.env")
+    assert "bound to all interfaces" in _issues(b)         # a genuine bind-all still flags

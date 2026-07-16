@@ -5874,6 +5874,13 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
     host = normalize_target(target)
     ctx = get_context()
     raw = target.strip()
+    if "," in raw:
+        return errmod.err(
+            "invalid_target",
+            "target must be a single URL — a comma is a nuclei -u target-list separator "
+            "that would inject unvalidated (out-of-scope) scan targets past the scope guard.",
+            "Scan one target per call.",
+        )
     url = raw if "://" in raw else f"https://{host}"
     args = nucleimod.build_args(url, tags=tags, templates=templates, severity=severity, dast=dast)
     result = await cli.run_tool(

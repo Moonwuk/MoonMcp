@@ -18,10 +18,13 @@ def _env_bool(name: str, default: bool) -> bool:
     v = raw.strip().lower()
     if v in {"1", "true", "yes", "on", "y", "t", "enable", "enabled"}:
         return True
-    if v in {"0", "false", "no", "off", "n", "f", "disable", "disabled", ""}:
+    if v in {"0", "false", "no", "off", "n", "f", "disable", "disabled"}:
         return False
     # An unrecognised value must NOT silently disable a safety flag (enforce_scope /
     # block_private default True) — fall back to the default rather than flip to False.
+    # This includes the EMPTY string: `MOONMCP_BLOCK_PRIVATE=` reads as "leave at
+    # default", not "off" (unsetting and blanking must behave the same for a safety
+    # flag, so a stray empty env value can't quietly turn the SSRF guard off).
     return default
 
 

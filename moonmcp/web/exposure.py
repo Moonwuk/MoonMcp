@@ -63,8 +63,12 @@ async def check_exposure(client: HttpClient, base_url: str, *, scope_check=None)
         if r.status != 200 or not r.body:
             continue
         text = r.text(limit=8000)
-        # A soft-404 that returns 200 with an HTML page is not a real exposure.
-        if _looks_like_html(text) and signature not in ("<", ""):
+        # A soft-404 that returns 200 with an HTML page is not a real exposure. This
+        # applies to the EMPTY-signature entries too (/.git/logs/HEAD, /.svn/entries,
+        # /.hg/requires) — a real commit log / entries file is plain text, never an
+        # HTML document, so an HTML body there is a soft-404, not an exposed VCS file.
+        # (Previously empty signatures skipped this guard and were always confirmed.)
+        if _looks_like_html(text) and signature != "<":
             confirmed = False
         else:
             confirmed = (signature == "") or (signature in text) or (signature.encode() in r.body[:64])

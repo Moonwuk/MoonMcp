@@ -27,6 +27,28 @@ _ORIGIN_SUBS = [
     "test", "portal", "vpn", "remote", "backend", "api", "admin", "server",
 ]
 
+# Common multi-label public suffixes. When a host's last two labels form one of
+# these, the registrable domain keeps THREE labels (example.co.uk), not two —
+# otherwise the base derivation strips a real label and yields candidate hosts
+# under the public suffix (mail.co.uk), directing testing at unrelated domains.
+_MULTI_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au", "co.nz", "org.nz", "govt.nz",
+    "co.jp", "or.jp", "ne.jp", "go.jp", "co.kr", "or.kr", "co.za", "org.za",
+    "com.br", "net.br", "gov.br", "com.cn", "net.cn", "org.cn", "gov.cn",
+    "co.in", "net.in", "org.in", "gov.in", "com.mx", "com.tr", "com.sg",
+    "com.hk", "com.tw", "co.il", "com.ar", "com.ua", "com.ru", "com.pl",
+})
+
+
+def _registrable_base(apex: str) -> str:
+    """The registrable domain of *apex* — the label below its public suffix —
+    handling multi-label suffixes (example.co.uk stays example.co.uk, not co.uk)."""
+
+    labels = apex.split(".")
+    n = 3 if ".".join(labels[-2:]) in _MULTI_SUFFIXES else 2
+    return ".".join(labels[-n:]) if len(labels) >= n else apex
+
 
 @dataclass
 class OriginCandidate:
@@ -73,7 +95,7 @@ async def discover_origin(
         if san and san != host:
             candidate_hosts[san] = f"SAN:{san}"
     if "." in apex:
-        base = apex.split(".", 1)[1] if apex.count(".") >= 2 else apex
+        base = _registrable_base(apex)
         for sub in _ORIGIN_SUBS:
             candidate_hosts.setdefault(f"{sub}.{base}", f"subdomain:{sub}")
     mx = await resolve(apex, rdtypes=("MX",), http_client=client)

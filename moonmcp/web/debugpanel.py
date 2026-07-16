@@ -48,7 +48,11 @@ _PANELS: dict[str, tuple[str, list[str], str, str]] = {
         "Django Debug Toolbar", ["djDebug", "djdt"], "medium",
         "Django debug toolbar exposed — DEBUG=True in production"),
     "/console": (
-        "Werkzeug/Flask debugger", ["__debugger__", "Werkzeug Debugger", "The console"], "critical",
+        # Signatures must be Werkzeug-specific: the debugger serves a '__debugger__'
+        # JS token / 'Werkzeug Debugger' title. The generic phrase 'The console' was
+        # removed — any benign page at /console mentioning it would otherwise be
+        # reported as a CRITICAL confirmed pre-auth RCE.
+        "Werkzeug/Flask debugger", ["__debugger__", "Werkzeug Debugger"], "critical",
         "Werkzeug interactive debugger console — arbitrary code execution if the PIN "
         "is unset or known"),
     "/adminer.php": (

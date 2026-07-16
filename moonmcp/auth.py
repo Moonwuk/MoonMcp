@@ -11,7 +11,22 @@ are stripped on the anonymous leg of an access-control diff.
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass, field
+
+# A header carries a credential if its NAME hints at one. Used by redacted() so the
+# "safe-to-display" view masks credentials stored under any custom header name — not
+# just the three hard-coded ones (a bearer under X-Auth-Token / Api-Key / X-Session
+# would otherwise print in cleartext into model context / audit output).
+_CRED_NAME_RE = re.compile(
+    r"auth|token|secret|cookie|bearer|session|api[-_]?key|\bkey\b|csrf|hmac|"
+    r"signature|passw|credential|access[-_]?key",
+    re.IGNORECASE,
+)
+
+
+def _is_credential_header(name: str) -> bool:
+    return bool(_CRED_NAME_RE.search(name or ""))
 
 
 def _redact(value: str) -> str:
@@ -70,7 +85,7 @@ class AuthContext:
         return {
             "set": self.is_set(),
             "headers": {
-                k: (_redact(v) if k.lower() in ("authorization", "x-api-key", "cookie") else v)
+                k: (_redact(v) if _is_credential_header(k) else v)
                 for k, v in self.headers.items()
             },
             "cookies": {k: _redact(v) for k, v in self.cookies.items()},

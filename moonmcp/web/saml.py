@@ -68,7 +68,10 @@ def decode_response(raw: str) -> str:
     if text.startswith("<"):
         return text
     try:
-        decoded = base64.b64decode(text, validate=True)
+        # Strip whitespace first: a line-wrapped SAMLResponse (common on the wire)
+        # contains newlines that validate=True would reject, silently dropping the
+        # decode and skipping all XSW analysis (a false negative).
+        decoded = base64.b64decode("".join(text.split()), validate=True)
     except (ValueError, binascii.Error):
         return text
     return decoded.decode("utf-8", "replace")

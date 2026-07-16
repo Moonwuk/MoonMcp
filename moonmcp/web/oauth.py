@@ -42,6 +42,15 @@ class OidcResult:
     error: str | None = None
 
 
+def _as_list(v: object) -> list:
+    """Coerce an OIDC metadata field to a list. The spec says these fields are
+    arrays, but a malformed/hostile discovery document (fetched from the target's
+    ``.well-known/openid-configuration``) may send a scalar — iterating a bare int
+    raises TypeError and aborts the whole probe, so normalise to [] instead."""
+
+    return v if isinstance(v, list) else []
+
+
 def analyze_oidc_metadata(meta: dict) -> list[dict]:
     """Flag weak-posture indicators in an OIDC/OAuth discovery document (pure)."""
 
@@ -50,17 +59,17 @@ def analyze_oidc_metadata(meta: dict) -> list[dict]:
     def add(sev: str, issue: str, detail: str) -> None:
         out.append({"severity": sev, "issue": issue, "detail": detail})
 
-    rts = [str(r).lower() for r in (meta.get("response_types_supported") or [])]
+    rts = [str(r).lower() for r in _as_list(meta.get("response_types_supported"))]
     if any("token" in r for r in rts):  # 'token' / 'id_token token' => implicit flow
         add("medium", "implicit grant enabled",
             "response_types_supported offers the implicit flow (access token in the URL fragment)")
-    pkce = [str(m).lower() for m in (meta.get("code_challenge_methods_supported") or [])]
+    pkce = [str(m).lower() for m in _as_list(meta.get("code_challenge_methods_supported"))]
     if not pkce:
         add("medium", "PKCE not advertised",
             "no code_challenge_methods_supported — PKCE may be unsupported (auth-code interception)")
     elif "s256" not in pkce:
         add("medium", "PKCE downgradeable", f"only weak PKCE methods advertised: {pkce} (no S256)")
-    algs = [str(a).lower() for a in (meta.get("id_token_signing_alg_values_supported") or [])]
+    algs = [str(a).lower() for a in _as_list(meta.get("id_token_signing_alg_values_supported"))]
     if "none" in algs:
         add("high", "id_token signing alg 'none' allowed",
             "id_token_signing_alg_values_supported includes none — unsigned id_tokens accepted")

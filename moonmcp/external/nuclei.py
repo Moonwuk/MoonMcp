@@ -208,8 +208,16 @@ def intent_to_tags(intent: str) -> list[str]:
 
 def build_args(url: str, *, tags: str | None = None, templates: str | None = None,
                severity: str | None = None, dast: bool = False) -> list[str]:
-    """Assemble the nuclei argv (JSONL, silent, update-check off)."""
+    """Assemble the nuclei argv (JSONL, silent, update-check off).
 
+    *url* must be a single target. ``nuclei -u`` treats a comma as a target-LIST
+    separator, so a comma in the value would smuggle extra targets that the caller's
+    scope guard (which only validated the first host) never checked — refuse it.
+    """
+
+    if "," in url:
+        raise ValueError("nuclei target must be a single URL — a comma is a -u "
+                         "target-list separator that bypasses the scope guard")
     args = ["-u", url, "-jsonl", "-silent", "-duc"]
     tag_values = intent_to_tags(tags) if tags else []
     if tag_values:

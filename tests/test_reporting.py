@@ -27,3 +27,12 @@ def test_format_markdown_empty():
     md = format_markdown({"target": "x.com"})
     assert "No data collected" in md
     assert "authorised testing only" in md
+
+
+def test_format_markdown_multiline_evidence_stays_in_blockquote():
+    report = {"target": "x", "findings": [
+        {"severity": "high", "title": "T", "detail": "d",
+         "evidence": "line1\n## Injected Heading\nline3"}]}
+    md = format_markdown(report)
+    assert "\n## Injected Heading" not in md      # did not escape the blockquote
+    assert "> ## Injected Heading" in md          # quoted instead

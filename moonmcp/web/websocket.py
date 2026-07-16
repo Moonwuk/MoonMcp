@@ -219,7 +219,15 @@ async def _handshake(host: str, port: int, tls: bool, path: str, host_header: st
             timeout=timeout)
         writer.write(request)
         await writer.drain()
-        raw = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+        # Read until the end of the header block (or EOF) — a single read() can return
+        # just the 101 line when the Sec-WebSocket-* headers arrive in a later TCP
+        # segment, which would misparse a real WS endpoint as non-WS.
+        raw = b""
+        while b"\r\n\r\n" not in raw and len(raw) < 8192:
+            chunk = await asyncio.wait_for(reader.read(4096), timeout=timeout)
+            if not chunk:
+                break
+            raw += chunk
     except (OSError, asyncio.TimeoutError, ssl.SSLError) as exc:
         return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {exc}"}
     finally:

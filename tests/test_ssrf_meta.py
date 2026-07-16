@@ -93,3 +93,40 @@ def test_waf_detects_chinese_wafs():
     # SafeDog cookie signature is present and shaped correctly
     safedog = next(v for k, v in sig.items() if "SafeDog" in k)
     assert ("cookie", "safedog-flow-item") in safedog
+
+
+class _MetaResp:
+    def __init__(self, body):
+        self.status = 200
+        self._body = body
+
+    def text(self, limit=None):
+        return self._body
+
+
+class _MetaClient:
+    def __init__(self, body):
+        self._body = body
+
+    async def fetch(self, url, **kwargs):
+        return _MetaResp(self._body)
+
+
+@pytest.mark.asyncio
+async def test_single_generic_substring_does_not_confirm_metadata_leak():
+    # A benign page whose text merely contains ONE short generic signature
+    # ('hostname', 'region') must NOT raise a CRITICAL confirmed SSRF finding.
+    benign = await sm.probe_ssrf_metadata(
+        _MetaClient("could not resolve hostname for region xyz"),
+        "https://x.test/fetch", "url")
+    assert benign == []
+
+
+@pytest.mark.asyncio
+async def test_two_signatures_still_confirm_real_metadata_leak():
+    # A genuine token endpoint reflects both access_token AND token_type → confirmed.
+    real = await sm.probe_ssrf_metadata(
+        _MetaClient('{"access_token":"ya29.aBc","token_type":"Bearer","expires_in":3599}'),
+        "https://x.test/fetch", "url")
+    assert real, "a real >=2-signature metadata body must still confirm"
+    assert all(f["verdict"] == "confirmed" for f in real)

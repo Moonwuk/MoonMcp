@@ -469,8 +469,9 @@ def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
         findings.append(ConfigFinding("medium", key, "wildcard CORS / allowed hosts",
                                       f"permissive wildcard value ({v!r})"))
 
-    # Bind to all interfaces
-    if "0.0.0.0" in v or vlow == "::":
+    # Bind to all interfaces — anchor 0.0.0.0 so it isn't matched inside a larger
+    # dotted quad / CIDR (a benign "10.0.0.0/8" allowlist entry contains "0.0.0.0").
+    if re.search(r"(?<![\d.])0\.0\.0\.0(?![\d.])", v) or vlow == "::":
         findings.append(ConfigFinding("low", key, "bound to all interfaces",
                                       "service listens on 0.0.0.0 — ensure it's not unintentionally exposed"))
 

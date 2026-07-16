@@ -77,3 +77,12 @@ async def test_auth_tools_registered():
     for n in ("auth_set", "auth_clear", "authz_probe"):
         assert n in tools
     assert "access_control_check" not in tools   # folded into authz_probe(direct_only=/method=/body=)
+
+
+def test_redacted_masks_credential_header_under_any_name():
+    from moonmcp.auth import AuthContext
+    a = AuthContext()
+    a.update_headers({"X-Auth-Token": "supersecretvalue123", "User-Agent": "moonmcp/1.0"})
+    red = a.redacted()
+    assert red["headers"]["X-Auth-Token"] != "supersecretvalue123"   # credential masked
+    assert red["headers"]["User-Agent"] == "moonmcp/1.0"             # benign header visible

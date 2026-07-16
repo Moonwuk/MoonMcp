@@ -342,11 +342,20 @@ class MemoryStore:
             return self._filtered(rows, kind=kind, trust=trust, target=target)[:limit]
 
     def recent(self, limit: int = 50, kind: str | None = None) -> list[dict]:
+        n = max(1, min(limit, 500))
         with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM memory ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)
-            ).fetchall()
-        return [dict(r) for r in rows if not kind or dict(r)["kind"] == kind]
+            # Filter by kind IN SQL so LIMIT counts matching rows. Filtering after a
+            # bare LIMIT returned far fewer than `limit` (or zero) whenever the newest
+            # rows were of other kinds — the limit was spent on rows we then dropped.
+            if kind:
+                rows = self._db.execute(
+                    "SELECT * FROM memory WHERE kind=? ORDER BY id DESC LIMIT ?", (kind, n)
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT * FROM memory ORDER BY id DESC LIMIT ?", (n,)
+                ).fetchall()
+        return [dict(r) for r in rows]
 
     def stats(self) -> dict:
         with self._lock:

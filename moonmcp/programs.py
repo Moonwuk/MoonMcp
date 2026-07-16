@@ -36,6 +36,26 @@ def _slug(name: str) -> str:
     return _SAFE.sub("-", name.strip().lower()).strip("-") or "program"
 
 
+def _coerce_str_list(raw: dict, key: str) -> None:
+    """Coerce a persisted scope field to a clean ``list[str]`` in place.
+
+    A hand-edited or corrupt ``programs.json`` could store ``scope`` / ``scope_exclude``
+    as a bare string or ``null``. Without this, a string is iterated per-character when
+    the profile is applied (so ``scope_exclude="admin.example.com"`` excludes the
+    letters ``a``/``d``/``m``… and the intended host stays IN scope), and a ``null``
+    crashes ``build_context`` on ``for entry in scope``. Normalise both here."""
+
+    if key not in raw:
+        return
+    val = raw[key]
+    if isinstance(val, str):
+        raw[key] = [val] if val.strip() else []
+    elif isinstance(val, list):
+        raw[key] = [str(x) for x in val if str(x).strip()]
+    else:
+        raw[key] = []
+
+
 def parse_header(spec: str) -> tuple[str, str]:
     """Parse a ``"Name: value"`` header spec into ``(name, value)``.
 
@@ -112,6 +132,10 @@ class ProgramStore:
         except (OSError, ValueError):
             return
         for raw in data.get("programs", []):
+            if not isinstance(raw, dict):
+                continue
+            _coerce_str_list(raw, "scope")
+            _coerce_str_list(raw, "scope_exclude")
             try:
                 prog = Program(**{k: raw[k] for k in raw if k in Program.__dataclass_fields__})
             except TypeError:

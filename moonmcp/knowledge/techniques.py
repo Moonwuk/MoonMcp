@@ -68,9 +68,12 @@ def by_category(category: str) -> list[dict]:
 
 
 def by_language(language: str) -> list[dict]:
+    # Exact token match (like by_category) — a substring match returned techniques
+    # NOT written in the requested language ("go" matched "mongodb"/"django";
+    # "java" matched "javascript").
     lang = language.strip().lower()
     return [_index_entry(t) for t in TECHNIQUES
-            if any(lang in str(lang_).lower() for lang_ in t.get("languages", []))]
+            if any(lang == str(lang_).lower() for lang_ in t.get("languages", []))]
 
 
 def stats() -> dict:
