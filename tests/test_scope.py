@@ -143,3 +143,26 @@ def test_remove_entry():
     assert s.is_in_scope("example.com")
     assert s.remove("example.com")
     assert not s.is_in_scope("example.com")
+
+
+def test_resolve_pin_resolves_once_and_pins():
+    from moonmcp.scope import ScopeManager
+    # a public IP literal pins to itself
+    s = ScopeManager(block_private=True)
+    assert s.resolve_pin("93.184.216.34") == ("93.184.216.34", None)
+    # a private/metadata literal is blocked, no pin
+    ip, reason = s.resolve_pin("169.254.169.254")
+    assert ip is None and reason is not None
+    # a hostname resolving to a public IP pins to that address
+    pub = ScopeManager(block_private=True, resolver=lambda h: ["8.8.8.8"])
+    assert pub.resolve_pin("host.example") == ("8.8.8.8", None)
+    # a hostname that rebinds to a private IP is blocked
+    priv = ScopeManager(block_private=True, resolver=lambda h: ["127.0.0.1"])
+    ip2, r2 = priv.resolve_pin("rebind.example")
+    assert ip2 is None and r2 is not None
+    # block_private off: neither check nor pin (authorised internal testing)
+    off = ScopeManager(block_private=False, resolver=lambda h: ["127.0.0.1"])
+    assert off.resolve_pin("anything.example") == (None, None)
+    # blocked_connect_reason is the thin (reason-only) wrapper over resolve_pin
+    assert priv.blocked_connect_reason("rebind.example") is not None
+    assert pub.blocked_connect_reason("host.example") is None

@@ -10,6 +10,7 @@ Design goals:
 from __future__ import annotations
 
 import asyncio
+import http.client
 import ssl
 import time
 import urllib.error
@@ -120,11 +121,12 @@ def _blocking_fetch(
     timeout: float,
     verify_tls: bool,
     max_body: int,
+    pinned_ip: str | None = None,
 ) -> HttpResult:
     started = time.monotonic()
     req = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
     ctx = ssl.create_default_context() if verify_tls else _insecure_context()
-    opener = _build_opener(ctx)
+    opener = _build_opener(ctx, pinned_ip=pinned_ip)
     resp: HTTPResponse | None = None
     try:
         resp = opener.open(req, timeout=timeout)
@@ -200,18 +202,62 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
+def _pinned_handlers(
+    pinned_ip: str, ctx: ssl.SSLContext
+) -> tuple[urllib.request.BaseHandler, urllib.request.BaseHandler]:
+    """HTTP(S) handlers that connect the socket to *pinned_ip* while keeping the
+    URL's hostname for the ``Host`` header and TLS SNI / certificate verification.
+
+    Pinning the pre-validated IP closes the DNS-rebinding TOCTOU: the address the
+    SSRF guard checked is exactly the address we connect to, so a short-TTL attacker
+    can't rebind to loopback/metadata between the check and the connection."""
+
+    class _PinnedHTTPConnection(http.client.HTTPConnection):
+        def connect(self) -> None:
+            self.sock = self._create_connection(
+                (pinned_ip, self.port), self.timeout, self.source_address)
+            if self._tunnel_host:
+                self._tunnel()
+
+    class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            sock = self._create_connection(
+                (pinned_ip, self.port), self.timeout, self.source_address)
+            # Verify the cert against the real hostname (self.host), not the pinned IP.
+            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+    class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):  # noqa: ANN001
+            return self.do_open(_PinnedHTTPConnection, req)
+
+    class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):  # noqa: ANN001
+            return self.do_open(_PinnedHTTPSConnection, req,
+                                context=self._context, check_hostname=self._check_hostname)
+
+    return _PinnedHTTPHandler(), _PinnedHTTPSHandler(context=ctx)
+
+
+def _build_opener(ctx: ssl.SSLContext, *, pinned_ip: str | None = None) -> urllib.request.OpenerDirector:
     """An opener with ONLY http(s) handlers — never urllib's default FileHandler /
     FTPHandler / DataHandler, so a redirect (or crafted URL) to ``file://`` /
     ``ftp://`` / ``data:`` cannot smuggle a local-file read or a non-HTTP fetch past
-    the SSRF guard. Unknown schemes hit UnknownHandler → a clean URLError, not a crash."""
+    the SSRF guard. Unknown schemes hit UnknownHandler → a clean URLError, not a crash.
 
+    When *pinned_ip* is set, the http(s) handlers connect to that exact address
+    (DNS-rebinding guard); otherwise the standard handlers are used."""
+
+    if pinned_ip:
+        http_h, https_h = _pinned_handlers(pinned_ip, ctx)
+    else:
+        http_h = urllib.request.HTTPHandler()
+        https_h = urllib.request.HTTPSHandler(context=ctx)
     opener = urllib.request.OpenerDirector()
     for h in (
         urllib.request.ProxyHandler(),
         urllib.request.UnknownHandler(),
-        urllib.request.HTTPHandler(),
-        urllib.request.HTTPSHandler(context=ctx),
+        http_h,
+        https_h,
         urllib.request.HTTPDefaultErrorHandler(),
         _NoRedirect(),
         urllib.request.HTTPErrorProcessor(),
@@ -223,6 +269,19 @@ def _build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
 def _origin(u: str) -> tuple[str, str, int | None]:
     sp = urlsplit(u)
     return (sp.scheme.lower(), (sp.hostname or "").lower(), sp.port)
+
+
+def _will_use_proxy(scheme: str, host: str) -> bool:
+    """True if urllib would route a *scheme*://*host* request through a proxy — in
+    which case the socket connects to the proxy, not the target, so IP-pinning must
+    be skipped (the proxy becomes the egress-control point)."""
+
+    try:
+        if scheme not in urllib.request.getproxies():
+            return False
+        return not urllib.request.proxy_bypass(host)
+    except (KeyError, ValueError, OSError):
+        return False
 
 
 # Headers that must never be replayed to a different origin across a redirect.
@@ -239,16 +298,17 @@ class HttpClient:
         user_agent: str,
         default_timeout: float = 10.0,
         max_body: int = DEFAULT_MAX_BODY,
-        connect_guard: Callable[[str], str | None] | None = None,
+        connect_resolver: Callable[[str], tuple[str | None, str | None]] | None = None,
         auth_provider: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
         self._timeout = default_timeout
         self._max_body = max_body
-        # connect_guard(host) -> reason-if-blocked | None; applied to every hop
-        # (initial + each redirect) so no fetch reaches a private/internal IP.
-        self._connect_guard = connect_guard
+        # connect_resolver(host) -> (pinned_ip, reason). Applied to every hop (initial
+        # + each redirect): `reason` blocks a private/internal IP; `pinned_ip` is the
+        # pre-validated address we connect to, closing the DNS-rebinding TOCTOU.
+        self._connect_resolver = connect_resolver
         # auth_provider() -> engagement headers merged into every request unless
         # suppress_auth is set (e.g. the anonymous leg of an access-control diff).
         self._auth_provider = auth_provider
@@ -295,11 +355,13 @@ class HttpClient:
                 result.redirect_blocked = current
                 result.blocked_reason = reason
                 break
-            # SSRF connect-guard: resolve+check this hop's host before we touch it.
-            # The guard does a blocking getaddrinfo, so keep it off the event loop.
-            if self._connect_guard is not None:
+            # SSRF connect-guard: resolve this hop's host ONCE, block a private/
+            # reserved address, and pin the validated IP for the connection. The
+            # resolve does a blocking getaddrinfo, so keep it off the event loop.
+            pinned_ip: str | None = None
+            if self._connect_resolver is not None:
                 host = urlsplit(current).hostname or current
-                reason = await asyncio.to_thread(self._connect_guard, host)
+                pinned_ip, reason = await asyncio.to_thread(self._connect_resolver, host)
                 if reason is not None:
                     if result is None:  # the very first hop is blocked
                         return HttpResult(
@@ -310,6 +372,11 @@ class HttpClient:
                     result.redirect_blocked = current
                     result.blocked_reason = reason
                     break
+                # Only pin on a DIRECT connection. If a proxy will carry this request,
+                # the socket goes to the proxy (not the target), so pinning the target
+                # IP would be wrong — the proxy is then the egress-control point.
+                if pinned_ip and _will_use_proxy(scheme, host):
+                    pinned_ip = None
             async with self._gov:
                 result = await asyncio.to_thread(
                     _blocking_fetch,
@@ -320,6 +387,7 @@ class HttpClient:
                     timeout or self._timeout,
                     verify_tls,
                     max_body or self._max_body,
+                    pinned_ip,
                 )
             if not follow_redirects or result.status is None or not (300 <= result.status < 400):
                 break

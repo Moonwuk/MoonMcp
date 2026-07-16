@@ -74,7 +74,7 @@ def build_context(settings: Settings | None = None) -> AppContext:
         governor,
         user_agent=settings.user_agent,
         default_timeout=settings.timeout,
-        connect_guard=scope.blocked_connect_reason,
+        connect_resolver=scope.resolve_pin,
         auth_provider=_request_headers,
     )
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,

@@ -241,3 +241,44 @@ def test_origin_registrable_base_handles_public_suffixes():
     assert _registrable_base("example.co.uk") == "example.co.uk"       # NOT "co.uk"
     assert _registrable_base("sub.example.co.uk") == "example.co.uk"
     assert _registrable_base("shop.example.com.au") == "example.com.au"
+
+
+# ── DNS-rebinding: resolve-once, connect-by-pinned-IP ────────────────────────
+
+def test_blocking_fetch_pins_to_ip_regardless_of_hostname(local_server, monkeypatch):
+    # The HTTP client connects to the PINNED ip while keeping the URL hostname for
+    # the Host header — so a rebinding swap between check and connect can't move the
+    # socket. 'pinned.invalid' does not resolve; pinning to 127.0.0.1 must still reach
+    # the local server, proving the socket used the pinned address.
+    import json
+
+    from moonmcp.net import http as H
+    _base, port = local_server
+    for v in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("NO_PROXY", "*")
+    res = H._blocking_fetch(f"http://pinned.invalid:{port}/echo", "GET", {}, None,
+                            5.0, True, 65536, "127.0.0.1")
+    assert res.status == 200
+    assert json.loads(res.text())["host"].startswith("pinned.invalid")
+
+
+@pytest.mark.asyncio
+async def test_scan_ports_connects_to_pinned_host(local_server):
+    from moonmcp.net import ports as P
+    _base, port = local_server
+    res = await P.scan_ports("unresolvable.invalid", [port], timeout=2.0, connect_host="127.0.0.1")
+    assert res.host == "unresolvable.invalid"                       # display name preserved
+    assert any(s.port == port and s.open for s in res.open_ports)   # reached via the pinned IP
+
+
+def test_will_use_proxy_reads_env(monkeypatch):
+    from moonmcp.net.http import _will_use_proxy
+    for v in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+              "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(v, raising=False)
+    assert _will_use_proxy("http", "example.com") is False          # no proxy → pin allowed
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:8080")
+    assert _will_use_proxy("http", "example.com") is True           # proxied → skip pinning
+    monkeypatch.setenv("no_proxy", "example.com")
+    assert _will_use_proxy("http", "example.com") is False          # bypassed → pin allowed
