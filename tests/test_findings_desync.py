@@ -105,3 +105,22 @@ async def test_desync_probe_baseline_and_framing(raw_server, ctx_fixture):
     # The naive stdlib server ignores obfuscated TE (serves 200), which the probe
     # correctly surfaces as a review indicator — no CL.TE-dual false positive.
     assert not any("both Content-Length" in i for i in res.get("indicators", []))
+
+
+def test_interpret_modern_expect_ignores_clean_4xx_rejection():
+    from moonmcp.web.desync import interpret_modern
+    ok = {"outcome": "response", "status": 200}   # a usable baseline the fn requires
+    # valid Expect → 200, malformed Expect → clean 417 (RFC-compliant reject): NOT a signal
+    ind, _ = interpret_modern({
+        "control": ok,
+        "expect_100": {"outcome": "response", "status": 200},
+        "expect_malformed": {"outcome": "response", "status": 417},
+    })
+    assert not any("0.CL" in i for i in ind)
+    # but a malformed Expect PROCESSED differently (a 5xx, not a clean reject) IS a candidate
+    ind2, _ = interpret_modern({
+        "control": ok,
+        "expect_100": {"outcome": "response", "status": 200},
+        "expect_malformed": {"outcome": "response", "status": 501},
+    })
+    assert any("0.CL" in i for i in ind2)

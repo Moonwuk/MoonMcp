@@ -114,3 +114,13 @@ async def test_probe_reset_poison_no_reflection_no_finding():
 async def test_authflow_tools_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert {"response_leak_probe", "reset_poison_probe"} <= tools
+
+
+def test_scan_bare_code_needs_otp_context_nearby_not_anywhere():
+    # OTP wording present but FAR (>60 chars) from a bare order id → not flagged
+    # (the old "context anywhere in body" check false-positived on this).
+    far = '{"order_id":887766,"note":"' + "x" * 90 + '","help":"set up your 2fa code"}'
+    assert af.scan_response_leak(far) == []
+    # a bare code right next to the OTP wording is still flagged.
+    near = '{"msg":"Your verification code is 445566, it expires soon"}'
+    assert any(f["kind"] == "otp_code_in_body" for f in af.scan_response_leak(near))

@@ -254,8 +254,16 @@ def interpret_modern(probes: dict[str, dict]) -> tuple[list[str], str]:
         ind.append("Server answered without waiting for the declared Content-Length body — it "
                    "ignored Content-Length (CL.0 candidate); a CL-honouring peer in front would desync")
     e1, e2 = probes.get("expect_100", {}), probes.get("expect_malformed", {})
+    e2_status = e2.get("status")
+    # A 4xx (e.g. 417 Expectation Failed) is the RFC-compliant reply to a malformed
+    # Expect header, so valid-100 vs malformed-417 is NORMAL — not a desync signal.
+    # Only flag when the malformed twin was NOT cleanly rejected (it was processed
+    # differently, which is the 0.CL indicator).
+    malformed_clean_reject = (e2.get("outcome") == "response"
+                              and isinstance(e2_status, int) and 400 <= e2_status < 500)
     if (e1.get("outcome") == "response" or e2.get("outcome") == "response") and \
-            (e1.get("status"), e1.get("outcome")) != (e2.get("status"), e2.get("outcome")):
+            (e1.get("status"), e1.get("outcome")) != (e2.get("status"), e2.get("outcome")) and \
+            not malformed_clean_reject:
         ind.append("Expect: 100-continue handling diverges on a malformed twin "
                    "(`Expect: y 100-continue`) — 0.CL candidate (CVE-2025-32094 class)")
     # Compare the chunk-extension POST against a plain chunked POST (same method +

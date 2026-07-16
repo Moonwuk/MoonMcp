@@ -108,11 +108,17 @@ def extract_body_refs(text: str, max_n: int = 20) -> list[str]:
 
 
 def similar(a: bytes, b: bytes) -> float:
-    """Body similarity of the first 4 KiB (0..1)."""
+    """Body similarity (0..1). Compares the HEAD and the TAIL so a large shared static
+    shell (SPA skeleton / nav) in the leading bytes can't mask two objects that differ
+    only in the data below it — comparing head-4KiB alone collapsed such pairs to 1.0."""
 
     if not a or not b:
         return 0.0
-    return round(SequenceMatcher(None, a[:4096], b[:4096]).ratio(), 3)
+
+    def _sample(x: bytes) -> bytes:
+        return x[:4096] + x[-4096:] if len(x) > 8192 else x
+
+    return round(SequenceMatcher(None, _sample(a), _sample(b)).ratio(), 3)
 
 
 def looks_like_object(status: int | None, body: bytes) -> bool:

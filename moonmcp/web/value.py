@@ -107,6 +107,12 @@ async def probe_currency_swap(client, url: str, field: str, *, base_value: str =
     if base.status is None:
         return []
     blen = len(base.body)
+    # Negative control (mirrors probe_value_tampering): if a garbage currency is
+    # accepted like the base, the field doesn't validate the currency at all, so every
+    # swap would be a false "confusion" → bail. A real endpoint rejects the garbage.
+    ctrl = await _baseline(client, url, field, "moonmcp_zzz", m, scope_check)
+    if ctrl.status is not None and assess_tamper(base.status, blen, ctrl.status, len(ctrl.body)):
+        return []
     findings: list[dict] = []
     for cur in CURRENCY_SWAPS:
         if cur.upper() == base_value.upper():

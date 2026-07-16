@@ -114,3 +114,13 @@ async def test_nosqli_probe_intrusive_gated(local_server, fresh_context):
 async def test_nosqli_probe_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "nosqli_probe" in tools
+
+
+def test_assess_operator_status_flip_to_error_is_not_strong():
+    # A reproducible flip to a 4xx/5xx error means the operator reached the engine and
+    # was rejected/errored — a real (weak) signal, NOT an auth bypass, so not "strong".
+    control = (_r(200, 100), _r(200, 100))
+    twin = (_r(500, 100), _r(500, 100))
+    hit = nq.assess_operator(control, twin)
+    assert hit and hit["strong"] is False
+    assert any("200→500" in s for s in hit["reasons"])

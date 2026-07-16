@@ -121,21 +121,26 @@ def scan_response_leak(text: str) -> list[dict]:
                       "should reach the user out-of-band is exposed in-band → account takeover",
         })
 
-    if _OTP_CONTEXT_RE.search(text):
-        for m in _BARE_CODE_RE.finditer(text):
-            code = m.group(1)
-            key = ("code", code)
-            if key in seen or code in captured:
-                continue
-            seen.add(key)
-            findings.append({
-                "kind": "otp_code_in_body", "sample": _redact(code),
-                "severity": "medium", "verdict": "review",
-                "detail": f"a standalone {len(code)}-digit code appears in an OTP-context response "
-                          "body — likely an in-band one-time code; confirm it is the real OTP",
-            })
-            if sum(1 for f in findings if f["kind"] == "otp_code_in_body") >= 3:
-                break
+    for m in _BARE_CODE_RE.finditer(text):
+        code = m.group(1)
+        key = ("code", code)
+        if key in seen or code in captured:
+            continue
+        # Require an OTP-context word NEAR this code (within ~60 chars), not merely
+        # somewhere in the body — a bare 6-digit order id / timestamp far from a footer
+        # mention of "2FA" must not be reported as an in-band OTP.
+        ctx = text[max(0, m.start() - 60): m.end() + 60]
+        if not _OTP_CONTEXT_RE.search(ctx):
+            continue
+        seen.add(key)
+        findings.append({
+            "kind": "otp_code_in_body", "sample": _redact(code),
+            "severity": "medium", "verdict": "review",
+            "detail": f"a standalone {len(code)}-digit code appears next to OTP-context text in a "
+                      "response body — likely an in-band one-time code; confirm it is the real OTP",
+        })
+        if sum(1 for f in findings if f["kind"] == "otp_code_in_body") >= 3:
+            break
 
     return findings
 

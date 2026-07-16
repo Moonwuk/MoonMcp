@@ -75,9 +75,20 @@ async def test_value_tampering_suppressed_when_field_not_validated():
 
 @pytest.mark.asyncio
 async def test_currency_swap_flags_accepted():
-    client = _Seq(_R(200, "x" * 300), _R(200, "x" * 300))
+    # baseline USD accepted; garbage-currency CONTROL rejected (400 → the field validates);
+    # then real currency swaps accepted like the baseline → genuine currency confusion.
+    client = _SeqList([_R(200, "x" * 300), _R(400, "bad")] + [_R(200, "x" * 300)] * 20)
     res = await v.probe_currency_swap(client, "https://x.test/pay?currency=USD", "currency")
     assert res and all(f["kind"] == "currency_swap" for f in res)
+
+
+@pytest.mark.asyncio
+async def test_currency_swap_suppressed_when_field_not_validated():
+    # baseline AND garbage control both accepted-like-baseline → the field ignores the
+    # value entirely, so every swap would be a false "confusion" → no findings.
+    client = _Seq(_R(200, "x" * 300), _R(200, "x" * 300))
+    res = await v.probe_currency_swap(client, "https://x.test/pay?currency=USD", "currency")
+    assert res == []
 
 
 @pytest.mark.asyncio

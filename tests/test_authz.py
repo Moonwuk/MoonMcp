@@ -136,3 +136,15 @@ async def test_authz_probe_real_body_runs_direct_diff(fresh_context, local_serve
 async def test_authz_probe_tool_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "authz_probe" in tools
+
+
+def test_similar_compares_head_and_tail_not_just_first_4kib():
+    from moonmcp.web.authz import similar
+    # Two server-rendered pages: identical >4 KiB nav/shell, then a substantial block of
+    # DIFFERENT per-object data below it (total > 8 KiB so head+tail sampling engages).
+    shell = b"N" * 5000                                   # shared shell fills the first 4 KiB
+    a = shell + b"A" * 4000                               # object A's distinct data
+    b = shell + b"B" * 4000                               # object B's distinct data
+    assert similar(a[:4096], b[:4096]) == 1.0             # first-4KiB-only would call them identical
+    assert similar(a, b) < 0.9                            # head+tail sees the differing tail
+    assert similar(a, a) == 1.0                           # truly identical bodies still 1.0
