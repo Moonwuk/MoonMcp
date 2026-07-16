@@ -312,3 +312,21 @@ async def test_gate_pins_resolved_ip_for_raw_socket_probes(fresh_context):
         assert pin.connect_host("elsewhere.example") == "elsewhere.example"
     finally:
         pin.set_pin(None, None)
+
+
+# [session-hunt] a blanked permissive-capability flag must FAIL SAFE (off), not fall
+# through to its True default (which would silently enable intrusive/external tools).
+def test_env_bool_empty_disables_permissive_capability_flags(monkeypatch):
+    assert cfg._env_bool("MOONMCP_TEST_CAP", True, on_empty=False) is True    # unset → default
+    monkeypatch.setenv("MOONMCP_TEST_CAP", "")
+    assert cfg._env_bool("MOONMCP_TEST_CAP", True, on_empty=False) is False   # blank → off
+    monkeypatch.setenv("MOONMCP_TEST_CAP", "1")
+    assert cfg._env_bool("MOONMCP_TEST_CAP", True, on_empty=False) is True    # explicit on
+    # the real capability flags are wired fail-safe: blanking them disables the capability
+    monkeypatch.setenv("MOONMCP_ALLOW_INTRUSIVE", "")
+    monkeypatch.setenv("MOONMCP_ALLOW_EXTERNAL_TOOLS", "")
+    s = cfg.load_settings()
+    assert s.allow_intrusive is False and s.allow_external_tools is False
+    # a safety flag still keeps its safe default when blanked
+    monkeypatch.setenv("MOONMCP_BLOCK_PRIVATE", "")
+    assert cfg.load_settings().block_private is True

@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field
 
 
-def _env_bool(name: str, default: bool) -> bool:
+def _env_bool(name: str, default: bool, *, on_empty: bool | None = None) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -20,11 +20,14 @@ def _env_bool(name: str, default: bool) -> bool:
         return True
     if v in {"0", "false", "no", "off", "n", "f", "disable", "disabled"}:
         return False
-    # An unrecognised value must NOT silently disable a safety flag (enforce_scope /
-    # block_private default True) — fall back to the default rather than flip to False.
-    # This includes the EMPTY string: `MOONMCP_BLOCK_PRIVATE=` reads as "leave at
-    # default", not "off" (unsetting and blanking must behave the same for a safety
-    # flag, so a stray empty env value can't quietly turn the SSRF guard off).
+    if v == "":
+        # An empty value (`MOONMCP_X=`) means "unset" — resolve to the FAIL-SAFE value.
+        # For a safety flag (default True = safe) that's the default, so blanking can't
+        # turn the SSRF/scope guard off. For a permissive-default CAPABILITY flag
+        # (allow_intrusive / allow_external_tools default True) the fail-safe is OFF, so
+        # those pass on_empty=False — a blanked capability var must not silently ENABLE it.
+        return default if on_empty is None else on_empty
+    # An unrecognised non-empty value must NOT silently disable a safety flag — default.
     return default
 
 
@@ -110,7 +113,7 @@ def load_settings() -> Settings:
         enforce_scope=_env_bool("MOONMCP_ENFORCE_SCOPE", True),
         scope=_env_list("MOONMCP_SCOPE"),
         scope_exclude=_env_list("MOONMCP_SCOPE_EXCLUDE"),
-        allow_intrusive=_env_bool("MOONMCP_ALLOW_INTRUSIVE", True),
+        allow_intrusive=_env_bool("MOONMCP_ALLOW_INTRUSIVE", True, on_empty=False),
         block_private=_env_bool("MOONMCP_BLOCK_PRIVATE", True),
         timeout=_env_float("MOONMCP_TIMEOUT", 10.0),
         rate_limit=_env_float("MOONMCP_RATE_LIMIT", 20.0),
@@ -123,7 +126,7 @@ def load_settings() -> Settings:
         max_redirects=_env_int("MOONMCP_MAX_REDIRECTS", 5),
         shodan_api_key=os.environ.get("MOONMCP_SHODAN_API_KEY") or os.environ.get("SHODAN_API_KEY"),
         nvd_api_key=os.environ.get("MOONMCP_NVD_API_KEY") or os.environ.get("NVD_API_KEY"),
-        allow_external_tools=_env_bool("MOONMCP_ALLOW_EXTERNAL_TOOLS", True),
+        allow_external_tools=_env_bool("MOONMCP_ALLOW_EXTERNAL_TOOLS", True, on_empty=False),
         external_timeout=_env_float("MOONMCP_EXTERNAL_TIMEOUT", 300.0),
         screenshot_dir=os.environ.get("MOONMCP_SCREENSHOT_DIR", ""),
     )
