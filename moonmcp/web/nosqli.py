@@ -14,8 +14,9 @@ Two safe, benign lanes — no data is ever extracted:
    session ``Set-Cookie``, or materially more body). Both the bracket form
    (``param[$ne]=v`` — Express/qs, PHP auto-parse) and the JSON form
    (``{"param":{"$ne":null}}``) are sent.
-2. **``$where`` server-side-JS boolean oracle** — ``{"$where":"return true"}`` vs
-   ``{"$where":"return false"}``: a reproducible true≠false differential proves
+2. **``$where`` server-side-JS boolean oracle** — ``{"$where":"return 1==1"}`` vs
+   ``{"$where":"return 1==2"}`` (equal length, so a verbatim echo yields no differential):
+   a reproducible true≠false differential proves
    server-side JS evaluation. Boolean **only** — never ``sleep()``/busy-loop (that
    is a DoS-adjacent side effect handed to Strix), never char-by-char ``$regex``
    extraction (that is data exfil → NoSQLMap/Strix).
@@ -50,9 +51,14 @@ JSON_TWINS: list[tuple[str, object]] = [
     ("json:$gt", {"$gt": ""}),
 ]
 
-# $where server-side-JS boolean pair (JSON body). Boolean oracle ONLY.
-WHERE_TRUE: dict[str, str] = {"$where": "return true"}
-WHERE_FALSE: dict[str, str] = {"$where": "return false"}
+# $where server-side-JS boolean pair (JSON body). Boolean oracle ONLY. The two
+# expressions are EQUAL LENGTH ("return 1==1" / "return 1==2", 11 chars each) so an
+# endpoint that merely ECHOES the posted JSON produces no length differential —
+# without this, "return true"/"return false" differ by one byte and a pure reflection
+# faked a $where oracle (assess_where has no magnitude floor). Only real server-side
+# JS evaluation (true matches all rows, false none) yields a differential now.
+WHERE_TRUE: dict[str, str] = {"$where": "return 1==1"}
+WHERE_FALSE: dict[str, str] = {"$where": "return 1==2"}
 
 _JSON_HEADERS = {"Content-Type": "application/json"}
 

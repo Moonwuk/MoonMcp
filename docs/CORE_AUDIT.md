@@ -122,5 +122,39 @@ true positive still detected).
 
 ---
 
+## Precision audit — round 2 (2026-07)
+
+A second adversarial pass aimed squarely at **detection precision** — where a probe
+reaches a WRONG verdict: FP (a `confirmed`/high verdict on genuinely benign input) or
+FN (a genuine signal silently dropped or downgraded below actionable). A multi-agent
+sweep over the detector surface was cut short by a session limit (6 of 16 finder groups
+completed, 12 candidates), so **every candidate was verified by hand against the code**
+before any change. **7 fixed** (each FP+TP test pair, FN-safe) · **2 declined** (documented).
+
+### Fixed
+| Area | Defect | FP/FN |
+|------|--------|-------|
+| `web/authz._canon_collection` | the plural fold stripped only a single trailing `s`, so `companies`≠`company` — a real chained IDOR whenever the URL slot was an `-ies`/`-ses` plural (`/companies/`, `/categories/`, `/statuses/`) was silently dropped. Now folds `-ies→-y`, `-ses/-xes/-ches…`, then `-s`. | FN |
+| `web/ssrf_meta` AWS root | `iam` matched as an unanchored substring (`Miami`/`William`) and paired with the generic `hostname` to fake the ≥2-signature gate — anchored to the IMDS listing entry `iam/`. | FP |
+| `web/ssrf_meta` DigitalOcean | `interfaces`+`region` co-occur in ordinary prose — anchored both as quoted JSON keys (`"interfaces"`/`"region"`). | FP |
+| `web/ssrf_meta` Azure | required `client_id`, absent from the canonical **system-assigned** MSI token body, so a genuine credential leak fell below ≥2 — now `access_token`+`token_type` (the always-present pair, matching GCP/Yandex). | FN |
+| `web/ssrf_meta` k8s API-index | generic `"paths"`+`/healthz` confirmed off a reflected Swagger spec — now requires the k8s-discriminating quoted `"/apis"` array entry. | FP |
+| `web/nosqli.assess_where` | `return true`/`return false` differ by one byte, so a pure echo of the posted JSON manufactured a `$where` server-side-JS oracle — payloads made equal length (`return 1==1`/`return 1==2`), mirroring `secondorder`'s discipline. | FP |
+| `web/ormleak.assess_lookup` | the empty-prefix "all" (`""`) vs 17-char "none" (`CONTROL_NONE`) probes make a reflecting endpoint's body ~17 bytes longer, faking a filter differential for **every** hidden field — a reflection guard suppresses when the unlikely value is echoed (FN-safe: it matches no rows, so a real filter never surfaces it). | FP |
+| `server.second_order_sqli_probe` | fed `reflected=has_error` into `confirm.evaluate`, mis-casting a SQL error as reflection corroboration, so one transient DB error at the error-seed read reached `confirmed`/high — now feeds the actual **tag reflection**; a lone error is a `likely` lead, a reflected boolean-lane hit still confirms. | FP |
+| `web/crlf.assess` | the cookie marker matched as a substring, so a server that SAFELY strips the CR/LF but reflects the payload into another cookie's value raised a `confirmed` split — now matches the marker as a cookie **name** (`moonmcpcrlf=…`). | FP |
+| `web/authflow` reset-link | the bare words `verify`/`confirm`/`activate`/`magic` in any URL emitted `confirmed`/high, so a benign help/docs/CDN link was a confirmed ATO — a link is `confirmed` only when token-bearing (token/otp/code param, reset/set-password path, or JWT); a bare word is a `review` lead. | FP |
+
+### Declined — conservative by design (documented, not changed)
+- `web/nosqli.assess_operator` & `web/singlepacket.assess_race` both count only **2xx** as
+  "success", so a login/redemption whose success is a **3xx** redirect (PRG) is scored
+  weak / `no_race_signal` rather than strong. Expanding "success" to 3xx would flag the
+  opposite — *all requests redirected to an error/login* — as a hit, trading an FN for a
+  new FP the tool can't distinguish without reading `Location`. The status flip is still
+  surfaced (a `reason` / the status histogram), so the signal is not lost, only not
+  auto-escalated. Left deliberate.
+
+---
+
 *Verification method: every fixed finding above ships with a regression test that
 fails before the fix and passes after. Full suite green; ruff clean.*

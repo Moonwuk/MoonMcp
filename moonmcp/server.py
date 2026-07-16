@@ -2710,10 +2710,15 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
             oob_out = {"canary": cb.http_url, "token": cb.token,
                        "interaction_count": oast_count, "interactions": oh[:20]}
 
-    has_error = any(f["error_signatures"] for f in findings)
+    # Corroboration for the "confirmed" gate is the TAG being reflected at the sink (the
+    # stored value provably reached a second context) — NOT merely that a SQL error
+    # appeared. Mapping a lone error to `reflected` let one transient DB error at the
+    # error-seed read reach confirmed/high; a SQL error still contributes an injection
+    # hit (→ "likely"), but "confirmed" now needs the tag actually reflected.
+    tag_reflected = any(f.get("reflected") for f in findings)
     verdict = confirmmod.evaluate(
         injection_hits=["sqli/second-order" for _ in findings] + (["sqli/second-order-oob"] if oast_count else []),
-        reflected=has_error, status_changed=any(f["boolean_differential"] for f in findings),
+        reflected=tag_reflected, status_changed=any(f["boolean_differential"] for f in findings),
         oast_count=oast_count)
     out: dict[str, Any] = {"write": w_url, "reads": [r["url"] for r in reads], "tag": tag,
                            **verdict, "findings": findings}
@@ -5029,13 +5034,18 @@ async def orm_leak_probe(target: str, orm: str = "auto", base: str = "filter",
     async def _get(pname: str, value: str) -> tuple:
         u, b = _with_param(url, pname, value, m)
         r = await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
-        return (r.status, len(r.body))
+        # also report whether a non-empty value is echoed back (reflection guard below)
+        reflected = bool(value) and value.lower() in r.text(50_000).lower()
+        return (r.status, len(r.body)), reflected
 
     findings: list[dict] = []
     for family, label, pname in cands:
-        all_pair = (await _get(pname, ""), await _get(pname, ""))
-        none_pair = (await _get(pname, ormmod.CONTROL_NONE), await _get(pname, ormmod.CONTROL_NONE))
-        if ormmod.assess_lookup(all_pair, none_pair):
+        (a1, _ar1), (a2, _ar2) = await _get(pname, ""), await _get(pname, "")
+        (n1, nr1), (n2, nr2) = (await _get(pname, ormmod.CONTROL_NONE),
+                                await _get(pname, ormmod.CONTROL_NONE))
+        # If the unlikely value is reflected, the length differential is an echo, not an
+        # ORM filter — suppress rather than fire a high-severity leak on every field.
+        if ormmod.assess_lookup((a1, a2), (n1, n2), none_reflected=(nr1 or nr2)):
             findings.append({
                 "orm": family, "field": label, "param": pname,
                 "severity": "high", "verdict": "review",

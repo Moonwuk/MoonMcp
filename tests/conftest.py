@@ -102,9 +102,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _nosqli_reply(self, text: str, ctype: str):
         # DELIBERATELY VULNERABLE login: a plain scalar `user` is denied (401), but
-        # an operator OBJECT ($ne/$gt/$nin, or $where returning true) bypasses auth
-        # (200 + a session cookie + a longer "records" body). $where:false stays 401,
-        # giving the boolean oracle its differential.
+        # an operator OBJECT ($ne/$gt/$nin, or $where evaluating true) bypasses auth
+        # (200 + a session cookie + a longer "records" body). $where "return 1==2"
+        # (the false twin) stays 401, giving the boolean oracle its differential.
         from urllib.parse import parse_qs
         operator = where_false = False
         if "json" in ctype:
@@ -114,7 +114,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 v = None
             if isinstance(v, dict):
-                where_false = v.get("$where") == "return false"
+                where_false = v.get("$where") == "return 1==2"
                 operator = not where_false
         else:
             operator = any("[$" in k for k in parse_qs(text))

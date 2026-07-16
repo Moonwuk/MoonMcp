@@ -57,6 +57,17 @@ _LINK_RE = re.compile(
     r'[^\s"\'<>]*',
     re.I)
 
+# A matched link is a CONFIRMED in-band-secret leak only when it actually carries a
+# token component — a token/otp/code/… query param, a reset/set-password path, or a JWT.
+# A bare 'verify'/'confirm'/'activate'/'magic' word in an otherwise ordinary URL (a
+# help/docs/CDN link like https://help.site/verify-your-account) carries no secret, so it
+# is a lead ("review"), not a confirmed ATO — matching keeps it visible without crying wolf.
+_TOKEN_BEARING_RE = re.compile(
+    r'[?&](?:token|otp|code|passcode|secret|key|nonce|auth|jwt|t|k)=[^&\s]{4,}'
+    r'|reset[_-]?password|password[_-]?reset|/reset(?:[/?]|$)|set[_-]?password'
+    r'|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}',
+    re.I)
+
 # Only hunt bare numeric codes when the body clearly talks about an OTP.
 _OTP_CONTEXT_RE = re.compile(
     r'one[\s_-]?time|\botp\b|\bpasscode\b|\bpin\b|verification code|security code|'
@@ -114,12 +125,23 @@ def scan_response_leak(text: str) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        findings.append({
-            "kind": "reset_link_in_body", "sample": _redact(link),
-            "severity": "high", "verdict": "confirmed",
-            "detail": "a reset/verification link is returned in the response body — the token that "
-                      "should reach the user out-of-band is exposed in-band → account takeover",
-        })
+        token_bearing = bool(_TOKEN_BEARING_RE.search(link))
+        if token_bearing:
+            findings.append({
+                "kind": "reset_link_in_body", "sample": _redact(link),
+                "severity": "high", "verdict": "confirmed",
+                "detail": "a token-bearing reset/verification link is returned in the response body "
+                          "— the token that should reach the user out-of-band is exposed in-band → "
+                          "account takeover",
+            })
+        else:
+            findings.append({
+                "kind": "reset_link_in_body", "sample": _redact(link),
+                "severity": "medium", "verdict": "review",
+                "detail": "a verify/confirm/activate link appears in the response body but carries no "
+                          "token component — likely a benign help/docs/CDN link; confirm it does not "
+                          "expose an in-band verification secret",
+            })
 
     for m in _BARE_CODE_RE.finditer(text):
         code = m.group(1)
