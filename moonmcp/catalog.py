@@ -35,7 +35,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Queries third-party datasets / search engines about the target — no "
         "packets to the target itself.",
         [
-            "web_search", "web_read", "search_dorks",
+            "web_search", "web_read", "document_metadata_osint", "search_dorks",
             "enumerate_subdomains", "wayback_urls",
             "cve_lookup", "cve_search",
             "host_intel", "ip_intel", "reverse_ip",
