@@ -76,7 +76,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "logic_probe", "race_probe", "workflow_probe", "jwt_jku_probe",
             "nosqli_probe", "db_exposure", "second_order_sqli_probe", "orm_leak_probe",
             "fastjson_oast_probe", "ssrf_protocol_probe", "parser_diff_probe",
-            "graphql_nosqli",
+            "graphql_nosqli", "sspp_probe",
         ],
     )),
     ("orchestration", (

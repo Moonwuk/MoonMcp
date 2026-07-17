@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..net.http import HttpClient
+from . import shiro as shiromod
 
 # Passive fingerprints over ONE response: (product, where, needle). `where` is
 # "body", "cookie" (any Set-Cookie), or "header:<name>".
@@ -105,15 +106,30 @@ async def _probe_nacos(client, base, scope_check) -> dict | None:
 
 
 async def _probe_shiro(client, base, scope_check) -> dict | None:
-    r = await _fetch(client, base.rstrip("/") + "/", scope_check,
-                     headers={"Cookie": "rememberMe=1"})
+    root = base.rstrip("/") + "/"
+    r = await _fetch(client, root, scope_check, headers={"Cookie": "rememberMe=1"})
     setc = " ".join(r.get_all("set-cookie")).lower()
-    if "remembeme=deleteme" in setc or "rememberme=deleteme" in setc:
-        return {"product": "Apache Shiro", "severity": "medium", "verdict": "fingerprint",
-                "issue": "Apache Shiro rememberMe present",
-                "detail": "response set rememberMe=deleteMe → Shiro; test the default-key "
-                          "deserialization (Shiro-550, CVE-2016-4437) with Strix"}
-    return None
+    if not ("remembeme=deleteme" in setc or "rememberme=deleteme" in setc):
+        return None
+    # Shiro present and the rememberMe=deleteMe tell fires for a bad cookie → run the SAFE
+    # default-key oracle (a benign SimplePrincipalCollection encrypted under each default AES
+    # key; the key whose cookie is NOT rejected is the one in use). No gadget is ever sent.
+    async def _deletes(cookie: str) -> bool:
+        rr = await _fetch(client, root, scope_check, headers={"Cookie": f"rememberMe={cookie}"})
+        return "rememberme=deleteme" in " ".join(rr.get_all("set-cookie")).lower()
+
+    key = await shiromod.recover_key(_deletes)
+    if key:
+        return {"product": "Apache Shiro", "severity": "high", "verdict": "confirmed",
+                "issue": "Shiro-550 default rememberMe key recovered",
+                "detail": f"a benign SimplePrincipalCollection encrypted with the default AES key "
+                          f"'{key}' decrypted cleanly (no rememberMe=deleteMe) — CVE-2016-4437 "
+                          "deserialization RCE with a known key. Weaponize the gadget chain via Strix",
+                "recovered_key": key}
+    return {"product": "Apache Shiro", "severity": "medium", "verdict": "fingerprint",
+            "issue": "Apache Shiro rememberMe present",
+            "detail": "response set rememberMe=deleteMe → Shiro, but no key in the default list "
+                      "matched (custom key) — try a wider key list / Strix"}
 
 
 async def _probe_druid(client, base, scope_check) -> dict | None:
