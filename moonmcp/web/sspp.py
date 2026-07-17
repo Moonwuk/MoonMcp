@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import quote
 
 # The pollution vectors. Each carries the payload that SETS `json spaces` and the reversal
 # that restores it — the same path, value 10 then 0. `__proto__` is the primary root;
@@ -38,7 +39,20 @@ QUERY_VECTORS: list[tuple[str, str, str]] = [
     ("__proto__[query]", "__proto__[json spaces]=10", "__proto__[json spaces]=0"),
 ]
 
-_PRETTY_RE = re.compile(r'\n +[]"{\[]')   # a newline followed by indent spaces then a token
+# The `json spaces` value we inject (see POLLUTE_VECTORS / QUERY_VECTORS). 10 is Express's
+# max indent (JSON.stringify caps `spaces` at 10) and a value a benign app almost never sets,
+# so requiring EXACTLY this width in the polluted response ties the tell to our injection.
+INJECT_SPACES = 10
+# Any real indentation: a newline, ≥1 space, then a non-space. Catches every pretty form —
+# objects, string/object arrays, AND top-level arrays of primitives (lines start with a digit),
+# which a token-restricted class misses. Compliant JSON escapes newlines inside strings, so a
+# raw `\n`+indent only appears as formatting whitespace.
+_ANY_INDENT_RE = re.compile(r"\n +\S")
+# The indentation our pollution specifically produces, anchored at the DOCUMENT'S level-1
+# indent (the first line after the opening `{`/`[`): exactly INJECT_SPACES spaces. Anchoring
+# to level 1 distinguishes a width-INJECT_SPACES printer from a narrower one (width 2) whose
+# DEEPER levels could coincidentally reach INJECT_SPACES spaces.
+_INJECTED_INDENT_RE = re.compile(r"[\[{]\n {" + str(INJECT_SPACES) + r"}\S")
 
 
 def looks_json(body: str) -> bool:
@@ -50,26 +64,47 @@ def looks_json(body: str) -> bool:
     try:
         json.loads(body)
         return True
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):   # deeply-nested hostile body → RecursionError
         return False
 
 
 def is_pretty_printed(body: str) -> bool:
     """Does *body* carry the multi-space indentation an Express ``json spaces`` pollution
-    produces — newline + indent spaces between tokens — that a compact ``res.json()`` never
+    produces — newline + indent spaces before a token — that a compact ``res.json()`` never
     emits? (pure)"""
 
-    return looks_json(body) and bool(_PRETTY_RE.search(body or ""))
+    return looks_json(body) and bool(_ANY_INDENT_RE.search(body or ""))
+
+
+def has_injected_indent(body: str) -> bool:
+    """Is *body* pretty-printed at the *exact* width we injected (``INJECT_SPACES`` spaces at
+    level 1)? A benign pretty-printer at some other width (2/4) fails this, so it ties the
+    'polluted' state causally to our ``json spaces`` write rather than to ambient formatting
+    drift (a split load balancer, cache, or debug toggle). Anchored at the document start
+    (``.match``) so a nested bracket in a narrower doc can't coincidentally match. (pure)"""
+
+    s = (body or "").lstrip()
+    return looks_json(s) and bool(_INJECTED_INDENT_RE.match(s))
 
 
 def assess_transition(baseline: str, polluted: str, cleaned: str) -> bool:
     """SSPP is confirmed only by the full causal transition: a JSON response that is
-    **compact**, becomes **pretty-printed while polluted** (and larger), then returns to
-    **compact after cleanup**. Chance can't produce all three, so this is near-zero-FP (pure)."""
+    **compact**, becomes pretty-printed **at the width we injected** while polluted (and
+    larger), then returns to **compact after cleanup**. Requiring our specific indent width
+    (not merely 'pretty') excludes benign formatting drift, so this is near-zero-FP (pure)."""
 
     return (looks_json(baseline) and not is_pretty_printed(baseline)
-            and is_pretty_printed(polluted) and len(polluted) > len(baseline)
+            and has_injected_indent(polluted) and len(polluted) > len(baseline)
             and looks_json(cleaned) and not is_pretty_printed(cleaned))
+
+
+def encode_query(qs: str) -> str:
+    """Percent-encode a query-vector string so ``http.client`` accepts it (a raw space would
+    raise ``InvalidURL``), while keeping the qs bracket-nesting ``[`` / ``]``, ``=`` and ``&``
+    literal so Express's ``qs`` parser still reads the ``__proto__[json spaces]`` path — the
+    space becomes ``%20``, which ``qs`` decodes back to a space. (pure)"""
+
+    return quote(qs, safe="[]=&")
 
 
 _HIT_DETAIL = (
@@ -105,7 +140,7 @@ async def probe_sspp(client, url: str, *, read_url: str | None = None, scope_che
                            follow_redirects=False, timeout=12.0, scope_check=scope_check)
 
     async def _get_query(qs: str) -> None:
-        u = url + ("&" if "?" in url else "?") + qs
+        u = url + ("&" if "?" in url else "?") + encode_query(qs)
         await client.fetch(u, method="GET", follow_redirects=False, timeout=12.0, scope_check=scope_check)
 
     baseline = await _read()
