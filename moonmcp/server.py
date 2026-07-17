@@ -133,6 +133,7 @@ from .web import ssrf_meta as ssrfmetamod
 from .web import ssrf_protocol as sspmod
 from .web import stacks as stacksmod
 from .web import takeover as takeovermod
+from .web import unicode_bypass as ubmod
 from .web import value as valuemod
 from .web import waf as wafmod
 from .web import waf_bypass as wafbypassmod
@@ -5054,6 +5055,55 @@ async def parser_diff_probe(target: str, param: str, method: str = "POST") -> di
             "reflective": utf7_base.has_canary or j_base.has_canary,
             "note": None if lanes else
             "no scored parser differential observed (or endpoint does not echo the parameter)"}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def unicode_bypass_probe(target: str, param: str = "q", method: str = "GET",
+                               dry_run: bool = False) -> dict:
+    """**Unicode-normalization WAF bypass** — a filter-bypass *multiplier*, detection-only.
+    A WAF/validator sees the raw request bytes, but the app often normalizes input afterwards
+    (Unicode **NFKC** or ASCII **case-fold**); when they disagree, a harmless-looking char
+    collapses into a dangerous ASCII one server-side — e.g. fullwidth `＜` (U+FF1C) → `<`, so a
+    filter blocking `<script>` never sees the `<`. Injects benign single test chars wrapped in
+    a unique canary (`<canary><char><canary>`) into `param` and reports each char the server
+    normalized: the ASCII form (or its HTML-entity) reflected **between the canaries** — where
+    only the raw Unicode char was sent — proves the transform (chance can't place it). Punctuation
+    collapses (`＜＞＂＇／＼（；．`) are **high** (a real XSS/injection/traversal bypass); letter
+    collapses (`ſ`→`s`, `ﬀ`→`ff`, Kelvin `K`→`k`) are **medium** (keyword smuggling). Delivers
+    nothing executable and extracts nothing; weaponizing a confirmed normalization is Strix's
+    job. Best against a parameter the endpoint echoes. `dry_run=True` previews the payloads.
+    Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    m = method.upper()
+    if dry_run:
+        return dryrunmod.preview(
+            probe="unicode_bypass_probe", target=url, method=m, param=param,
+            payloads=ubmod.payloads(),
+            note="each value wraps one Unicode char in a canary; a normalized reflection between "
+                 "the canaries = server-side normalization (nothing executable is sent)")
+
+    res = await ubmod.probe_unicode(get_context().http, url, param=param, method=m,
+                                    scope_check=_scope_check())
+    if not res["reflective"]:
+        return {"target": url, "param": param, "method": m, "verdict": "not_reflective",
+                "confidence": "low", "findings": [],
+                "note": f"the endpoint did not reflect our canary in `{param}` — reflection-based "
+                        "normalization detection needs an echoing parameter",
+                "suggested_next": []}
+
+    findings = res["findings"]
+    verdict = confirmmod.evaluate(
+        injection_hits=[f"unicode-norm/{f['vector']}" for f in findings],
+        reflected=res["dangerous"], status_changed=False)
+    result = {"target": url, "param": param, "method": m, **verdict, "findings": findings,
+              "note": None if findings else
+              "no Unicode-normalization differential observed on this parameter"}
+    result["suggested_next"] = nextstepmod.after("unicode_bypass_probe", result.get("verdict"))
+    return result
 
 
 @mcp.tool()
