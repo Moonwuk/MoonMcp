@@ -161,7 +161,8 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 - Sources: gm7.org, freebuf.com/vuls, y4er.com, github.com/SkyBlueEternal, cnblogs pursue-security, Threekiii/Vulnerability-Wiki, qkl.seebug.org.
 
 ### 🇷🇺 Russia / CIS (Habr / Xakep)
-- **1C-Bitrix** ❌ (TOP RU gap) — fingerprint (`/bitrix/js/`, `BITRIX_SM_` cookies, `/bitrix/tools/composite_data.php`); vuln paths `/bitrix/admin/`, license disclosure, vote-module CVE-2022-27228, `html_editor_action.php` unauth SSRF (→ OAST), FPD. Source: itsoft.ru, Habr/RUVDS, STAR Labs CVE-2023-1714/1719, github.com/k1rurk/check_bitrix.
+- **1C-Bitrix** 🟡 (SSRF SHIPPED) — fingerprint (`/bitrix/js/`, `BITRIX_SM_` cookies, `/bitrix/tools/composite_data.php`); vuln paths `/bitrix/admin/`, license disclosure, vote-module CVE-2022-27228, `html_editor_action.php` unauth SSRF (→ OAST), FPD. Source: itsoft.ru, Habr/RUVDS, STAR Labs CVE-2023-1714/1719, github.com/k1rurk/check_bitrix.
+  - ✅ **SHIPPED:** `stack_probe`'s `_probe_bitrix` now flags the unauth `composite_data.php` sessid leak (the SSRF prerequisite), and the new `bitrix_ssrf_probe` (intrusive, OAST) confirms the `html_editor_action.php` `action=uploadfile` `tmp_url` SSRF by a callback. Remaining: vote-module CVE-2022-27228 RCE + license/FPD scrape → Strix.
 - **ClickHouse `/play`** ❌ — ports 8123/9000; `GET :8123/?query=SELECT%201` unauth = critical; `/play` SQL console. (Wiz DeepSeek leak was exactly this.) Source: wiz.io/blog/wiz-research-uncovers-exposed-deepseek-database-leak.
 - **CIS takeover fingerprints** 🟡 — add to `web/takeover.py`: Yandex Object Storage (`website.yandexcloud.net` → `NoSuchBucket`), VK Cloud (`hb.bizmrg.com`), Selectel (`selcdn.ru`).
 

