@@ -116,6 +116,7 @@ from .web import graphql as graphqlmod
 from .web import graphqldeep as gqldeepmod
 from .web import graphqli as gqlimod
 from .web import grpcprobe as grpcmod
+from .web import http2 as http2mod
 from .web import inject as injectmod
 from .web import interp as interpmod
 from .web import jwt as jwtmod
@@ -520,7 +521,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~170. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~171. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist
@@ -1788,6 +1789,55 @@ async def grpc_probe(target: str, base_path: str = "", dry_run: bool = False) ->
     # suggest a follow-up only when something was actually surfaced (reflection/health).
     result["suggested_next"] = nextstepmod.after(
         "grpc_probe", "confirmed" if result.get("findings") else "none")
+    return result
+
+
+@mcp.tool()
+@active_tool()
+async def http2_probe(target: str) -> dict:
+    """**HTTP/2 surface** — the confirmable **h2c cleartext-upgrade / smuggling** check plus an
+    HTTP/2 DoS advisory, detection-only. Sends one benign `Upgrade: h2c` request; a `101 Switching
+    Protocols` means the edge honours a cleartext HTTP/2 upgrade — if a reverse proxy fronts the
+    origin, requests can be tunnelled over the h2c stream to **bypass the proxy's path/method ACLs**
+    (Bishop Fox h2c smuggling). No request is ever smuggled past an ACL — confirming the bypass is
+    Strix's job. Also reuses the TLS **ALPN** result to report whether the host speaks `h2`, and
+    (for any HTTP/2 host) attaches the DoS-CVE advisory — Rapid Reset (CVE-2023-44487) and the
+    CONTINUATION flood (CVE-2024-27316) — which can't be confirmed without flooding (never done),
+    so they are advisory only. In scope only.
+    """
+
+    from urllib.parse import urlsplit
+
+    raw = target.strip()
+    if "://" not in raw:
+        raw = "https://" + raw
+    sp = urlsplit(raw)
+    host = sp.hostname or ""
+    if not host:
+        return {"error": "invalid_target", "detail": f"no host in {target!r}"}
+    tls = sp.scheme.lower() in ("https", "wss", "h2")
+    try:
+        port = sp.port or (443 if tls else 80)
+    except ValueError:
+        port = 443 if tls else 80
+    path = (sp.path or "/") + (f"?{sp.query}" if sp.query else "")
+    host_header = host if port in (80, 443) else f"{host}:{port}"
+
+    ctx = get_context()
+    timeout = max(4.0, ctx.settings.timeout)
+    alpn = await asyncio.to_thread(tlsmod._probe_alpn, host, port, timeout) if tls else []
+    server = None
+    try:
+        r = await ctx.http.fetch(raw, method="GET", follow_redirects=False, scope_check=_scope_check())
+        server = r.header("server")
+    except Exception:  # noqa: BLE001 - a header fetch failure must not abort the h2c probe
+        pass
+
+    result = await http2mod.probe_http2(host, port, tls, path, host_header=host_header,
+                                        timeout=timeout, alpn=alpn, server=server)
+    result["target"] = raw
+    result["suggested_next"] = nextstepmod.after(
+        "http2_probe", "confirmed" if result.get("findings") else "none")
     return result
 
 
