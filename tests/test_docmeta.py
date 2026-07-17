@@ -62,9 +62,31 @@ def _exif_tiff():
     return header + ifd0 + software + gps_ifd + lat_data + lon_data
 
 
+def _exif_bad_gps():
+    # hostile TIFF: a legit Software tag PLUS a GPS-pointer (0x8825) crafted with type=LONG count=2
+    # so its size is 8 (>4) => the parser takes the value field AS the offset (voff = u32(inline)).
+    # We set that inline dword to 0xFFFFFFFF so the GPS-IFD dereference reads far out of bounds.
+    software = b"MoonCam\x00"
+    ifd0_start = 8
+    ifd0_size = 2 + 2 * 12 + 4
+    software_off = ifd0_start + ifd0_size
+    header = b"II" + struct.pack("<HI", 0x2A, ifd0_start)
+    e_sw = struct.pack("<HHI", 0x0131, 2, len(software)) + struct.pack("<I", software_off)
+    e_gps = struct.pack("<HHI", 0x8825, 4, 2) + struct.pack("<I", 0xFFFFFFFF)
+    ifd0 = struct.pack("<H", 2) + e_sw + e_gps + struct.pack("<I", 0)
+    return header + ifd0 + software
+
+
 def _jpeg(tiff):
     app1 = b"Exif\x00\x00" + tiff
     return b"\xff\xd8\xff\xe1" + struct.pack(">H", len(app1) + 2) + app1 + b"\xff\xd9"
+
+
+def _png_exif(tiff):
+    def chunk(ctype, payload):
+        return struct.pack(">I", len(payload)) + ctype + payload + struct.pack(">I", 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", b"\x00" * 13)
+            + chunk(b"eXIf", tiff) + chunk(b"IEND", b""))
 
 
 def _png_text(key, val):
@@ -154,6 +176,40 @@ def test_ooxml_rejects_doctype_xxe():
     out = dm.extract(buf.getvalue())
     assert "author" not in out["metadata"]                 # DOCTYPE part refused
     assert out["metadata"].get("company") == "Acme"        # clean part still parsed
+
+
+def test_ooxml_rejects_doctype_past_scan_window():
+    # a DTD pushed past any fixed byte-prefix scan window (via a long leading comment) must STILL
+    # be refused — the guard scans the whole member, not just the first few KiB.
+    pad = "<!-- " + "A" * 9000 + " -->"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("word/document.xml", "<x/>")
+        z.writestr("docProps/core.xml",
+                   '<?xml version="1.0"?>' + pad +
+                   '<!DOCTYPE x [<!ENTITY e "boom">]>'
+                   '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/'
+                   'metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                   '<dc:creator>&e;</dc:creator></cp:coreProperties>')
+        z.writestr("docProps/app.xml", '<Properties xmlns="http://schemas.openxmlformats.org/'
+                   'officeDocument/2006/extended-properties"><Company>Acme</Company></Properties>')
+    out = dm.extract(buf.getvalue())
+    assert "author" not in out["metadata"]                 # DOCTYPE part refused despite the pad
+    assert out["metadata"].get("company") == "Acme"        # clean part still parsed
+
+
+def test_malformed_exif_gps_pointer_never_crashes():
+    # a hostile GPS-IFD pointer must not crash EXIF parsing (struct.error on an OOB deref) and must
+    # NOT discard tags already collected before the GPS block (a real doc with a bad GPS block).
+    bad = _exif_bad_gps()
+    jm = dm.parse_jpeg(_jpeg(bad))
+    assert jm["software"] == "MoonCam" and "gps" not in jm
+    pm = dm.parse_png(_png_exif(bad))
+    assert pm["software"] == "MoonCam" and "gps" not in pm
+    # and the top-level extract() (called outside fetch_and_extract's try/except) stays a dict
+    out = dm.extract(_jpeg(bad))
+    assert isinstance(out, dict) and out["metadata"].get("software") == "MoonCam"
 
 
 def test_ooxml_malformed_zip_never_crashes():

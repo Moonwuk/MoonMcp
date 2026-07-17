@@ -146,16 +146,17 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 > Druid / Weaver / Seeyon / Yonyou / ClickHouse) plus deterministic unauth checks:
 > **ThinkPHP** invokefunction RCE (benign md5 echo), **Nacos** UA auth bypass,
 > **Shiro** rememberMe tell, **Druid** monitor exposure, **1C-Bitrix** admin,
-> unauthenticated **ClickHouse** HTTP. Remaining below: Fastjson-OAST, the full OA
-> suite, Actuator `/env`+heapdump parse, CN WAF signatures, EHole corpus, ICP recon.
+> unauthenticated **ClickHouse** HTTP. Fastjson-OAST (`fastjson_oast_probe`) and
+> Actuator `/env`+heapdump (`actuator_probe`) since SHIPPED; remaining below: the full
+> OA suite, CN WAF signatures, EHole corpus, ICP recon.
 
 ### 🇨🇳 China (FreeBuf / Seebug / AnQuanKe)
 - **Apache Shiro-550** (CVE-2016-4437) ✅ (SHIPPED) — `moonmcp/web/shiro.py` + the `stack_probe` Shiro path: `rememberMe=1` → `rememberMe=deleteMe` fingerprint, then a **safe key oracle** — a benign `SimplePrincipalCollection` AES-CBC-encrypted under each of ~24 public default keys; the key whose cookie is NOT rejected (no `deleteMe`) is recovered, with a garbage-key negative control so an endpoint that stopped emitting the tell can't false-fire. Reports the recovered key; the gadget chain → Strix. No exploit is ever sent.
-- **Fastjson/Jackson autoType** (CVE-2017-18349, CVE-2022-25845) ❌ — POST `{"@type":"java.net.Inet4Address","val":"<oast>"}` (+ evasion twins) → **OAST DNS callback**.
-- **ThinkPHP 5 RCE** (CVE-2018-20062/CVE-2019-9082) ❌ — GET `?s=/index/\think\app/invokefunction&function=call_user_func_array&vars[0]=md5&vars[1][]=moonmcp` → deterministic md5 echo (benign proof).
-- **Nacos auth bypass** (CVE-2021-29441) ❌ — `User-Agent: Nacos-Server` on `/nacos/v1/auth/users` returns 200 JSON.
+- **Fastjson/Jackson autoType** (CVE-2017-18349, CVE-2022-25845) ✅ (SHIPPED) — `fastjson_oast_probe` (intrusive, OAST) POSTs `{"@type":"java.net.Inet4Address","val":"<oast>"}` + evasion twins → **OAST DNS/HTTP callback** confirms the autoType deser.
+- **ThinkPHP 5 RCE** (CVE-2018-20062/CVE-2019-9082) ✅ (SHIPPED) — `stack_probe`'s `_probe_thinkphp`: GET `?s=/index/\think\app/invokefunction&function=call_user_func_array&vars[0]=md5&vars[1][]=moonmcp` → deterministic md5 echo (benign proof).
+- **Nacos auth bypass** (CVE-2021-29441) ✅ (SHIPPED) — `stack_probe`'s `_probe_nacos`: `User-Agent: Nacos-Server` on `/nacos/v1/auth/users` returns 200 JSON.
 - **OA suite** ❌ (CNVD/Seebug, PoC-verified): Yonyou NC `bsh.servlet.BshServlet`/`NCFindWeb`; Weaver e-cology `WorkflowServiceXml`; Seeyon `getSessionList.jsp`; Tongda `ispirit/*` upload+LFI; Landray `custom.jsp` SSRF + `treexml.tmpl`.
-- **Druid monitor unauth** ❌ — `/druid/index.html` → `/druid/websession.json` leaks live sessions.
+- **Druid monitor unauth** ✅ (SHIPPED) — `stack_probe`'s `_probe_druid`: `/druid/index.html` → `/druid/websession.json` live-session leak (high) vs monitor-only (medium).
 - **Spring Actuator `/heapdump` + `/env`** ✅ (SHIPPED) — `actuator_probe` parses `/env` for unmasked secret-named properties, confirms `/heapdump` by the HPROF magic via a bounded 64-byte read, reads `/mappings`, and enumerates Jolokia (`/jolokia/version` + `/list`) flagging RCE-capable MBeans without invoking them (Boot 1.x + 2/3). Detection-only; weaponization → Strix.
 - **CN WAF fingerprints** ❌ — add to `web/waf.py` `_SIGNATURES`: SafeDog (`safedog-flow-item` cookie), Yunsuo (`yunsuo_session`), Jiasule/ChuangYu (`jiasule-waf`), 360 (`qianxin-waf`), Yunjiasu (`yunjiasu-nginx`), BaoTa (`宝塔网站防火墙` block page), D-Shield. Source: wafw00f + hacking8.com.
 - Sources: gm7.org, freebuf.com/vuls, y4er.com, github.com/SkyBlueEternal, cnblogs pursue-security, Threekiii/Vulnerability-Wiki, qkl.seebug.org.
@@ -163,7 +164,7 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 ### 🇷🇺 Russia / CIS (Habr / Xakep)
 - **1C-Bitrix** 🟡 (SSRF SHIPPED) — fingerprint (`/bitrix/js/`, `BITRIX_SM_` cookies, `/bitrix/tools/composite_data.php`); vuln paths `/bitrix/admin/`, license disclosure, vote-module CVE-2022-27228, `html_editor_action.php` unauth SSRF (→ OAST), FPD. Source: itsoft.ru, Habr/RUVDS, STAR Labs CVE-2023-1714/1719, github.com/k1rurk/check_bitrix.
   - ✅ **SHIPPED:** `stack_probe`'s `_probe_bitrix` now flags the unauth `composite_data.php` sessid leak (the SSRF prerequisite), and the new `bitrix_ssrf_probe` (intrusive, OAST) confirms the `html_editor_action.php` `action=uploadfile` `tmp_url` SSRF by a callback. Remaining: vote-module CVE-2022-27228 RCE + license/FPD scrape → Strix.
-- **ClickHouse `/play`** ❌ — ports 8123/9000; `GET :8123/?query=SELECT%201` unauth = critical; `/play` SQL console. (Wiz DeepSeek leak was exactly this.) Source: wiz.io/blog/wiz-research-uncovers-exposed-deepseek-database-leak.
+- **ClickHouse `/play`** 🟡 (HTTP query SHIPPED) — `stack_probe`'s `_probe_clickhouse` already flags the unauth `GET :8123/?query=SELECT%201` = critical; **remaining:** the `/play` SQL-console UI signal. Ports 8123/9000. (Wiz DeepSeek leak was exactly this.) Source: wiz.io/blog/wiz-research-uncovers-exposed-deepseek-database-leak.
 - **CIS takeover fingerprints** 🟡 — add to `web/takeover.py`: Yandex Object Storage (`website.yandexcloud.net` → `NoSuchBucket`), VK Cloud (`hb.bizmrg.com`), Selectel (`selcdn.ru`).
 
 ### Recon multipliers
@@ -187,7 +188,7 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 
 - **Server-side prototype pollution** ✅ (SHIPPED) — `moonmcp/web/sspp.py` + the `sspp_probe` tool (intrusive): pollutes the Express `json spaces` setting via `{"__proto__":{"json spaces":10}}` (and a `constructor.prototype` and `?__proto__[json spaces]=10` query variant) and confirms only by the full **causal transition** — a `res.json()` body that is compact, becomes pretty-printed while polluted, then compact again after the probe restores `json spaces` to 0 (always reverts, no lingering pollution). Weaponizing the sink → Strix. Source: portswigger.net/research/server-side-prototype-pollution.
 - **Parser differentials (JSON / multipart / charset)** ✅ (SHIPPED) — `web/parserdiff.py` + the `parser_diff_probe` tool (intrusive). Pairs a canonical request with quirk-twins carrying one inert canary: **decode** lanes (UTF-7 `+AG0-` / overlong-UTF-8 `%C1%AD` reflected back as plain text ⇒ the app applied the transform) and **tolerance** lanes (duplicate JSON keys, JSON comments, trailing commas, duplicate multipart fields *accepted* while a blatantly-invalid control is *rejected* ⇒ a lax-parser surface, with first-wins/last-wins precedence named). Detection-only — delivers nothing executable; smuggling a real payload through the confirmed differential → Strix. Diff canonical vs quirk-twin. Source: WAFFLED (arXiv 2503.10846), bishopfox.com/blog/json-interoperability-vulnerabilities.
-- **HTTP/2 CONTINUATION flood** ❌ (CVE-2024-27316 family) — **detect passively**: ALPN `h2` + `Server` version → CVE matrix; never flood. Source: kb.cert.org/vuls/id/421644.
+- **HTTP/2 CONTINUATION flood** ✅ (SHIPPED, advisory) — `http2_probe` detects passively: ALPN `h2` (+ the confirmable **h2c cleartext-upgrade / smuggling** signal) and maps `Server` version → the CONTINUATION/Rapid-Reset DoS-CVE matrix (CVE-2024-27316, CVE-2023-44487); never floods. Source: kb.cert.org/vuls/id/421644.
 - **Client-side prototype pollution** ✅ (SHIPPED) — `web/cspp.py` + the `cspp_probe` tool. Loads `__proto__`/`constructor.prototype` bracket+dotted paths (in both query and hash) in MoonMCP's **own ephemeral headless browser** and reads `Object.prototype[<marker>]` back; a clean baseline confirms the marker isn't natural, so a read-back of the exact sentinel is a definitive confirm. Safe by design — the pollution lands in our throwaway Chromium, never the target server; gadget→DOM-XSS chaining → Strix. Source: portswigger.net/web-security/prototype-pollution/client-side · github.com/BlackFan/client-side-prototype-pollution.
 
 ---
@@ -270,8 +271,8 @@ NetScaler `ns.conf` LDAP passwords use **hardcoded keys common to all appliances
 
 ## 🌎 Latin America & Iberia (DragonJAR/ElevenPaths 🇪🇸 · Conviso/H2HC/Tempest 🇧🇷)
 
-### LATAM-1. FOCA-style public-document metadata OSINT ❌ (biggest clean recon gap)
-Harvest a target's public PDF/DOCX/XLSX → extract authors, internal usernames, local/UNC paths, printer/host names, software versions, internal IPs. Chema Alonso's FOCA tradition; still under-automated. Source: es.wikipedia.org/wiki/FOCA_Tool · dragonjar.org · elladodelmal.com. **Mapping:** new passive `doc_metadata_osint` — reuse `wayback` + `filetype:` dorks → parse via stdlib (`zipfile` for OOXML `docProps/core.xml`, PDF `/Author`/`/Producer`, EXIF) → usernames → `memory_add` (untrusted), versions → CVE mapper.
+### LATAM-1. FOCA-style public-document metadata OSINT ✅ (SHIPPED)
+Harvest a target's public PDF/DOCX/XLSX → extract authors, internal usernames, local/UNC paths, printer/host names, software versions, internal IPs. Chema Alonso's FOCA tradition; still under-automated. Source: es.wikipedia.org/wiki/FOCA_Tool · dragonjar.org · elladodelmal.com. **SHIPPED:** `moonmcp/web/docmeta.py` + the `document_metadata_osint` tool (passive OSINT, block-private SSRF still applies) — stdlib parse of OOXML `docProps/core.xml`+`app.xml` (XXE/DTD-hardened, member-capped), PDF `/Info`+XMP, JPEG EXIF/GPS and PNG text/eXIf → authors / usernames / internal paths / software → classify. Remaining: auto-harvest via `wayback`+`filetype:` dorks feeding it, and versions → CVE mapper.
 
 ### LATAM-2. ExifTool image-upload blind RCE ❌ (active, OAST) — CVE-2021-22204 / GitLab CVE-2021-22205
 Upload endpoints that run ExifTool server-side are RCE-able via a DjVu ANT annotation reaching Perl `eval`. Source: convisoappsec.com (BR) · devcraft.io. **Mapping:** new intrusive `upload_probe` — discover multipart endpoints (`crawl`/`openapi`), send a benign JPEG whose embedded payload is an OS callback to `oast_selfhost` → OAST hit = `confirmed` (callback-only, no shell). Also passive `ExifTool`/`Perl` error strings. **No file-upload detector exists today.**
