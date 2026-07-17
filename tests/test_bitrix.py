@@ -19,6 +19,17 @@ def test_extract_sessid_from_composite_data_body():
     assert bx.extract_sessid("") is None
 
 
+def test_extract_sessid_no_false_positive_on_suffix_tokens():
+    # a quoted hex after an unrelated token that merely ENDS in "sessid" must not forge a leak
+    assert bx.extract_sessid("phpsessid='deadbeefcafe0000deadbeefcafe0000'") is None
+    assert bx.extract_sessid("myphpsessid = 'deadbeefcafe0000deadbeefcafe0000'") is None
+    # uppercase cookie names never match the (case-sensitive) token
+    assert bx.extract_sessid("PHPSESSID='deadbeefcafe0000deadbeefcafe0000'") is None
+    # but the canonical spelling and a clean standalone `sessid` still resolve
+    assert bx.extract_sessid("bitrix_sessid:'0011223344556677'") == "0011223344556677"
+    assert bx.extract_sessid('{"sessid":"0011223344556677"}') == "0011223344556677"
+
+
 def test_build_upload_multipart_shape():
     body, ct = bx.build_upload_multipart("abc123def4567890", "http://cnry.oast.test/t")
     text = body.decode()

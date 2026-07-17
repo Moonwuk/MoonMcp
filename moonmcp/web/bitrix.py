@@ -20,7 +20,11 @@ COMPOSITE_DATA_PATH = "/bitrix/tools/composite_data.php"
 HTML_EDITOR_PATH = "/bitrix/tools/html_editor_action.php"
 
 # composite_data.php echoes the anonymous session token (bitrix_sessid) into its JS body.
-_SESSID_RE = re.compile(r"(?:bitrix_sessid|sessid)['\"]?\s*[:=]\s*['\"]([0-9a-fA-F]{16,64})['\"]")
+# The bare `sessid` alternative is word-boundary-guarded so a quoted hex after an unrelated
+# token that merely *ends* in "sessid" (e.g. `phpsessid='...'`) can't forge a false leak; the
+# canonical `bitrix_sessid` spelling still matches wholesale via the first alternative.
+_SESSID_RE = re.compile(
+    r"(?:bitrix_sessid|(?<![a-z_])sessid)['\"]?\s*[:=]\s*['\"]([0-9a-fA-F]{16,64})['\"]")
 
 _BOUNDARY = "----MoonBitrixBoundary7f3a91"
 
