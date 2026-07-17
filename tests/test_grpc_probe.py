@@ -66,6 +66,15 @@ def test_decode_body_grpc_web_text_is_base64():
     assert gp.decode_body(raw, "application/grpc-web+proto") == raw
 
 
+def test_decode_body_handles_per_frame_padding():
+    # some servers flush each frame as its own padded base64 segment; a single b64decode would
+    # stop at the first '=' and drop later frames — decode_body must recover all of them
+    a, b = _grpc_web(0)[:5], b"trailerbytes"
+    concatenated = base64.b64encode(a) + base64.b64encode(b)
+    assert base64.b64encode(a).endswith(b"=")            # mid-stream padding present
+    assert gp.decode_body(concatenated, "application/grpc-web-text") == a + b
+
+
 def test_extract_service_names():
     payload = _reflection_response(["grpc.health.v1.Health", "acme.orders.v1.Orders"])
     assert gp.extract_service_names(payload) == ["grpc.health.v1.Health", "acme.orders.v1.Orders"]
@@ -86,7 +95,9 @@ class _R:
         self._ct = content_type
 
     def headers_map(self):
-        return {"content-type": self._ct}
+        # Title-Case on purpose — Go net/http / nginx emit canonical `Content-Type`, and
+        # HttpResult.headers_map() preserves wire case; the probe must lowercase before lookup.
+        return {"Content-Type": self._ct}
 
     def text(self, limit=None):
         return (self.body or b"").decode("latin-1", "replace")
@@ -154,6 +165,49 @@ async def test_probe_grpc_detected_no_reflection():
 async def test_probe_not_grpc():
     res = await gp.probe_grpc(_NotGrpcApp(), "https://x.test")
     assert res["is_grpc"] is False and res["verdict"] == "not_grpc"
+
+
+def _grpc_web_text(status_code, data=b""):
+    """A grpc-web-TEXT body: each frame flushed as its own padded base64 segment."""
+    out = base64.b64encode(gp.frame_message(data)) if data else b""
+    trailer = f"grpc-status:{status_code}\r\ngrpc-message:\r\n".encode()
+    return out + base64.b64encode(gp.frame_message(trailer, trailer=True))
+
+
+class _TextReflectionApp:
+    """Reflection-enabled server speaking grpc-web-TEXT with a Title-Case Content-Type — the
+    combination the review flagged as misclassified not_grpc (header case + per-frame base64)."""
+
+    async def fetch(self, url, *, method="POST", body=None, headers=None, **kw):
+        ct = "application/grpc-web-text"
+        if gp.REFLECTION_V1ALPHA in url:
+            return _R(200, _grpc_web_text(0, _reflection_response(["acme.v1.Orders"])), content_type=ct)
+        return _R(200, _grpc_web_text(12), content_type=ct)
+
+
+@pytest.mark.asyncio
+async def test_probe_grpc_web_text_titlecase_header():
+    res = await gp.probe_grpc(_TextReflectionApp(), "https://x.test")
+    assert res["is_grpc"] and res["verdict"] == "reflection_exposed"
+    assert "acme.v1.Orders" in res["services"]
+
+
+class _URLRecorder:
+    def __init__(self):
+        self.urls = []
+
+    async def fetch(self, url, *, method="POST", body=None, headers=None, **kw):
+        self.urls.append(url)
+        return _R(200, _grpc_web(12))
+
+
+@pytest.mark.asyncio
+async def test_base_path_without_leading_slash_stays_on_host():
+    # a bare base_path must not concatenate onto the host ("x.testgrpc") — an out-of-scope
+    # request; the probe normalizes it to a leading-slash path under the same host
+    rec = _URLRecorder()
+    await gp.probe_grpc(rec, "https://x.test", base_path="grpc")
+    assert rec.urls and all(u.startswith("https://x.test/grpc/") for u in rec.urls)
 
 
 # -- registration + dry_run -------------------------------------------------

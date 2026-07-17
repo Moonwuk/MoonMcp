@@ -516,7 +516,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~168. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~167. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist

@@ -26,6 +26,7 @@ github.com/grpc/grpc-web (framing) · grpc.health.v1 · grpc.io status codes.
 from __future__ import annotations
 
 import base64
+import re
 import struct
 
 # Well-known service/method paths (the RPC path is ``/<service>/<method>``).
@@ -80,15 +81,24 @@ def parse_frames(body: bytes) -> list[tuple[int, bytes]]:
     return out
 
 
-def decode_body(body: bytes, content_type: str) -> bytes:
-    """gRPC-Web-text responses base64-encode the whole frame stream; binary ones don't (pure)."""
+_B64_SEG = re.compile(rb"[A-Za-z0-9+/]+={0,2}")
 
-    if "grpc-web-text" in (content_type or "").lower():
+
+def decode_body(body: bytes, content_type: str) -> bytes:
+    """gRPC-Web-text responses base64-encode the frame stream; binary ones don't. Some servers
+    flush each frame as its OWN padded base64 segment, so a single ``b64decode`` would stop at
+    the first ``=`` and drop later frames (incl. the grpc-status trailer). Decode each padded
+    segment independently and concatenate; a single whole-stream blob is just one segment (pure)."""
+
+    if "grpc-web-text" not in (content_type or "").lower():
+        return body
+    out = bytearray()
+    for seg in _B64_SEG.findall(body or b""):
         try:
-            return base64.b64decode(body)
+            out += base64.b64decode(seg)
         except (ValueError, TypeError):
-            return body
-    return body
+            continue
+    return bytes(out)
 
 
 def trailer_status(frames: list[tuple[int, bytes]], headers: dict[str, str]) -> tuple[int | None, str | None]:
@@ -233,13 +243,23 @@ async def probe_grpc(client, base_url: str, *, base_path: str = "", scope_check=
     three benign gRPC-Web unary calls (fingerprint, reflection ListServices, health Check);
     reads only metadata. ``base_path`` prefixes the RPC path for gateways mounted off root."""
 
-    root = base_url.rstrip("/") + base_path.rstrip("/")
+    # Normalise base_path to a leading-slash path segment: a bare prefix like "grpc" would
+    # otherwise concatenate onto the host ("https://hostgrpc") and target a DIFFERENT host —
+    # an out-of-scope request. Empty means "mounted at root".
+    bp = base_path.strip()
+    if bp and not bp.startswith("/"):
+        bp = "/" + bp
+    root = base_url.rstrip("/") + bp.rstrip("/")
 
     async def _call(service: str, method: str, body: bytes) -> dict:
         url = f"{root}/{service}/{method}"
         r = await client.fetch(url, method="POST", body=body, headers=dict(REQUEST_HEADERS),
                                follow_redirects=False, timeout=12.0, scope_check=scope_check)
-        hmap = r.headers_map() if hasattr(r, "headers_map") else {}
+        # headers_map() preserves the server's wire case (Go/nginx emit Title-Case), so
+        # lower-case the keys before any lookup — otherwise `Content-Type` / `Grpc-Status`
+        # are missed and a real gRPC host is scored not_grpc.
+        raw = r.headers_map() if hasattr(r, "headers_map") else {}
+        hmap = {k.lower(): v for k, v in raw.items()}
         ct = hmap.get("content-type", "")
         frames = parse_frames(decode_body(r.body or b"", ct))
         code, msg = trailer_status(frames, hmap)
