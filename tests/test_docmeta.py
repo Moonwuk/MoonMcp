@@ -156,6 +156,17 @@ def test_ooxml_rejects_doctype_xxe():
     assert out["metadata"].get("company") == "Acme"        # clean part still parsed
 
 
+def test_ooxml_malformed_zip_never_crashes():
+    # corrupt / truncated OOXML-looking archives (hostile input) must return a dict, not raise —
+    # zipfile throws NotImplementedError (bad version/compression) / RuntimeError (encrypted)
+    # from namelist()/read(), none of which are BadZipFile
+    valid = _docx(["<dc:creator>x</dc:creator>"], ["<Company>Acme</Company>"])
+    for bad in (b"PK\x03\x04" + b"\x00" * 48, valid[:len(valid) // 2], valid[:-5],
+                b"PK\x03\x04" + valid[12:], valid[:20]):
+        out = dm.extract(bad)
+        assert isinstance(out, dict) and "verdict" in out
+
+
 # -- JPEG / PNG -------------------------------------------------------------
 def test_parse_jpeg_exif_gps():
     meta = dm.parse_jpeg(_jpeg(_exif_tiff()))

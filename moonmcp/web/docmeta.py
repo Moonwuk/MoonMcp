@@ -29,6 +29,12 @@ from xml.etree import ElementTree as ET
 # core.xml/app.xml are a few KB).
 _MAX_MEMBER = 2_000_000
 
+# Everything a hostile zip can throw from ZipFile()/namelist()/read(): a bad archive, an
+# unsupported version/compression (NotImplementedError ⊂ RuntimeError), an encrypted member
+# (RuntimeError), a truncated header (struct.error), etc. RuntimeError covers both NIE and the
+# "password required" case. Parsing an untrusted document must never propagate these.
+_ZIP_ERRORS = (zipfile.BadZipFile, RuntimeError, OSError, EOFError, ValueError, struct.error)
+
 # OOXML metadata namespaces.
 _NS = {
     "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
@@ -72,7 +78,7 @@ def detect_kind(data: bytes) -> str:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 names = set(z.namelist())
             return "ooxml" if "[Content_Types].xml" in names else "zip"
-        except zipfile.BadZipFile:
+        except _ZIP_ERRORS:
             return "zip"
     return "unknown"
 
@@ -149,7 +155,10 @@ def _safe_xml(z: zipfile.ZipFile, name: str) -> ET.Element | None:
         return None
     if info.file_size > _MAX_MEMBER:
         return None
-    raw = z.read(name)
+    try:
+        raw = z.read(name)
+    except _ZIP_ERRORS:
+        return None                                   # corrupt / unsupported / encrypted member
     head = raw[:4096].lstrip().lower()
     if b"<!doctype" in head or b"<!entity" in raw[:8192].lower():
         return None
@@ -179,7 +188,7 @@ def parse_ooxml(data: bytes) -> dict:
             out["_subtype"] = _ooxml_subtype(names)
             core = _safe_xml(z, "docProps/core.xml")
             app = _safe_xml(z, "docProps/app.xml")
-    except zipfile.BadZipFile:
+    except _ZIP_ERRORS:
         return out
 
     core_map = {
