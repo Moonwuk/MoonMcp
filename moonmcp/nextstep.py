@@ -27,6 +27,7 @@ AFTER: dict[str, list[str]] = {
     "grpc_probe": ["confirm_finding"],
     "cache_probe": ["confirm_finding"],
     "actuator_probe": ["confirm_finding"],
+    "appliance_cve_probe": ["confirm_finding"],
     "xxe_probe": ["oast_poll", "confirm_finding"],
     # SSRF → poll the callback, then reach for the deeper SSRF lanes.
     "ssrf_probe": ["oast_poll", "ssrf_metadata_probe", "ssrf_protocol_probe"],

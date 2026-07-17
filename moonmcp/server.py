@@ -97,6 +97,7 @@ from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
 from .web import actuator as actuatormod
+from .web import appliance as appliancemod
 from .web import authflow as authflowmod
 from .web import authz as authzmod
 from .web import behavior as behaviormod
@@ -519,7 +520,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~169. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~170. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist
@@ -2929,6 +2930,30 @@ async def actuator_probe(target: str) -> dict:
     result = await actuatormod.probe_actuator(get_context().http, url, scope_check=_scope_check())
     result["suggested_next"] = nextstepmod.after(
         "actuator_probe", "confirmed" if result.get("findings") else "none")
+    return result
+
+
+@mcp.tool()
+@active_tool()
+async def appliance_cve_probe(target: str) -> dict:
+    """**Edge-appliance fingerprint → version → known-exploited-CVE** oracle — the VPN/ADC/firewall
+    boxes that dominate CISA's actively-exploited list and that a plain web scan walks past.
+    Fingerprints **Citrix NetScaler/Gateway, Ivanti Connect Secure, Fortinet SSL-VPN, Palo Alto
+    GlobalProtect, and F5 BIG-IP** from their login-portal paths + product-specific
+    cookie/header/body markers, reads the **version where the box discloses it** (e.g. Ivanti's
+    `nc_gina_ver.txt`), and attaches the product's **known-exploited CVEs** to verify (Citrix Bleed
+    CVE-2023-4966, Ivanti CVE-2023-46805/CVE-2024-21887, Fortinet CVE-2024-21762, PAN
+    CVE-2024-3400, F5 CVE-2022-1388, …). Detection-only: sends **benign GETs to fingerprint +
+    version paths only** — never an exploit (no CVE-2018-13379 traversal, no CVE-2024-3400
+    injection). Confirming the exact patch level and weaponizing is nuclei's / Strix's job.
+    In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await appliancemod.probe_appliance(get_context().http, url, scope_check=_scope_check())
+    result["suggested_next"] = nextstepmod.after(
+        "appliance_cve_probe", "confirmed" if result.get("findings") else "none")
     return result
 
 

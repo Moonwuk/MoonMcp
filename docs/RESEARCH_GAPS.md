@@ -228,8 +228,9 @@ weaponization is handed to Strix under human confirmation. No pirated tooling.
 - **Rails `secret_key_base`** → cookie `Marshal.load`; **Flask/Django `SECRET_KEY`** → session forge.
 - **Mapping:** one `SIGNING_SECRETS` table in `config_audit.py`; each leaked secret auto-classified, the specific forge-chain surfaced, weaponization → Strix. **Single highest-confidence net-new gap** (offline/safe, unlocks 5 pre-auth-RCE chains).
 
-### EU-B. `appliance_cve_probe` — EU enterprise-appliance fingerprint → version → CVE oracle ❌
+### EU-B. `appliance_cve_probe` — EU enterprise-appliance fingerprint → version → CVE oracle ✅ (SHIPPED)
 Version-match only (never send the exploit; hand that to Strix). EU orgs run these at scale:
+- ✅ **SHIPPED:** `appliance_cve_probe` fingerprints Citrix NetScaler/Gateway, Ivanti Connect Secure, Fortinet SSL-VPN, PAN GlobalProtect, and F5 BIG-IP from login-portal paths + cookie/header/body markers, reads the version where disclosed (Ivanti `nc_gina_ver.txt`), and attaches each product's known-exploited (KEV) CVEs. Detection-only — fingerprint + version GETs, no exploit. A follow-up could add the version-vs-fixed comparison + the CVE-2025-4427 no-Cookie differential below.
 - **Citrix NetScaler** CitrixBleed CVE-2023-4966 / CVE-2025-5777 (session-token overread) — build from `/vpn/index.html` + `NSC_` cookies. Source: assetnote.io/resources/research/citrix-bleed…
 - **Ivanti Connect Secure / EPMM** CVE-2025-0282, CVE-2023-46805+CVE-2024-21887 chain, **CVE-2025-4427 (auth bypass = omit the `Cookie` header** on `/rs/api/v2/featureusage` — clean differential probe). Version-scrape via admin-immutable `/dana-na/setup/psaldownload.cgi`. Source: Synacktiv PDF · sekurak.pl.
 - **Fortinet FortiOS** CVE-2024-55591 (websocket auth bypass). watchtowr.
