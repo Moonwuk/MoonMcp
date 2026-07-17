@@ -96,6 +96,7 @@ from .recon import supabase as supabasemod
 from .recon import wayback as waybackmod
 from .reporting import format_markdown, format_sarif
 from .scope import ScopeError, canonical_ip, normalize_target
+from .web import actuator as actuatormod
 from .web import authflow as authflowmod
 from .web import authz as authzmod
 from .web import behavior as behaviormod
@@ -518,7 +519,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~168. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~169. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist
@@ -2905,6 +2906,30 @@ async def debug_exposure(target: str) -> dict:
                  "analyze_config for the forge chain" if findings
                  else "no known framework debug panel exposed"),
     }
+
+
+@mcp.tool()
+@active_tool()
+async def actuator_probe(target: str) -> dict:
+    """**Spring Boot Actuator + Jolokia** exploitation-recon — the last mile past
+    `debug_exposure`, detection-only. Fingerprints the actuator base (Boot 1.x `/env` or Boot
+    2/3 `/actuator`) and pulls the actual loot: **`/env` leaked secrets** (every `*.password` /
+    `*.secret` / `*.token` / api-key / connection-string property whose value is **not masked** —
+    a real credential disclosure, since Spring sanitizes matching keys by default); a **`/heapdump`
+    confirmed** by the HPROF magic via a *bounded 64-byte read* (never downloading the GB-sized
+    dump — a full heap dump leaks every in-memory secret/session); the **`/mappings`** route map;
+    and **Jolokia** (JMX-over-HTTP) via `/jolokia/version` + `/jolokia/list`, flagging **RCE-capable
+    MBeans** (MLet `getMBeansFromURL`, `createJNDIRealm`, Logback `reloadByURL`, DiagnosticCommand)
+    **without invoking any of them**. Everything is a benign GET; weaponizing the heap dump or the
+    JMX chain is Strix's job. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await actuatormod.probe_actuator(get_context().http, url, scope_check=_scope_check())
+    result["suggested_next"] = nextstepmod.after(
+        "actuator_probe", "confirmed" if result.get("findings") else "none")
+    return result
 
 
 @mcp.tool()
