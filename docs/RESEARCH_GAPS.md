@@ -81,12 +81,13 @@ Per-provider host + required header + credential path:
 - Source: https://yandex.cloud/en/docs/compute/concepts/vm-metadata · https://ringsafe.in/ssrf-beyond-aws-gcp-azure-onprem/ · Wiz cloud-SSRF.
 - **Mapping:** `ssrf_metadata_probe(target, param)` — inject each metadata URL, diff for provider credential signatures (`AccessKeyId`, `access_token`, `ram/security-credentials`). Expose `CLOUD_METADATA_TARGETS` as a reusable constant. Intrusive-gated.
 
-### 2.2 Unicode / IDN / punycode filter-bypass for SSRF & redirect ❌
+### 2.2 Unicode / IDN / punycode filter-bypass for SSRF & redirect 🟡 (general normalization detector SHIPPED)
 HostSplit (BH-2019 → 2024): fullwidth `．`(U+FF0E)→`.`, fraction slash `⁄`(U+2044)→`/`,
 Turkish dotless-ı case-mapping, zero-width strip, `xn--` twins — pass an allowlist as
 one value, resolve/normalize to another.
 - Source: HostSplit whitepaper (BH-USA-19) · https://herish.me/blog/0click-account-takeover-punycode/ · axios #7315.
 - **Mapping:** for host/URL/redirect/SSRF params, send ASCII control + confusable twin + `xn--` form; if confusable is accepted where an obviously-out-of-scope ASCII value is rejected → normalization-after-validation bypass. Confirm SSRF via existing OAST.
+- ✅ **SHIPPED (general case):** `unicode_bypass_probe` detects server-side NFKC / case-fold normalization via a canary-wrapped reflection differential (fullwidth `＜＞＂＇／＼（；．`→ dangerous ASCII, `ſ`→`s`, `ﬀ`→`ff`, Kelvin `K`→`k`). The SSRF/redirect-specific *resolve-to-internal-host* confirmation still routes through `ssrf_*`/`redirect_probe` + OAST.
 
 ---
 
