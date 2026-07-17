@@ -101,6 +101,7 @@ from .web import authz as authzmod
 from .web import behavior as behaviormod
 from .web import browser as browsermod
 from .web import cache_deception as cachedecmod
+from .web import cachepoison as cachepoisonmod
 from .web import cors as corsmod
 from .web import crlf as crlfmod
 from .web import cspp as csppmod
@@ -5548,36 +5549,29 @@ async def fastjson_oast_probe(target: str, method: str = "POST",
 @mcp.tool()
 @active_tool(intrusive=True)
 async def cache_probe(target: str) -> dict:
-    """**Web cache poisoning** probe. Sends the request with common **unkeyed**
-    headers (`X-Forwarded-Host`, `X-Forwarded-Scheme`, …) carrying a canary and
-    checks whether the value is **reflected** while the response looks
-    **cacheable** — the combination that lets an unkeyed input poison the cache.
-    Detection-only (one canary per header). Intrusive; in scope only.
+    """**Web cache poisoning** probe. Sends common **unkeyed** headers (`X-Forwarded-Host`,
+    `X-Forwarded-Scheme`, `X-Forwarded-Prefix`, …) carrying a benign canary and checks whether
+    the value is **reflected**; then, for each reflected header, it **confirms** the poisoning
+    statefully — it poisons a throwaway `?cb=<random>` cache-buster key, then sends a **clean**
+    request to that same key. If the clean response comes back carrying the canary, the poisoned
+    copy is served **from cache** (`verdict: confirmed`, near-zero FP — the clean request never
+    sent the canary and the buster token is a separate random). Reflected-but-not-served-from-
+    cache stays a `likely`/host-header-injection lead. The cache-buster confines poisoning to a
+    key no real user requests; a `Vary`-keyed header is skipped. Weaponizing (an XSS/redirect via
+    the unkeyed value against the real key) is Strix's job. Intrusive; in scope only.
     """
 
     import secrets
 
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
-    ctx = get_context()
     canary = "moonpc" + secrets.token_hex(4)
-    b = await ctx.http.fetch(url, follow_redirects=False, scope_check=_scope_check())
-    base_body = b.text(200_000)
-    reflected: list[dict] = []
-    for h in probesmod.CACHE_HEADERS:
-        r = await ctx.http.fetch(url, headers={h: f"{canary}.evil.example"},
-                                 follow_redirects=False, scope_check=_scope_check())
-        if canary in r.text(200_000) and canary not in base_body:
-            reflected.append({"header": h, "reflected_canary": canary})
-    is_cacheable, reasons = probesmod.cacheable(b.headers_map())
-    if reflected and is_cacheable:
-        verdict = "likely"
-    elif reflected:
-        verdict = "inconclusive"
-    else:
-        verdict = "unconfirmed"
-    return {"target": url, "verdict": verdict, "unkeyed_reflection": reflected,
-            "cacheable": is_cacheable, "cache_signals": reasons}
+    buster = "mcb" + secrets.token_hex(4)            # independent of the canary (see module)
+    result = await cachepoisonmod.probe_cache_poison(
+        get_context().http, url, canary=canary, buster=buster, scope_check=_scope_check())
+    result["suggested_next"] = nextstepmod.after(
+        "cache_probe", "confirmed" if result.get("findings") else "none")
+    return result
 
 
 # ---------------------------------------------------------------------------
