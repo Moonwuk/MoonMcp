@@ -129,9 +129,10 @@ WS handshake authed by cookie without `Origin` validation (CWE-1385).
 CVE-2024-39895 (Directus alias DoS), Apollo GHSA-2p3c-p3qw-69r4.
 - **Mapping:** 2-element array batch (batching), `{a:__typename b:__typename}` (aliasing), `{ ussr }` typo → "Did you mean" (schema leak past disabled introspection), `GET ?query={__typename}` (CSRF). Low volume, safe.
 
-### 3.7 gRPC / gRPC-web reflection exposure ❌
+### 3.7 gRPC / gRPC-web reflection exposure ✅ (SHIPPED)
 `grpc.reflection.v1alpha.ServerReflection` enabled in prod = unauth API enumeration.
 - **Mapping:** detect `Content-Type: application/grpc[-web]`; for gRPC-web attempt the reflection `list` call → service list = exposed. Fingerprint only.
+- ✅ **SHIPPED:** `grpc_probe` fingerprints gRPC via the gRPC-Web framing (an invented method → `UNIMPLEMENTED`), then runs a benign `ListServices` against `ServerReflection` v1alpha/v1 (`grpc-status: 0` = exposed; the leaked service names are parsed from the `ServerReflectionResponse` when present) and flags the standard `grpc.health.v1.Health/Check` answering unauthenticated. Detection-only; grpcurl/Strix to weaponize.
 
 ---
 

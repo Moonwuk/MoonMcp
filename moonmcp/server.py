@@ -111,6 +111,7 @@ from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
 from .web import graphqldeep as gqldeepmod
 from .web import graphqli as gqlimod
+from .web import grpcprobe as grpcmod
 from .web import inject as injectmod
 from .web import interp as interpmod
 from .web import jwt as jwtmod
@@ -1732,6 +1733,36 @@ async def ws_probe(target: str, probe_message: bool = False,
         timeout=max(4.0, get_context().settings.timeout),
         probe_message=probe_message, subprotocol=subprotocol)
     return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def grpc_probe(target: str, base_path: str = "", dry_run: bool = False) -> dict:
+    """**gRPC / gRPC-Web detection** — the RPC surface HTTP scanners skip (POST-only, binary,
+    usually HTTP/2). Rides plain HTTP/1.1 via the gRPC-Web framing to (1) fingerprint whether a
+    host speaks gRPC (an invented method answers `UNIMPLEMENTED` with the gRPC framing), and
+    surface two common misconfigurations detection-only: (2) **Server Reflection exposed**
+    (`grpc.reflection.v1alpha/v1.ServerReflection`) — a benign `ListServices` returning
+    `grpc-status: 0` lets anyone enumerate every service/method without the `.proto` (schema
+    disclosure; the leaked service names are reported when present), and (3) the standard
+    **Health** service answering unauthenticated. Sends only empty/metadata RPCs — nothing
+    executable — and reads reflection/health, which are metadata by design; mapping the surface
+    (grpcurl) and weaponizing a method is Strix's job. `base_path` prefixes the RPC path for a
+    gateway mounted off root; `dry_run=True` previews the calls. In scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    if dry_run:
+        return dryrunmod.preview(probe="grpc_probe", target=url, method="POST",
+                                 payloads=grpcmod.payloads(),
+                                 note="benign gRPC-Web unary calls (fingerprint + reflection + health); reads metadata only")
+    result = await grpcmod.probe_grpc(get_context().http, url, base_path=base_path,
+                                      scope_check=_scope_check())
+    # suggest a follow-up only when something was actually surfaced (reflection/health).
+    result["suggested_next"] = nextstepmod.after(
+        "grpc_probe", "confirmed" if result.get("findings") else "none")
+    return result
 
 
 @mcp.tool()
