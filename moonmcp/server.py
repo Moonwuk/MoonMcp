@@ -65,6 +65,7 @@ from .knowledge import vulns as vulnsmod
 from .knowledge import waf_kb as wafkbmod
 from .memory import RELATIONS
 from .net import dns as dnsmod
+from .net import ja4 as ja4mod
 from .net import jarm as jarmmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
@@ -2910,6 +2911,25 @@ async def jarm_fingerprint(target: str, port: int = 443) -> dict:
     host, jport = _split_host_port(target, port)
     ctx = get_context()
     result = await jarmmod.compute_jarm(host, jport, timeout=max(10.0, ctx.settings.timeout))
+    return to_dict(result)
+
+
+@mcp.tool()
+@active_tool()
+async def ja4_fingerprint(target: str, port: int = 443) -> dict:
+    """Compute the **JA4+** fingerprints of an in-scope host — the successor family to
+    JARM/JA3, directly comparable to the public FoxIO databases. Returns **JA4S** (the
+    server's TLS ServerHello fingerprint: negotiated version + chosen cipher + ordered
+    extensions/ALPN) and **JA4X** (the certificate's Issuer/Subject/extension-OID
+    fingerprint) — server-stack, CDN, and cert-issuance attribution, plus known-C2/malware
+    infra correlation. Unlike JARM's 10 crafted handshakes, JA4S/JA4X read the standard,
+    structured fields of one exchange; the raw components are returned for verification.
+    JA4/JA4H (client-side) and JA4T (TCP SYN-ACK) are out of scope for a client scanner.
+    In scope only.
+    """
+
+    host, jport = _split_host_port(target, port)
+    result = await ja4mod.compute_ja4(host, jport, timeout=max(10.0, get_context().settings.timeout))
     return to_dict(result)
 
 
