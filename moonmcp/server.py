@@ -106,6 +106,7 @@ from .web import crlf as crlfmod
 from .web import cspp as csppmod
 from .web import debugpanel as debugpanelmod
 from .web import desync as desyncmod
+from .web import docmeta as docmetamod
 from .web import exposure as exposuremod
 from .web import fastjson as fastjsonmod
 from .web import graphql as graphqlmod
@@ -516,7 +517,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~167. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~168. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist
@@ -892,6 +893,28 @@ async def web_read(url: str, max_chars: int = 20000) -> dict:
     """
 
     return await readermod.web_read(get_context().http, url, max_chars=max(500, min(max_chars, 80000)))
+
+
+@mcp.tool()
+@safe_tool
+async def document_metadata_osint(url: str, max_bytes: int = 8_000_000) -> dict:
+    """**Document-metadata OSINT** — the FOCA/metagoofil play. Fetch a **public** document and
+    extract the internals its metadata leaks: **author / last-editor usernames** (password-spray
+    + phishing targets), **software & versions** (tech-stack → CVE), **internal file paths / UNC
+    shares** (usernames, internal hostnames, directory layout), embedded **emails**, and **GPS**
+    from photos. Parses PDF (Info dict + XMP), Office Open XML (`docx`/`xlsx`/`pptx` — `docProps`
+    core+app), JPEG EXIF, and PNG text chunks with the **standard library only**; the document
+    bytes are treated as untrusted (zip-bomb + XXE hardened).
+
+    Pairs with `web_search` / `search_dorks` (find the docs, then read them). Not target-scoped
+    by design (reads third-party public files), but the client's **block-private SSRF guard**
+    still refuses private/internal hosts and engagement auth is suppressed. Returns categorized
+    `findings` (authors / usernames / software / internal_paths / emails / gps / timestamps).
+    Compressed PDF object streams can hide the Info dict — fall back to exiftool for those.
+    """
+
+    return await docmetamod.fetch_and_extract(
+        get_context().http, url, max_bytes=max(10_000, min(max_bytes, 25_000_000)))
 
 
 @mcp.tool()
