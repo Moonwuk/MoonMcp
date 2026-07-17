@@ -31,6 +31,13 @@ def test_norm_forms_include_entities_for_dangerous():
     assert "<" in forms and "&lt;" in forms and "&#60;" in forms and "&#x3c;" in forms
 
 
+def test_norm_forms_cover_apostrophe_encoder_quirks():
+    # html.escape emits &#x27; for ' — real encoders also use &apos; (PHP ENT_HTML5) and the
+    # zero-padded decimal &#039; (PHP default); both must be covered or those apps are missed
+    forms = ub.norm_forms(_vec("fullwidth_squote"))
+    assert "'" in forms and "&apos;" in forms and "&#039;" in forms and "&#39;" in forms
+
+
 def test_norm_forms_letter_is_plain_only():
     assert ub.norm_forms(_vec("ligature_ff")) == ["ff"]
 
@@ -102,6 +109,15 @@ class _PassthroughApp:
         return _R(200, f"<p>results for {_q(u)}</p>")
 
 
+class _DoubleReflectApp:
+    """Repopulates the RAW query in a search box AND renders it NFKC-normalized in a results
+    heading — a genuinely-normalizing app. The raw echo must NOT suppress the normalized hit."""
+
+    async def fetch(self, u, *, method="GET", body=None, headers=None, **kw):
+        q = _q(u)
+        return _R(200, f'<input value="{q}"><h1>results for {unicodedata.normalize("NFKC", q)}</h1>')
+
+
 class _NonReflectiveApp:
     async def fetch(self, u, *, method="GET", body=None, headers=None, **kw):
         return _R(200, "<p>static page, no echo</p>")
@@ -129,6 +145,15 @@ async def test_probe_casefold_app_also_finds_kelvin():
 async def test_probe_passthrough_app_no_findings():
     res = await ub.probe_unicode(_PassthroughApp(), "https://x.test/search")
     assert res["reflective"] and res["findings"] == [] and res["dangerous"] is False
+
+
+@pytest.mark.asyncio
+async def test_probe_multi_context_reflection_still_hits():
+    # raw echo in a search box + normalized form in the heading: the normalization must still
+    # be reported (a body-global raw-echo guard would false-negative here)
+    res = await ub.probe_unicode(_DoubleReflectApp(), "https://x.test/search")
+    assert res["dangerous"]
+    assert "fullwidth_lt" in {f["vector"] for f in res["findings"]}
 
 
 @pytest.mark.asyncio

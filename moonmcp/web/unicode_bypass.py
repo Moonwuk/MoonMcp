@@ -25,7 +25,7 @@ like a parser-differential decode lane. Never a live payload, never data extract
 
 Detection-only: turning a confirmed normalization into a live bypass payload is Strix's job.
 Sources: unicode.org/reports/tr36 (security), tr39 (confusables),
-https://portswigger.net/research (Unicode normalization). See docs/RESEARCH_GAPS.md Theme 6.
+https://portswigger.net/research (Unicode normalization). See docs/RESEARCH_GAPS.md Theme 2.2.
 """
 
 from __future__ import annotations
@@ -97,27 +97,40 @@ def baseline_value() -> str:
     return f"{CANARY}z{CANARY}"
 
 
+# Standard named entities real-world encoders emit that Python's ``html.escape`` does NOT (it
+# uses the numeric form for these). Extra forms only reduce false negatives — a named entity
+# between the canaries still requires the server to have normalized our injected char first.
+# ``&apos;`` is what PHP ``htmlspecialchars(…, ENT_HTML5)`` emits for ``'`` (html.escape gives
+# ``&#x27;``); the rest are HTML5 punctuation names.
+_NAMED_ENTITIES: dict[str, list[str]] = {
+    "'": ["&apos;"], "/": ["&sol;"], "\\": ["&bsol;"],
+    "(": ["&lpar;"], ")": ["&rpar;"], ";": ["&semi;"], ".": ["&period;"],
+}
+
+
 def norm_forms(vec: Vec) -> list[str]:
     """Every way the *normalized* char could be reflected between the canaries: the raw ASCII
-    plus its HTML-entity encodings (named / decimal / hex), so an app that normalizes AND
-    output-encodes (``＜`` → ``<`` → ``&lt;``) is still detected — the normalization already
-    happened server-side. Multi-char norms (``ff``) have no entity form."""
+    plus its HTML-entity encodings, so an app that normalizes AND output-encodes
+    (``＜`` → ``<`` → ``&lt;`` / ``&#60;`` / ``&#x3c;``) is still detected — the normalization
+    already happened server-side. Covers named (incl. ``&apos;``), decimal (bare + zero-padded
+    à la PHP), and hex (lower/upper digit, lower/upper ``x``/``X``) forms. Multi-char norms
+    (``ff``) have no entity form."""
 
     forms = [vec.norm]
     if len(vec.norm) == 1:
         cp = ord(vec.norm)
-        forms += [html.escape(vec.norm, quote=True), f"&#{cp};", f"&#x{cp:x};", f"&#x{cp:X};"]
+        forms += [
+            html.escape(vec.norm, quote=True),
+            f"&#{cp};", f"&#{cp:03d};",                 # decimal: bare + zero-padded (PHP default)
+            f"&#x{cp:x};", f"&#x{cp:X};",               # hex, lowercase `x` prefix
+            f"&#X{cp:x};", f"&#X{cp:X};",               # hex, uppercase `X` prefix
+        ]
+        forms += _NAMED_ENTITIES.get(vec.norm, [])
     # dedup, preserve order
     seen: dict[str, None] = {}
     for f in forms:
         seen.setdefault(f, None)
     return list(seen)
-
-
-def raw_marker(vec: Vec) -> str:
-    """The passthrough tell: the raw Unicode char still sitting between the canaries."""
-
-    return f"{CANARY}{vec.raw}{CANARY}"
 
 
 def norm_markers(vec: Vec) -> list[str]:
@@ -133,19 +146,20 @@ def is_reflective(baseline_body: str) -> bool:
 
 
 def assess_vector(vec: Vec, body: str) -> dict | None:
-    """Score one vector's response (pure). A hit requires the *normalized* form to appear
-    between the canaries while the *raw* form does NOT — the app transformed our injected
-    Unicode char into ASCII. Requiring the raw form's absence excludes a passthrough echo, and
-    the canary framing means a normalized marker can only come from our injected char (chance
-    can't place ``<canary><norm><canary>`` — the request carried ``<canary><raw><canary>``).
+    """Score one vector's response (pure). A hit is a *normalized* form appearing **between the
+    canaries** — where we sent only the raw Unicode char, so the ASCII/entity form can only be
+    there if the server transformed our injected char (chance can't place
+    ``<canary><norm><canary>`` — the request carried ``<canary><raw><canary>``). No
+    passthrough guard is needed or wanted: a raw echo of the char *elsewhere* on the page (e.g.
+    a search box that repopulates the raw query) does not negate a genuine normalization in
+    another context (a results heading), so gating on the raw form's global absence would
+    false-negative on common multi-context reflection.
 
     Matching is **case-sensitive on purpose**: lowercasing the body would itself case-fold
     (e.g. Kelvin U+212A ``.lower()`` → ``k``), turning a passthrough echo of the raw char into a
     false normalization hit. The case change *is* the signal for case-fold vectors."""
 
     b = body or ""
-    if raw_marker(vec) in b:
-        return None                                    # passthrough — app did not normalize
     hit_form = next((m for m in norm_markers(vec) if m in b), None)
     if hit_form is None:
         return None
