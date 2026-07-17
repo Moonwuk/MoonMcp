@@ -128,6 +128,7 @@ from .web import saml as samlmod
 from .web import screenshot as screenshotmod
 from .web import secondorder as somod
 from .web import singlepacket as spmod
+from .web import sspp as ssppmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import ssrf_protocol as sspmod
 from .web import stacks as stacksmod
@@ -4930,6 +4931,32 @@ async def graphql_nosqli(target: str, query: str, variable: str = "moon") -> dic
                      if strictly_typed else None),
             "baseline": {"status": control[0].status, "length": control[0].length,
                          "data": control[0].data}}
+
+
+@mcp.tool()
+@active_tool(intrusive=True)
+async def sspp_probe(target: str, dry_run: bool = False) -> dict:
+    """**Server-side prototype pollution** (SSPP) — safe, reversible, detection-only. When a
+    Node/Express app deep-merges request input into an object, a `__proto__` /
+    `constructor.prototype` key writes `Object.prototype` on the server. This drives the
+    classic Gareth Heyes tell: pollute the Express **`json spaces`** setting, and every
+    `res.json()` response becomes indented. `target` must be a JSON endpoint that accepts a
+    POST and returns a `res.json()` body. Confirmed only by the full causal transition —
+    **compact → pretty-printed while polluted → compact again after cleanup** (chance can't
+    produce all three) — and the probe ALWAYS restores `json spaces` to 0, so no pollution
+    lingers. Weaponizing the sink (config override / RCE gadget) is Strix's job.
+    `dry_run=True` previews the pollution payloads without sending. Intrusive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    if dry_run:
+        return dryrunmod.preview(probe="sspp_probe", target=url, method="POST",
+                                 payloads=ssppmod.payload_previews(),
+                                 note="each payload is sent then reverted (json spaces -> 0); reads are GET")
+    result = await ssppmod.probe_sspp(get_context().http, url, scope_check=_scope_check())
+    result["suggested_next"] = nextstepmod.after("sspp_probe", result.get("verdict"))
+    return result
 
 
 @mcp.tool()
