@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..net.http import HttpClient
+from . import bitrix as bitrixmod
 from . import shiro as shiromod
 
 # Passive fingerprints over ONE response: (product, where, needle). `where` is
@@ -154,13 +155,25 @@ async def _probe_druid(client, base, scope_check) -> dict | None:
 
 
 async def _probe_bitrix(client, base, scope_check) -> dict | None:
-    r = await _fetch(client, base.rstrip("/") + "/bitrix/admin/index.php", scope_check)
+    root = base.rstrip("/")
+    r = await _fetch(client, root + "/bitrix/admin/index.php", scope_check)
     body = r.text(limit=20_000).lower() if r.status == 200 else ""
-    if r.status == 200 and ("bitrix" in body or "авторизац" in body):
+    admin = r.status == 200 and ("bitrix" in body or "авторизац" in body)
+    # composite_data.php leaking bitrix_sessid unauthenticated is the prerequisite for the
+    # html_editor_action.php SSRF (and CSRF-token abuse) — a stronger lead than a reachable panel.
+    cd = await _fetch(client, root + bitrixmod.COMPOSITE_DATA_PATH, scope_check)
+    sessid = bitrixmod.extract_sessid(cd.text(limit=80_000)) if cd.status == 200 else None
+    if sessid:
+        return {"product": "1C-Bitrix", "severity": "medium", "verdict": "exposed",
+                "issue": "Bitrix unauth session token leaked (composite_data.php)",
+                "detail": "composite_data.php leaks bitrix_sessid unauthenticated — the prerequisite for "
+                          "the html_editor_action.php SSRF. Confirm the SSRF with bitrix_ssrf_probe (OAST); "
+                          "vote-module CVE-2022-27228 via Strix"}
+    if admin:
         return {"product": "1C-Bitrix", "severity": "low", "verdict": "exposed",
                 "issue": "Bitrix admin panel reachable",
-                "detail": "/bitrix/admin/ returned 200 — enumerate module CVEs (e.g. "
-                          "vote-module CVE-2022-27228) via Strix"}
+                "detail": "/bitrix/admin/ returned 200 — confirm the html_editor_action.php SSRF with "
+                          "bitrix_ssrf_probe; enumerate module CVEs (vote-module CVE-2022-27228) via Strix"}
     return None
 
 

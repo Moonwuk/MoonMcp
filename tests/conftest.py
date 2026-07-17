@@ -283,6 +283,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok")
             return
+        if self.path.startswith("/bitrix/tools/html_editor_action.php"):
+            # DELIBERATELY VULNERABLE: action=uploadfile fetches the caller-supplied tmp_url
+            # server-side (1C-Bitrix unauth SSRF) — the only URL in the multipart body.
+            import re
+            mm = re.search(r"https?://[^\s\"'}\]\r\n]+", raw.decode("utf-8", "replace"))
+            if mm:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(mm.group(0), timeout=2).read(64)
+                except Exception:
+                    pass
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
         if self.path.startswith("/nosqli"):
             self._nosqli_reply(raw.decode("utf-8", "replace"),
                                self.headers.get("Content-Type", ""))
@@ -744,6 +759,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"<html>fetched</html>")
+            return
+        if self.path.startswith("/bitrix/tools/composite_data.php"):
+            # DELIBERATELY VULNERABLE: leaks the anonymous bitrix_sessid (SSRF prerequisite).
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.end_headers()
+            self.wfile.write(b"(function(){BX.message({});bitrix_sessid:'deadbeefcafe0000deadbeefcafe0000'})();")
             return
         if self.path.startswith("/cache"):
             # DELIBERATELY VULNERABLE: reflects the unkeyed X-Forwarded-Host header
