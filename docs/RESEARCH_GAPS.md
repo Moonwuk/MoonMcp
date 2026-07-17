@@ -156,7 +156,7 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 - **Nacos auth bypass** (CVE-2021-29441) ❌ — `User-Agent: Nacos-Server` on `/nacos/v1/auth/users` returns 200 JSON.
 - **OA suite** ❌ (CNVD/Seebug, PoC-verified): Yonyou NC `bsh.servlet.BshServlet`/`NCFindWeb`; Weaver e-cology `WorkflowServiceXml`; Seeyon `getSessionList.jsp`; Tongda `ispirit/*` upload+LFI; Landray `custom.jsp` SSRF + `treexml.tmpl`.
 - **Druid monitor unauth** ❌ — `/druid/index.html` → `/druid/websession.json` leaks live sessions.
-- **Spring Actuator `/heapdump` + `/env`** 🟡 — path is in wordlist; gap is parsing `/env` secrets + HPROF-magic heapdump confirm + jolokia chain.
+- **Spring Actuator `/heapdump` + `/env`** ✅ (SHIPPED) — `actuator_probe` parses `/env` for unmasked secret-named properties, confirms `/heapdump` by the HPROF magic via a bounded 64-byte read, reads `/mappings`, and enumerates Jolokia (`/jolokia/version` + `/list`) flagging RCE-capable MBeans without invoking them (Boot 1.x + 2/3). Detection-only; weaponization → Strix.
 - **CN WAF fingerprints** ❌ — add to `web/waf.py` `_SIGNATURES`: SafeDog (`safedog-flow-item` cookie), Yunsuo (`yunsuo_session`), Jiasule/ChuangYu (`jiasule-waf`), 360 (`qianxin-waf`), Yunjiasu (`yunjiasu-nginx`), BaoTa (`宝塔网站防火墙` block page), D-Shield. Source: wafw00f + hacking8.com.
 - Sources: gm7.org, freebuf.com/vuls, y4er.com, github.com/SkyBlueEternal, cnblogs pursue-security, Threekiii/Vulnerability-Wiki, qkl.seebug.org.
 
