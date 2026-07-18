@@ -58,7 +58,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
             "git_forensics",
             "response_leak_probe", "reset_poison_probe", "path_bypass_probe",
-            "debug_exposure",
+            "nextjs_middleware_probe", "debug_exposure",
             "actuator_probe", "appliance_cve_probe",
             "screenshot", "browser_open", "browser_eval", "browser_interact", "cspp_probe",
             "analyze_binary", "analyze_config", "jwt_analyze", "jwt_crack", "jwt_alg_confusion",

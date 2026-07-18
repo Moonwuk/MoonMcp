@@ -767,6 +767,35 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"(function(){BX.message({});bitrix_sessid:'deadbeefcafe0000deadbeefcafe0000'})();")
             return
+        if self.path.startswith("/nextjs-gated"):
+            # DELIBERATELY VULNERABLE (CVE-2025-29927): the internal x-middleware-subrequest
+            # header skips the auth middleware — without it, redirect to /login; with it, serve
+            # the protected page. Always advertises Next.js.
+            if self.headers.get("x-middleware-subrequest"):
+                self.send_response(200)
+                self.send_header("X-Powered-By", "Next.js")
+                self.end_headers()
+                self.wfile.write(b"<html>secret dashboard __NEXT_DATA__</html>")
+            else:
+                self.send_response(307)
+                self.send_header("Location", "/login")
+                self.send_header("X-Powered-By", "Next.js")
+                self.end_headers()
+            return
+        if self.path.startswith("/nextjs-open"):
+            # Next.js app but the route is NOT middleware-gated (200 with or without the header).
+            self.send_response(200)
+            self.send_header("X-Powered-By", "Next.js")
+            self.end_headers()
+            self.wfile.write(b"<html>public __NEXT_DATA__</html>")
+            return
+        if self.path.startswith("/nextjs-patched"):
+            # Next.js app whose gate holds even WITH the header (patched / header stripped).
+            self.send_response(307)
+            self.send_header("Location", "/login")
+            self.send_header("X-Powered-By", "Next.js")
+            self.end_headers()
+            return
         if self.path.startswith("/cache"):
             # DELIBERATELY VULNERABLE: reflects the unkeyed X-Forwarded-Host header
             # and marks the response cacheable.
