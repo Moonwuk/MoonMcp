@@ -123,6 +123,7 @@ from .web import interp as interpmod
 from .web import jwt as jwtmod
 from .web import logic as logicmod
 from .web import methods as methodsmod
+from .web import nextjs as nextjsmod
 from .web import nosqli as nosqlimod
 from .web import oauth as oauthmod
 from .web import ormleak as ormmod
@@ -522,7 +523,7 @@ async def tool_catalog(family: str | None = None) -> dict:
 @safe_tool
 async def search_tools(query: str, limit: int = 6) -> dict:
     """**Find the few tools relevant to what you're doing** instead of scanning all
-    ~172. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
+    ~173. Give a keyword or phrase (`"graphql"`, `"jwt"`, `"cache poisoning"`,
     `"subdomains"`) and get back a short ranked list — each with the tool name, its
     family, and a one-line gist — so you can pick the right probe without reading
     the whole catalogue. A name match outranks a family match outranks a gist
@@ -2933,6 +2934,29 @@ async def path_bypass_probe(target: str) -> dict:
     result["note"] = result.get("note") or (
         f"{n} normalization twin(s) reached the protected route — verify the content"
         if n else "no normalization twin bypassed the ACL")
+    return result
+
+
+@mcp.tool()
+@active_tool()
+async def nextjs_middleware_probe(target: str) -> dict:
+    """**Next.js middleware auth-bypass** (CVE-2025-29927), detection-only. Next.js skips its
+    middleware when a request carries the internal `x-middleware-subrequest` header — never stripped
+    from external requests, so setting it yourself bypasses whatever the middleware enforced (auth
+    gates, redirects, path allow-lists). Point at a **middleware-gated route** (one that redirects to
+    login or answers 401/403 without the header); this replays a small set of manifest-path payloads
+    (`middleware`, `src/middleware`, the Next 12 `pages/_middleware`, and the `:`-repeated form that
+    defeats the Next 13.2–15 recursion counter) and flags any that flip the gated response to `2xx` —
+    the middleware was skipped. Fingerprints Next.js first and ranks an auth-gate bypass above a bare
+    redirect one. Nothing is exploited; verify the 2xx body is real protected content, weaponize via
+    Strix. Affected < 12.3.5 / 13.5.9 / 14.2.25 / 15.2.3. GET-only. In scope only.
+    """
+
+    ctx = get_context()
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    result = await nextjsmod.probe_nextjs_middleware(ctx.http, url, scope_check=_scope_check())
+    result["suggested_next"] = nextstepmod.after("nextjs_middleware_probe", result.get("verdict"))
     return result
 
 

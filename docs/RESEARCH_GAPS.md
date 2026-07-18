@@ -134,6 +134,10 @@ CVE-2024-39895 (Directus alias DoS), Apollo GHSA-2p3c-p3qw-69r4.
 - **Mapping:** detect `Content-Type: application/grpc[-web]`; for gRPC-web attempt the reflection `list` call → service list = exposed. Fingerprint only.
 - ✅ **SHIPPED:** `grpc_probe` fingerprints gRPC via the gRPC-Web framing (an invented method → `UNIMPLEMENTED`), then runs a benign `ListServices` against `ServerReflection` v1alpha/v1 (`grpc-status: 0` = exposed; the leaked service names are parsed from the `ServerReflectionResponse` when present) and flags the standard `grpc.health.v1.Health/Check` answering unauthenticated. Detection-only; grpcurl/Strix to weaponize.
 
+### 3.8 Next.js middleware auth-bypass (`nextjs_middleware_probe`) ✅ (SHIPPED)
+CVE-2025-29927: the internal `x-middleware-subrequest` header (never stripped from external requests) makes Next.js skip its middleware — bypassing auth gates / redirects / path allow-lists. Affected < 12.3.5 / 13.5.9 / 14.2.25 / 15.2.3. Source: Assetnote & JFrog write-ups (2025-03), zhero-web-sec.
+- ✅ **SHIPPED:** `nextjs_middleware_probe` (light_active) fingerprints Next.js, then runs a pure **differential** against a middleware-gated route — baseline (no header) vs a small manifest-path payload set (`middleware`, `src/middleware`, the Next 12 `pages/_middleware`, and the `:`-repeated form that defeats the Next 13.2–15 recursion counter); a gated response (auth redirect / 401 / 403) that flips to `2xx` confirms the middleware was skipped. Auth-gate bypass ranks `high/confirmed` above a bare redirect bypass (`review`). Detection-only; verify the 2xx body + weaponize via Strix.
+
 ---
 
 ## Theme 4 — Regional stacks: fingerprint → exploit-surface (🇨🇳 🇷🇺)
