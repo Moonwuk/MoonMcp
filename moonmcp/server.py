@@ -136,6 +136,7 @@ from .web import saml as samlmod
 from .web import screenshot as screenshotmod
 from .web import secondorder as somod
 from .web import singlepacket as spmod
+from .web import snimismatch as snimismatchmod
 from .web import sspp as ssppmod
 from .web import ssrf_meta as ssrfmetamod
 from .web import ssrf_protocol as sspmod
@@ -5845,18 +5846,21 @@ async def dns_behavior(domain: str) -> dict:
 @mcp.tool()
 @active_tool()
 async def vhost_probe(target: str) -> dict:
-    """**Host-header routing behaviour.** Compares the normal response with one sent
-    under a **bogus Host** header to reveal how the edge routes: does it **validate
-    the Host** (routes/errors) or serve the same app regardless (host-header
-    attacks — cache poisoning, password-reset poisoning, routing to internal
-    vhosts)? Also checks whether the bogus host is **reflected** (host-header
-    injection) directly or via `X-Forwarded-Host`. Because the bogus-Host request
-    rides the real host's TLS connection (SNI = real host), a *not-validated* result
-    is also the **SNI≠Host** signal — ingress-nginx does not enforce SNI==Host, so a
-    request routed by Host while the cert is chosen by SNI can slip past an
-    SNI-keyed WAF/mTLS front. Finally probes whether the edge **trusts the internal
-    `X-Envoy-Original-Path` header** from an outside client (Envoy CVE-2023-27487 —
-    a jwt_authn / access-log path-spoofing surface). In scope only.
+    """**Host-header routing behaviour + SNI bypass (domain fronting).** Compares the
+    normal response with one sent under a **bogus Host** header to reveal how the
+    edge routes: does it **validate the Host** (routes/errors) or serve the same app
+    regardless (host-header attacks — cache poisoning, password-reset poisoning,
+    routing to internal vhosts)? Also checks whether the bogus host is **reflected**
+    (host-header injection) directly or via `X-Forwarded-Host`. Because that bogus-Host
+    request rides the real host's TLS connection (SNI = real host), a *not-validated*
+    result is also the **SNI≠Host** signal (ingress-nginx does not enforce SNI==Host).
+    For HTTPS targets, also probes the **reverse, attacker-relevant direction**: the
+    real Host requested over a connection presenting a **decoy SNI** or **no SNI at
+    all** (classic **domain fronting** / **SNI bypass**) — matching content proves an
+    SNI-keyed WAF/mTLS/CDN-zone policy never sees this as a request for this site, so
+    it can be routed around entirely. Finally probes whether the edge **trusts the
+    internal `X-Envoy-Original-Path` header** from an outside client (Envoy
+    CVE-2023-27487 — a jwt_authn / access-log path-spoofing surface). In scope only.
     """
 
     raw = target.strip()
@@ -5876,6 +5880,32 @@ async def vhost_probe(target: str) -> dict:
 
     base_body = base.text(200_000)
     jitter = abs(len(base.body) - len(base2.body))
+
+    # SNI bypass / domain fronting: request the REAL Host over a connection whose SNI is a
+    # decoy (or blank) — matching content means the edge routes by Host regardless of which
+    # TLS identity it saw, so any SNI-keyed security layer never has to be presented at all.
+    decoy_sni_bypass = blank_sni_bypass = None
+    sni_errors: dict[str, str] = {}
+    if scheme == "https":
+        from urllib.parse import urlsplit
+        sp = urlsplit(url)
+        host = sp.hostname or raw
+        port = sp.port or 443
+        path = (sp.path or "/") + (f"?{sp.query}" if sp.query else "")
+        sni_timeout = max(6.0, ctx.settings.timeout)
+        d_status, d_len, d_err = await snimismatchmod.fetch_over_sni(
+            host, port, sni=snimismatchmod.DECOY_SNI, host_header=host, path=path,
+            timeout=sni_timeout)
+        b_status, b_len, b_err = await snimismatchmod.fetch_over_sni(
+            host, port, sni="", host_header=host, path=path, timeout=sni_timeout)
+        decoy_sni_bypass = snimismatchmod.content_matches(base.status, len(base.body), d_status,
+                                                          d_len, jitter)
+        blank_sni_bypass = snimismatchmod.content_matches(base.status, len(base.body), b_status,
+                                                           b_len, jitter)
+        if d_err:
+            sni_errors["decoy_sni"] = d_err
+        if b_err:
+            sni_errors["blank_sni"] = b_err
 
     def _diverges(r) -> bool:
         return r.status is not None and (
@@ -5910,6 +5940,16 @@ async def vhost_probe(target: str) -> dict:
     if envoy_path_trusted:
         concerns.append("edge trusts client-supplied X-Envoy-Original-Path — path spoofing into "
                         "jwt_authn / access logs (Envoy CVE-2023-27487); verify the routing change")
+    if decoy_sni_bypass:
+        concerns.append("SNI BYPASS (domain fronting): the real Host's content is served over a "
+                        "connection presenting an unrelated decoy SNI — any SNI-keyed WAF policy / "
+                        "mTLS gate / CDN customer-zone selection can be routed around entirely by "
+                        "never presenting this site's own SNI; pair with waf_detect/edge_map to "
+                        "gauge what protection is being bypassed")
+    if blank_sni_bypass:
+        concerns.append("SNI BYPASS: the real Host's content is served over a connection with NO "
+                        "SNI at all — the edge's default/catch-all vhost reaches the same app, "
+                        "bypassing any SNI-selected security policy entirely")
     return {
         "target": url,
         "host_validated": host_validated,
@@ -5917,6 +5957,9 @@ async def vhost_probe(target: str) -> dict:
         "host_header_reflected": reflected_host,
         "x_forwarded_host_reflected": reflected_xfh,
         "envoy_original_path_trusted": envoy_path_trusted,
+        "decoy_sni_bypass": decoy_sni_bypass,
+        "blank_sni_bypass": blank_sni_bypass,
+        "sni_probe_errors": sni_errors,
         "baseline": {"status": base.status, "length": len(base.body)},
         "bogus_host": {"status": bh.status, "length": len(bh.body)},
         "concerns": concerns,
