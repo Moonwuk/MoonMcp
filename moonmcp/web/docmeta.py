@@ -159,8 +159,10 @@ def _safe_xml(z: zipfile.ZipFile, name: str) -> ET.Element | None:
         raw = z.read(name)
     except _ZIP_ERRORS:
         return None                                   # corrupt / unsupported / encrypted member
-    head = raw[:4096].lstrip().lower()
-    if b"<!doctype" in head or b"<!entity" in raw[:8192].lower():
+    # Refuse ANY DTD/entity declaration (XXE / billion-laughs). Scan the whole member (capped at
+    # _MAX_MEMBER above), not a byte-prefix window — a long leading comment could otherwise push
+    # `<!DOCTYPE`/`<!ENTITY` past a fixed window while expat still processes the DTD.
+    if re.search(rb"<!(?:doctype|entity)", raw, re.IGNORECASE):
         return None
     try:
         return ET.fromstring(raw)
@@ -239,10 +241,12 @@ def _exif_from_tiff(tiff: bytes) -> dict:
     e = ">" if be else "<"
 
     def u16(o):
-        return struct.unpack(e + "H", tiff[o:o + 2])[0]
+        b = tiff[o:o + 2]
+        return struct.unpack(e + "H", b)[0] if len(b) == 2 else 0
 
     def u32(o):
-        return struct.unpack(e + "I", tiff[o:o + 4])[0]
+        b = tiff[o:o + 4]
+        return struct.unpack(e + "I", b)[0] if len(b) == 4 else 0
 
     def read_ifd(off):
         entries = {}

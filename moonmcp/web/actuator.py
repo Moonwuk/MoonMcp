@@ -51,12 +51,19 @@ def is_secret_name(name: str) -> bool:
 
 
 def is_masked(val) -> bool:
-    """Spring sanitizes secret-named props to ``******``; treat empty/null/all-star as masked."""
+    """Spring sanitizes secret-named props to ``******``; treat empty/null/all-star as masked.
+
+    A boolean is a configuration *flag* (`*-enabled`, `*-required`, `encryption: true`), never
+    credential material — so a boolean-valued secret-named property is not a leak (and `bool` is a
+    subclass of `int`, so it must be excluded before the generic non-string branch). A numeric value
+    is still treated as a real leak (a digits-only password/PIN can serialise as a number)."""
 
     if val is None:
         return True
+    if isinstance(val, bool):
+        return True                                   # config flag, not a credential
     if not isinstance(val, str):
-        return False                                  # a non-string value is a real leak
+        return False                                  # a non-string (numeric/struct) value is a real leak
     s = val.strip()
     return s == "" or s.lower() in ("null", "none") or (bool(s) and set(s) <= {"*"})
 

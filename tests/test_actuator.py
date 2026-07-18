@@ -15,7 +15,9 @@ def test_secret_name_and_mask():
     assert ac.is_secret_name("app.jwt.secret") and ac.is_secret_name("AWS_SECRET_ACCESS_KEY")
     assert not ac.is_secret_name("server.port")
     assert ac.is_masked("******") and ac.is_masked("") and ac.is_masked(None) and ac.is_masked("null")
-    assert not ac.is_masked("s3cr3t!") and not ac.is_masked(12345)   # non-str = real leak
+    assert not ac.is_masked("s3cr3t!") and not ac.is_masked(12345)   # str / numeric = real leak
+    # a boolean is a config flag (*-enabled / *-required), never a credential → not a leak
+    assert ac.is_masked(True) and ac.is_masked(False)
 
 
 def test_leaked_secrets_boot2_and_masked():
@@ -26,6 +28,15 @@ def test_leaked_secrets_boot2_and_masked():
     leaks = ac.leaked_secrets(env)
     assert [x["property"] for x in leaks] == ["spring.datasource.password"]
     assert leaks[0]["value_preview"] == "pg-pass-123"
+
+
+def test_leaked_secrets_ignores_boolean_flags():
+    # secret-NAMED but boolean-VALUED config flags must not be reported as credential leaks
+    env = {"propertySources": [{"name": "applicationConfig", "properties": {
+        "app.security.encryption-enabled": {"value": True},
+        "oauth.client-secret-required": {"value": False},
+        "spring.datasource.password": {"value": "real-leak"}}}]}
+    assert [x["property"] for x in ac.leaked_secrets(env)] == ["spring.datasource.password"]
 
 
 def test_leaked_secrets_boot1_flat():
