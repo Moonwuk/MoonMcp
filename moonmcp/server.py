@@ -298,6 +298,15 @@ def _scope_check() -> Callable[[str], bool]:
     return lambda url: ctx.scope.is_in_scope(url)
 
 
+def _connect_pin() -> Callable[[str], tuple[str | None, str | None]]:
+    """The SSRF connect-guard's resolve-and-pin, threaded into the raw-socket tools
+    so they dial the vetted IP instead of re-resolving the hostname (the same
+    DNS-rebinding TOCTOU defence the HTTP client uses). No-op when block_private is
+    off: resolve_pin returns no pin and the dial helper connects by hostname."""
+
+    return get_context().scope.resolve_pin
+
+
 def _host_key(target: str) -> str:
     """Normalise any target (URL / host:port / bare host) to a bare lower-cased
     host — the key the knowledge graph uses for `host:` entity nodes. Falls back
@@ -1230,7 +1239,7 @@ async def tls_inspect(target: str, port: int = 443) -> dict:
     """
 
     host, tls_port = _split_host_port(target, port)
-    result = await tlsmod.inspect_certificate(host, tls_port, timeout=get_context().settings.timeout)
+    result = await tlsmod.inspect_certificate(host, tls_port, timeout=get_context().settings.timeout, connect_pin=_connect_pin())
     return to_dict(result)
 
 
@@ -1733,7 +1742,7 @@ async def ws_probe(target: str, probe_message: bool = False,
     result = await wsmod.probe_websocket(
         target, host=host, port=port, path=path, tls=tls,
         timeout=max(4.0, get_context().settings.timeout),
-        probe_message=probe_message, subprotocol=subprotocol)
+        probe_message=probe_message, subprotocol=subprotocol, connect_pin=_connect_pin())
     return to_dict(result)
 
 
@@ -2602,7 +2611,8 @@ async def race_probe(target: str, method: str = "POST", n: int = 20,
         req = spmod.build_request(host, path, method=method, headers=hdrs, body=(body or ""),
                                   user_agent=ctx.settings.user_agent)
         result = await spmod.single_packet_race(host, port, tls, req, n,
-                                                timeout=max(10.0, ctx.settings.timeout))
+                                                timeout=max(10.0, ctx.settings.timeout),
+                                                connect_pin=_connect_pin())
         return {"target": url, "method": method.upper(), **result}
     result = await logicmod.probe_race(ctx.http, url, method=method, n=n,
                                        scope_check=_scope_check(), dry_run=False)
@@ -2945,7 +2955,7 @@ async def tls_fingerprint(target: str, port: int = 443) -> dict:
     """
 
     host, tls_port = _split_host_port(target, port)
-    result = await tlsmod.probe_tls_profile(host, tls_port, timeout=get_context().settings.timeout)
+    result = await tlsmod.probe_tls_profile(host, tls_port, timeout=get_context().settings.timeout, connect_pin=_connect_pin())
     return to_dict(result)
 
 
@@ -2961,7 +2971,7 @@ async def jarm_fingerprint(target: str, port: int = 443) -> dict:
 
     host, jport = _split_host_port(target, port)
     ctx = get_context()
-    result = await jarmmod.compute_jarm(host, jport, timeout=max(10.0, ctx.settings.timeout))
+    result = await jarmmod.compute_jarm(host, jport, timeout=max(10.0, ctx.settings.timeout), connect_pin=_connect_pin())
     return to_dict(result)
 
 
@@ -3026,6 +3036,7 @@ async def port_scan(
         concurrency=min(200, ctx.settings.max_concurrency * 10),
         grab_banner=grab_banner,
         limiter=ctx.governor.limiter,
+        connect_pin=_connect_pin(),
     )
     return to_dict(result)
 
@@ -3076,7 +3087,7 @@ async def db_exposure(target: str, ports: str = "db", timeout: float = 4.0) -> d
             if limiter is not None:
                 await limiter.acquire()
             if kind in datastoresmod.RAW_PROBES:
-                hit = await datastoresmod.RAW_PROBES[kind](host, port, to)
+                hit = await datastoresmod.RAW_PROBES[kind](host, port, to, connect_pin=_connect_pin())
             else:
                 hit = await _http_datastore(ctx, host, port, kind, to)
         return {"port": port, "service": service, **hit} if hit else None
@@ -3164,7 +3175,7 @@ async def desync_probe(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     result = await desyncmod.probe_desync(url, timeout=max(10.0, get_context().settings.timeout),
-                                          user_agent=get_context().settings.user_agent)
+                                          user_agent=get_context().settings.user_agent, connect_pin=_connect_pin())
     return to_dict(result)
 
 
@@ -3184,7 +3195,7 @@ async def desync_modern_probe(target: str) -> dict:
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
     result = await desyncmod.probe_modern_desync(url, timeout=max(6.0, get_context().settings.timeout / 2),
-                                                 user_agent=get_context().settings.user_agent)
+                                                 user_agent=get_context().settings.user_agent, connect_pin=_connect_pin())
     return to_dict(result)
 
 
@@ -4018,7 +4029,7 @@ async def recon_target(domain: str, include_subdomains: bool = True) -> dict:
     else:
         report["http"] = {"error": http_res.error, "url": url}
 
-    tls_res = await tlsmod.inspect_certificate(host, 443, timeout=ctx.settings.timeout)
+    tls_res = await tlsmod.inspect_certificate(host, 443, timeout=ctx.settings.timeout, connect_pin=_connect_pin())
     if tls_res.connected:
         report["tls"] = {
             "issuer": tls_res.issuer.get("organizationName") or tls_res.issuer,
@@ -5674,10 +5685,10 @@ async def tls_behavior(target: str, port: int = 443) -> dict:
     host, tls_port = _split_host_port(target, port)
     ctx = get_context()
     real = await tlsmod.inspect_certificate(host, tls_port, timeout=ctx.settings.timeout,
-                                            server_name=host)
+                                            server_name=host, connect_pin=_connect_pin())
     bogus = await tlsmod.inspect_certificate(host, tls_port, timeout=ctx.settings.timeout,
-                                             server_name="moontls-notreal.example")
-    profile = await tlsmod.probe_tls_profile(host, tls_port, timeout=ctx.settings.timeout)
+                                             server_name="moontls-notreal.example", connect_pin=_connect_pin())
+    profile = await tlsmod.probe_tls_profile(host, tls_port, timeout=ctx.settings.timeout, connect_pin=_connect_pin())
     if not real.connected:
         return {"target": host, "port": tls_port, "error": "tls_handshake_failed",
                 "detail": real.error}
@@ -5767,7 +5778,7 @@ async def http_behavior(target: str) -> dict:
     t = ctx.settings.timeout
 
     async def _raw(data: bytes) -> bytes | None:
-        return await desyncmod._raw_request(host, hport, tls, data, t)
+        return await desyncmod._raw_request(host, hport, tls, data, t, connect_pin=_connect_pin())
 
     ua = f"User-Agent: {ctx.settings.user_agent}\r\n"
     base = await _raw(f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{ua}Connection: close\r\n\r\n".encode("latin-1"))

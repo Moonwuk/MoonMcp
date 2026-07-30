@@ -31,6 +31,8 @@ import ssl
 import struct
 from dataclasses import dataclass, field
 
+from ..net import dial
+
 # RFC 6455 handshake GUID, concatenated with the client key to derive the accept.
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 # The foreign Origin used for the CSWSH check — a domain we obviously don't control
@@ -219,7 +221,7 @@ def split_ws_url(url: str) -> tuple[str, int, str, bool]:
 
 async def _handshake(host: str, port: int, tls: bool, path: str, host_header: str,
                      timeout: float, *, origin: str | None,
-                     subprotocols: str | None) -> dict:
+                     subprotocols: str | None, connect_pin=None) -> dict:
     """Open one connection, do the WS handshake, close, return the parsed result.
 
     ``ok`` is True only for a spec-valid upgrade (101 + matching accept)."""
@@ -229,10 +231,9 @@ async def _handshake(host: str, port: int, tls: bool, path: str, host_header: st
     ssl_ctx = _tls_context() if tls else None
     writer = None
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=ssl_ctx,
-                                    server_hostname=host if tls else None),
-            timeout=timeout)
+        reader, writer = await dial.open_connection(
+            host, port, connect_pin=connect_pin, ssl_ctx=ssl_ctx,
+            server_hostname=host if tls else None, timeout=timeout)
         writer.write(request)
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(4096), timeout=timeout)
@@ -250,7 +251,7 @@ async def _handshake(host: str, port: int, tls: bool, path: str, host_header: st
 
 
 async def _echo(host: str, port: int, tls: bool, path: str, host_header: str,
-                timeout: float, origin: str | None, marker: str) -> dict:
+                timeout: float, origin: str | None, marker: str, connect_pin=None) -> dict:
     """Opt-in: handshake, send ONE benign marked text frame, read one frame back,
     report whether the marker was reflected. Never sent unless the caller asks."""
 
@@ -259,10 +260,9 @@ async def _echo(host: str, port: int, tls: bool, path: str, host_header: str,
     ssl_ctx = _tls_context() if tls else None
     writer = None
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=ssl_ctx,
-                                    server_hostname=host if tls else None),
-            timeout=timeout)
+        reader, writer = await dial.open_connection(
+            host, port, connect_pin=connect_pin, ssl_ctx=ssl_ctx,
+            server_hostname=host if tls else None, timeout=timeout)
         writer.write(request)
         await writer.drain()
         resp = await asyncio.wait_for(reader.read(4096), timeout=timeout)
@@ -302,7 +302,7 @@ async def _echo(host: str, port: int, tls: bool, path: str, host_header: str,
 
 async def probe_websocket(url: str, *, host: str, port: int, path: str, tls: bool,
                           timeout: float = 8.0, probe_message: bool = False,
-                          subprotocol: str | None = None) -> WsResult:
+                          subprotocol: str | None = None, connect_pin=None) -> WsResult:
     """Detection-only WebSocket probe: confirm the endpoint, then test whether a
     foreign Origin is accepted (CSWSH). ``host``/``port``/``path``/``tls`` are the
     already-scoped connection target."""
@@ -314,7 +314,7 @@ async def probe_websocket(url: str, *, host: str, port: int, path: str, tls: boo
     own_origin = f"{own_scheme}://{host}{port_sfx}"
 
     legit = await _handshake(host, port, tls, path, host_header, timeout,
-                             origin=own_origin, subprotocols=subprotocol)
+                             origin=own_origin, subprotocols=subprotocol, connect_pin=connect_pin)
     res.handshake = {"status": legit.get("status"), "accept_valid": legit.get("ok", False),
                      "subprotocol": legit.get("subprotocol")}
     if legit.get("error"):
@@ -330,7 +330,7 @@ async def probe_websocket(url: str, *, host: str, port: int, path: str, tls: boo
     res.is_websocket = True
     # CSWSH: does a FOREIGN Origin still get a 101? (origin not validated)
     foreign = await _handshake(host, port, tls, path, host_header, timeout,
-                               origin=_FOREIGN_ORIGIN, subprotocols=subprotocol)
+                               origin=_FOREIGN_ORIGIN, subprotocols=subprotocol, connect_pin=connect_pin)
     foreign_accepted = foreign.get("ok", False)
     res.origin_check = {"legit_origin": own_origin, "legit_status": legit.get("status"),
                         "foreign_origin": _FOREIGN_ORIGIN,
@@ -354,7 +354,7 @@ async def probe_websocket(url: str, *, host: str, port: int, path: str, tls: boo
 
     if probe_message:
         res.echo = await _echo(host, port, tls, path, host_header, timeout,
-                               own_origin, "ws-probe-7f3a-echo")
+                               own_origin, "ws-probe-7f3a-echo", connect_pin=connect_pin)
         if res.echo.get("reflected"):
             res.leads.append({
                 "kind": "message_reflection", "severity": "info",

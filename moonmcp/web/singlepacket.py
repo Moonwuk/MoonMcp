@@ -20,9 +20,11 @@ The socket layer is injectable (``connect``) so the orchestration is unit-testab
 from __future__ import annotations
 
 import asyncio
+import functools
 import ssl
 from collections.abc import Awaitable, Callable
 
+from ..net import dial
 from .desync import _status_of  # reuse the status-line parser
 
 Connect = Callable[[str, int, bool, float], Awaitable[tuple]]
@@ -74,23 +76,24 @@ def assess_race(statuses: list) -> dict:
     }
 
 
-async def _default_connect(host: str, port: int, tls: bool, timeout: float) -> tuple:
+async def _default_connect(host: str, port: int, tls: bool, timeout: float,
+                           *, connect_pin=None) -> tuple:
     ssl_ctx = None
     if tls:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
-    fut = asyncio.open_connection(host, port, ssl=ssl_ctx, server_hostname=host if tls else None)
-    return await asyncio.wait_for(fut, timeout=timeout)
+    return await dial.open_connection(host, port, connect_pin=connect_pin, ssl_ctx=ssl_ctx,
+                                      server_hostname=host if tls else None, timeout=timeout)
 
 
 async def single_packet_race(host: str, port: int, tls: bool, raw: bytes, n: int, *,
                              timeout: float = 12.0, settle: float = 0.1,
-                             connect: Connect | None = None) -> dict:
+                             connect: Connect | None = None, connect_pin=None) -> dict:
     """Run the last-byte-synchronized race and report how many requests succeeded."""
 
     n = max(2, min(n, 40))
-    do_connect = connect or _default_connect
+    do_connect = connect or functools.partial(_default_connect, connect_pin=connect_pin)
     head, last = split_last_byte(raw)
 
     conns = await asyncio.gather(*[do_connect(host, port, tls, timeout) for _ in range(n)],

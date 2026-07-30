@@ -16,6 +16,8 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from . import dial
+
 
 @dataclass
 class TlsResult:
@@ -71,14 +73,15 @@ def _decode_der_cert(der: bytes) -> dict:
         return {}
 
 
-def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | None) -> TlsResult:
+def _blocking_inspect(host: str, port: int, timeout: float, server_name: str | None,
+                      connect_pin=None) -> TlsResult:
     result = TlsResult(host=host, port=port)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     der = b""
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with dial.create_connection_sync(host, port, connect_pin=connect_pin, timeout=timeout)[0] as sock:
             with ctx.wrap_socket(sock, server_hostname=server_name or host) as tls:
                 result.connected = True
                 result.version = tls.version()
@@ -135,8 +138,9 @@ async def inspect_certificate(
     port: int = 443,
     timeout: float = 10.0,
     server_name: str | None = None,
+    connect_pin=None,
 ) -> TlsResult:
-    return await asyncio.to_thread(_blocking_inspect, host, port, timeout, server_name)
+    return await asyncio.to_thread(_blocking_inspect, host, port, timeout, server_name, connect_pin)
 
 
 # --- TLS profiling / fingerprinting -------------------------------------
@@ -160,7 +164,7 @@ class TlsProfile:
     error: str | None = None
 
 
-def _try_version(host: str, port: int, version, timeout: float) -> tuple[bool, str | None]:
+def _try_version(host: str, port: int, version, timeout: float, connect_pin=None) -> tuple[bool, str | None]:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -173,7 +177,7 @@ def _try_version(host: str, port: int, version, timeout: float) -> tuple[bool, s
     except (ValueError, OSError):
         return False, None
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with dial.create_connection_sync(host, port, connect_pin=connect_pin, timeout=timeout)[0] as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as tls:
                 c = tls.cipher()
                 return True, (c[0] if c else None)
@@ -181,7 +185,7 @@ def _try_version(host: str, port: int, version, timeout: float) -> tuple[bool, s
         return False, None
 
 
-def _probe_alpn(host: str, port: int, timeout: float) -> list[str]:
+def _probe_alpn(host: str, port: int, timeout: float, connect_pin=None) -> list[str]:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -190,7 +194,7 @@ def _probe_alpn(host: str, port: int, timeout: float) -> list[str]:
     except NotImplementedError:
         return []
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with dial.create_connection_sync(host, port, connect_pin=connect_pin, timeout=timeout)[0] as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as tls:
                 selected = tls.selected_alpn_protocol()
                 return [selected] if selected else []
@@ -198,13 +202,13 @@ def _probe_alpn(host: str, port: int, timeout: float) -> list[str]:
         return []
 
 
-def _blocking_profile(host: str, port: int, timeout: float) -> TlsProfile:
+def _blocking_profile(host: str, port: int, timeout: float, connect_pin=None) -> TlsProfile:
     profile = TlsProfile(host=host, port=port)
     any_ok = False
     for name, version in _TLS_VERSIONS:
         if version is None:
             continue
-        ok, cipher = _try_version(host, port, version, timeout)
+        ok, cipher = _try_version(host, port, version, timeout, connect_pin)
         if ok:
             any_ok = True
             profile.supported_versions.append(name)
@@ -215,10 +219,11 @@ def _blocking_profile(host: str, port: int, timeout: float) -> TlsProfile:
     if not any_ok:
         profile.error = "no TLS handshake succeeded"
         return profile
-    profile.alpn = _probe_alpn(host, port, timeout)
+    profile.alpn = _probe_alpn(host, port, timeout, connect_pin)
     profile.http2 = "h2" in profile.alpn
     return profile
 
 
-async def probe_tls_profile(host: str, port: int = 443, timeout: float = 10.0) -> TlsProfile:
-    return await asyncio.to_thread(_blocking_profile, host, port, timeout)
+async def probe_tls_profile(host: str, port: int = 443, timeout: float = 10.0,
+                            connect_pin=None) -> TlsProfile:
+    return await asyncio.to_thread(_blocking_profile, host, port, timeout, connect_pin)

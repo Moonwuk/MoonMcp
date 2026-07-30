@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from ..net import dial
+
 
 @dataclass
 class DesyncResult:
@@ -48,15 +50,17 @@ def _status_of(data: bytes) -> tuple[int | None, str | None]:
         return None, None
 
 
-async def _raw_request(host: str, port: int, tls: bool, raw: bytes, timeout: float) -> bytes | None:
+async def _raw_request(host: str, port: int, tls: bool, raw: bytes, timeout: float,
+                       connect_pin=None) -> bytes | None:
     ssl_ctx = None
     if tls:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
     try:
-        fut = asyncio.open_connection(host, port, ssl=ssl_ctx, server_hostname=host if tls else None)
-        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+        reader, writer = await dial.open_connection(
+            host, port, connect_pin=connect_pin, ssl_ctx=ssl_ctx,
+            server_hostname=host if tls else None, timeout=timeout)
     except (asyncio.TimeoutError, ssl.SSLError, OSError):
         return None
     try:
@@ -93,7 +97,7 @@ def _req(host: str, path: str, extra_headers: str = "", body: str = "",
 
 
 async def probe_desync(url: str, *, timeout: float = 12.0,
-                       user_agent: str = _DEFAULT_UA) -> DesyncResult:
+                       user_agent: str = _DEFAULT_UA, connect_pin=None) -> DesyncResult:
     parts = urlsplit(url if "://" in url else f"https://{url}")
     tls = parts.scheme != "http"
     host = parts.hostname or ""
@@ -101,7 +105,7 @@ async def probe_desync(url: str, *, timeout: float = 12.0,
     path = parts.path or "/"
     result = DesyncResult(url=url)
 
-    base = await _raw_request(host, port, tls, _req(host, path, user_agent=user_agent), timeout)
+    base = await _raw_request(host, port, tls, _req(host, path, user_agent=user_agent), timeout, connect_pin)
     if base is None:
         result.error = "unreachable"
         return result
@@ -113,7 +117,7 @@ async def probe_desync(url: str, *, timeout: float = 12.0,
     clte = _req(host, path,
                 extra_headers=f"Content-Length: {len(complete_chunked)}\r\nTransfer-Encoding: chunked\r\n",
                 body=complete_chunked, user_agent=user_agent)
-    r = await _raw_request(host, port, tls, clte, timeout)
+    r = await _raw_request(host, port, tls, clte, timeout, connect_pin)
     result.probes["cl.te-dual"] = _status_of(r)[0] if r else None
 
     # Obfuscated Transfer-Encoding variants (each a complete message).
@@ -123,7 +127,7 @@ async def probe_desync(url: str, *, timeout: float = 12.0,
         "te-nameprefix": "X: x\r\nTransfer-Encoding: chunked\r\n",
     }
     for name, hdr in variants.items():
-        rr = await _raw_request(host, port, tls, _req(host, path, extra_headers=hdr, body=complete_chunked, user_agent=user_agent), timeout)
+        rr = await _raw_request(host, port, tls, _req(host, path, extra_headers=hdr, body=complete_chunked, user_agent=user_agent), timeout, connect_pin)
         result.probes[name] = _status_of(rr)[0] if rr else None
 
     # Interpretation (indicators only).
@@ -168,7 +172,7 @@ class ModernDesyncResult:
 
 
 async def _timed_request(host: str, port: int, tls: bool, raw: bytes,
-                         timeout: float) -> ProbeTiming:
+                         timeout: float, connect_pin=None) -> ProbeTiming:
     """Send *raw* and classify the outcome by timing: a real response, a read
     timeout (the server hung waiting for more body), or a connect error."""
 
@@ -179,9 +183,9 @@ async def _timed_request(host: str, port: int, tls: bool, raw: bytes,
         ssl_ctx.verify_mode = ssl.CERT_NONE
     start = time.monotonic()
     try:
-        fut = asyncio.open_connection(host, port, ssl=ssl_ctx,
-                                      server_hostname=host if tls else None)
-        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+        reader, writer = await dial.open_connection(
+            host, port, connect_pin=connect_pin, ssl_ctx=ssl_ctx,
+            server_hostname=host if tls else None, timeout=timeout)
     except (asyncio.TimeoutError, ssl.SSLError, OSError):
         return ProbeTiming(None, "connect_error", (time.monotonic() - start) * 1000)
     try:
@@ -281,7 +285,7 @@ def interpret_modern(probes: dict[str, dict]) -> tuple[list[str], str]:
 
 
 async def probe_modern_desync(url: str, *, timeout: float = 6.0,
-                              user_agent: str = _DEFAULT_UA) -> ModernDesyncResult:
+                              user_agent: str = _DEFAULT_UA, connect_pin=None) -> ModernDesyncResult:
     """Run the modern-desync timing probes concurrently and interpret the outcomes."""
 
     parts = urlsplit(url if "://" in url else f"https://{url}")
@@ -295,7 +299,7 @@ async def probe_modern_desync(url: str, *, timeout: float = 6.0,
     payloads = _modern_payloads(host, path, user_agent=user_agent)
     names = list(payloads)
     timings = await asyncio.gather(
-        *(_timed_request(host, port, tls, payloads[n], per) for n in names))
+        *(_timed_request(host, port, tls, payloads[n], per, connect_pin) for n in names))
     by_name = dict(zip(names, timings, strict=False))
 
     if by_name["control"].outcome == "connect_error":

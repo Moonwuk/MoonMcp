@@ -23,6 +23,8 @@ import os
 import struct
 from dataclasses import dataclass
 
+from . import dial
+
 _GREASE = [b"\x0a\x0a", b"\x1a\x1a", b"\x2a\x2a", b"\x3a\x3a", b"\x4a\x4a", b"\x5a\x5a",
            b"\x6a\x6a", b"\x7a\x7a", b"\x8a\x8a", b"\x9a\x9a", b"\xaa\xaa", b"\xba\xba",
            b"\xca\xca", b"\xda\xda", b"\xea\xea", b"\xfa\xfa"]
@@ -291,10 +293,10 @@ class JarmResult:
     error: str | None = None
 
 
-async def _probe(host: str, port: int, details: list, timeout: float) -> str:
+async def _probe(host: str, port: int, details: list, timeout: float, connect_pin=None) -> str:
     try:
-        fut = asyncio.open_connection(host, port)
-        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+        reader, writer = await dial.open_connection(host, port, connect_pin=connect_pin,
+                                                    timeout=timeout)
     except (asyncio.TimeoutError, OSError):
         return "|||"
     try:
@@ -312,10 +314,11 @@ async def _probe(host: str, port: int, details: list, timeout: float) -> str:
             pass
 
 
-async def compute_jarm(host: str, port: int = 443, timeout: float = 15.0) -> JarmResult:
+async def compute_jarm(host: str, port: int = 443, timeout: float = 15.0,
+                       connect_pin=None) -> JarmResult:
     results = []
     for details in _queue(host, port):
-        results.append(await _probe(host, port, details, timeout))
+        results.append(await _probe(host, port, details, timeout, connect_pin))
     raw = ",".join(results)
     fp = jarm_hash(raw)
     return JarmResult(host=host, port=port, fingerprint=fp, is_null=(fp == "0" * 62))

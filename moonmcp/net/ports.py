@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+from . import dial
+
 # A pragmatic default set of interesting ports for web-app recon.
 TOP_PORTS: dict[int, str] = {
     21: "ftp",
@@ -67,10 +69,13 @@ class ScanResult:
     duration_ms: float = 0.0
 
 
-async def _probe_port(host: str, port: int, timeout: float, grab_banner: bool) -> PortState:
+async def _probe_port(host: str, port: int, timeout: float, grab_banner: bool,
+                      connect_pin=None) -> PortState:
     try:
-        fut = asyncio.open_connection(host, port)
-        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+        # dial the SSRF-guard-vetted IP (connect_pin), not a re-resolved hostname;
+        # a blocked host raises ConnectBlocked (an OSError) → port reported closed.
+        reader, writer = await dial.open_connection(host, port, connect_pin=connect_pin,
+                                                    timeout=timeout)
     except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
         return PortState(port=port, open=False, service=TOP_PORTS.get(port))
 
@@ -98,6 +103,7 @@ async def scan_ports(
     concurrency: int = 100,
     grab_banner: bool = False,
     limiter=None,
+    connect_pin=None,
 ) -> ScanResult:
     loop = asyncio.get_event_loop()
     start = loop.time()
@@ -109,7 +115,7 @@ async def scan_ports(
             # must respect MOONMCP_RATE_LIMIT like everything else).
             if limiter is not None:
                 await limiter.acquire()
-            return await _probe_port(host, p, timeout, grab_banner)
+            return await _probe_port(host, p, timeout, grab_banner, connect_pin)
 
     states = await asyncio.gather(*(bounded(p) for p in ports))
     duration = (loop.time() - start) * 1000

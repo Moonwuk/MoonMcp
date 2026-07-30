@@ -25,6 +25,8 @@ import asyncio
 import struct
 from dataclasses import dataclass, field
 
+from ..net import dial
+
 # port -> (service name, handshake kind). Raw-TCP kinds: redis/memcached/mongodb.
 # HTTP kinds are read via the shared HTTP client in the server tool.
 DB_PORTS: dict[int, tuple[str, str]] = {
@@ -67,8 +69,10 @@ def _close(writer) -> None:
         pass
 
 
-async def _open(host: str, port: int, timeout: float):
-    return await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+async def _open(host: str, port: int, timeout: float, connect_pin=None):
+    # dial the SSRF-guard-vetted IP (connect_pin) rather than a re-resolved hostname,
+    # so an in-scope name that rebinds to an internal datastore is not reached.
+    return await dial.open_connection(host, port, connect_pin=connect_pin, timeout=timeout)
 
 
 def parse_redis_info(text: str) -> dict[str, str]:
@@ -95,9 +99,9 @@ def redis_finding(info: str) -> dict:
             "issue": "unauthenticated Redis access", "detail": detail}
 
 
-async def probe_redis(host: str, port: int, timeout: float) -> dict | None:
+async def probe_redis(host: str, port: int, timeout: float, connect_pin=None) -> dict | None:
     try:
-        reader, writer = await _open(host, port, timeout)
+        reader, writer = await _open(host, port, timeout, connect_pin)
     except (OSError, asyncio.TimeoutError):
         return None
     try:
@@ -120,9 +124,9 @@ async def probe_redis(host: str, port: int, timeout: float) -> dict | None:
         _close(writer)
 
 
-async def probe_memcached(host: str, port: int, timeout: float) -> dict | None:
+async def probe_memcached(host: str, port: int, timeout: float, connect_pin=None) -> dict | None:
     try:
-        reader, writer = await _open(host, port, timeout)
+        reader, writer = await _open(host, port, timeout, connect_pin)
     except (OSError, asyncio.TimeoutError):
         return None
     try:
@@ -191,9 +195,9 @@ def interpret_mongo_reply(data: bytes) -> dict | None:
             "detail": "MongoDB answered the wire protocol but the auth state is ambiguous — verify manually."}
 
 
-async def probe_mongodb(host: str, port: int, timeout: float) -> dict | None:
+async def probe_mongodb(host: str, port: int, timeout: float, connect_pin=None) -> dict | None:
     try:
-        reader, writer = await _open(host, port, timeout)
+        reader, writer = await _open(host, port, timeout, connect_pin)
     except (OSError, asyncio.TimeoutError):
         return None
     try:
