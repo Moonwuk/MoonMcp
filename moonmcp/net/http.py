@@ -25,7 +25,7 @@ import time
 import urllib.error
 import urllib.request
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from http.client import HTTPResponse
 from urllib.parse import urlsplit
@@ -75,11 +75,7 @@ class HttpResult:
         return data.decode("utf-8", errors="replace")
 
     def header(self, name: str, default: str | None = None) -> str | None:
-        lname = name.lower()
-        for k, v in self.headers:
-            if k.lower() == lname:
-                return v
-        return default
+        return _find_header(self.headers, name, default)
 
     def get_all(self, name: str) -> list[str]:
         lname = name.lower()
@@ -100,12 +96,29 @@ def _insecure_context() -> ssl.SSLContext:
     return ctx
 
 
-def _find_header(pairs: list[tuple[str, str]], name: str) -> str | None:
+def _find_header(pairs: list[tuple[str, str]], name: str, default: str | None = None) -> str | None:
     lname = name.lower()
     for k, v in pairs:
         if k.lower() == lname:
             return v
-    return None
+    return default
+
+
+def _read_capped(chunks: Iterable[bytes], limit: int) -> tuple[bytes, bool]:
+    """Accumulate an iterable of body chunks up to ``limit`` bytes, stopping the
+    moment the cap is exceeded — so a peer streaming gigabytes bounds our memory at
+    ``limit`` + one chunk instead of the whole body. Returns ``(body[:limit],
+    truncated)``. The urllib transport bounds the body at read time; this gives the
+    curl_cffi transport the same guarantee when it streams the response."""
+
+    buf = bytearray()
+    for chunk in chunks:
+        if not chunk:
+            continue
+        buf += chunk
+        if len(buf) > limit:
+            return bytes(buf[:limit]), True
+    return bytes(buf), False
 
 
 def _inflate(raw: bytes, wbits: int, limit: int) -> bytes:
@@ -138,18 +151,15 @@ def _decode_body(raw: bytes, encoding: str | None, limit: int) -> tuple[bytes, b
 
 
 def _trusted_context() -> ssl.SSLContext:
-    """Default context, extended with a custom CA bundle if present."""
+    """Default context, extended with a custom CA bundle from ``MOONMCP_CA_BUNDLE``
+    if the env var points at a readable file."""
     ctx = ssl.create_default_context()
-    import os as _os
-    for p in (
-        _os.environ.get("MOONMCP_CA_BUNDLE", ""),
-        _os.path.expanduser("~/.hermes/ssl/ca-bundle.crt"),
-    ):
-        if p and _os.path.isfile(p):
-            try:
-                ctx.load_verify_locations(cafile=p)
-            except Exception:
-                pass
+    bundle = os.environ.get("MOONMCP_CA_BUNDLE", "")
+    if bundle and os.path.isfile(bundle):
+        try:
+            ctx.load_verify_locations(cafile=bundle)
+        except (ssl.SSLError, OSError):
+            pass  # a malformed bundle falls back to the system trust store
     return ctx
 
 
@@ -282,8 +292,11 @@ def _curl_cffi_fetch(
         if sp.hostname:
             pin_kw["resolve"] = [f"{sp.hostname}:{port}:{pinned_ip}"]
     try:
-        # content=False so curl_cffi does not auto-decode — we cap+decode
-        # ourselves via _decode_body, matching the urllib transport's contract.
+        # stream=True so we can cap the body BEFORE the whole thing is buffered:
+        # curl_cffi auto-decodes gzip/deflate/br, and streaming lets us stop reading
+        # once we hit max_body — bounding memory (and any decompression bomb) the same
+        # way the urllib transport's resp.read(max_body + 1) does. (stream=False used
+        # to download the entire body into r.content and only then slice it.)
         r = _cf_requests.request(
             method=method.upper(),
             url=url,
@@ -293,24 +306,33 @@ def _curl_cffi_fetch(
             allow_redirects=False,
             verify=verify_tls,
             impersonate=profile,
-            stream=False,
+            stream=True,
             **pin_kw,
         )
-        raw = r.content if r.content is not None else b""
-        # curl_cffi decodes gzip/deflate/br by default; we still cap.
-        content = raw[:max_body]
-        truncated = len(raw) > max_body
-        # Header pairs preserving order — r.headers is a multidict-like.
         try:
-            resp_headers = list(r.headers.multi_items())
-        except AttributeError:
-            resp_headers = list(r.headers.items())
+            try:
+                content, truncated = _read_capped(r.iter_content(chunk_size=65536), max_body)
+            except AttributeError:  # older curl_cffi without iter_content — degrade safely
+                raw = r.content if r.content is not None else b""
+                content, truncated = raw[:max_body], len(raw) > max_body
+            # Header pairs preserving order — r.headers is a multidict-like.
+            try:
+                resp_headers = list(r.headers.multi_items())
+            except AttributeError:
+                resp_headers = list(r.headers.items())
+            status = r.status_code
+            reason = getattr(r, "reason", "") or ""
+            final_url = str(r.url) if r.url else url
+        finally:
+            close = getattr(r, "close", None)
+            if callable(close):
+                close()
         elapsed = (time.monotonic() - started) * 1000
         return HttpResult(
             url=url,
-            final_url=str(r.url) if r.url else url,
-            status=r.status_code,
-            reason=getattr(r, "reason", "") or "",
+            final_url=final_url,
+            status=status,
+            reason=reason,
             headers=resp_headers,
             body=content,
             elapsed_ms=round(elapsed, 1),

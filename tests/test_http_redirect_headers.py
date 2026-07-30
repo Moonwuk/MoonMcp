@@ -93,3 +93,21 @@ async def test_fetch_blocks_when_connect_pin_reports_private(monkeypatch):
     res = await client.fetch("https://rebind.example/x")
     assert res.status is None
     assert res.blocked_reason == "blocked: private/reserved"
+
+
+def test_read_capped_bounds_body_and_stops_early():
+    # a peer that streams forever must not blow up memory: _read_capped stops the
+    # moment it passes the cap and returns exactly `limit` bytes, truncated=True.
+    from moonmcp.net.http import _read_capped
+
+    def forever():
+        while True:
+            yield b"x" * 1000
+
+    body, truncated = _read_capped(forever(), 4096)
+    assert truncated is True and len(body) == 4096
+    # under / exactly-at / just-over the limit
+    assert _read_capped([b"abc", b"de"], 100) == (b"abcde", False)
+    assert _read_capped([b"a" * 100], 100) == (b"a" * 100, False)   # exactly limit → not truncated
+    assert _read_capped([b"a" * 101], 100) == (b"a" * 100, True)
+    assert _read_capped([b"", b"ab", b""], 100) == (b"ab", False)   # empty chunks skipped
