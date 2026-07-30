@@ -88,6 +88,7 @@ from .tools import infra as _infra_tools  # noqa: F401 (registers infra tools)
 from .tools import knowledge as _knowledge_tools  # noqa: F401 (registers KB tools)
 from .tools import memory as _memory_tools  # noqa: F401 (registers memory tools)
 from .tools import osint as _osint_tools  # noqa: F401 (registers passive-OSINT tools)
+from .tools import recon_light as _recon_light_tools  # noqa: F401 (registers light recon)
 from .tools.infra import (  # noqa: F401,E501
     backend_probe,
     dns_behavior,
@@ -124,8 +125,6 @@ from .tools.memory import (  # noqa: F401,E501
     memory_search,
     memory_stats,
 )
-
-# Re-export the knowledge tools so `srv.<tool>` still resolves (tests + callers).
 from .tools.osint import (  # noqa: F401,E501
     cloud_buckets,
     cve_lookup,
@@ -141,6 +140,16 @@ from .tools.osint import (  # noqa: F401,E501
     wayback_urls,
     web_read,
     web_search,
+)
+
+# Re-export the knowledge tools so `srv.<tool>` still resolves (tests + callers).
+from .tools.recon_light import (  # noqa: F401,E501
+    analyze_headers,
+    dns_lookup,
+    fingerprint,
+    http_probe,
+    tls_inspect,
+    well_known,
 )
 from .web import authflow as authflowmod
 from .web import authz as authzmod
@@ -733,152 +742,7 @@ async def oast_list() -> dict:
 # ---------------------------------------------------------------------------
 # active (light) — scope-gated
 # ---------------------------------------------------------------------------
-@mcp.tool()
-@active_tool()
-async def dns_lookup(target: str) -> dict:
-    """Resolve a host's DNS records (A/AAAA, plus MX/NS/TXT/CNAME/SOA/CAA when
-    dnspython is installed) and attempt a reverse PTR lookup on its A records.
-    Requires the target to be in scope.
-    """
-
-    host = normalize_target(target)
-    result = await dnsmod.resolve(host, http_client=get_context().http)
-    data = to_dict(result)
-    ptr = {}
-    for ip in (result.a or [])[:3]:
-        names = await dnsmod.reverse_lookup(ip)
-        if names:
-            ptr[ip] = names
-    if ptr:
-        data["ptr"] = ptr
-    return data
-
-
-@mcp.tool()
-@active_tool()
-async def http_probe(
-    target: str,
-    method: str = "GET",
-    follow_redirects: bool = True,
-    verify_tls: bool = True,
-) -> dict:
-    """Send a single HTTP(S) request to an in-scope target and return a structured
-    result: status, reason, response headers, timing, the full redirect chain,
-    page title and body size. Accepts a bare host (defaults to https) or a full
-    URL. The primary building block for web recon.
-    """
-
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    host = normalize_target(url)
-    ctx = get_context()
-    result = await ctx.http.fetch(
-        url,
-        method=method,
-        follow_redirects=follow_redirects,
-        verify_tls=verify_tls,
-        max_redirects=ctx.settings.max_redirects,
-        scope_check=_scope_check(),
-    )
-    out = {
-        "requested_url": url,
-        "host": host,
-        "status": result.status,
-        "reason": result.reason,
-        "final_url": result.final_url,
-        "redirect_chain": result.redirect_chain,
-        "elapsed_ms": result.elapsed_ms,
-        "headers": result.headers_map(),
-        "body_bytes": len(result.body),
-        "truncated": result.truncated,
-    }
-    set_cookies = result.get_all("set-cookie")
-    if len(set_cookies) > 1:
-        out["set_cookie"] = set_cookies
-    if result.error:
-        out["error"] = result.error
-    if result.redirect_blocked:
-        out["redirect_blocked"] = result.redirect_blocked
-    fp = fpmod.fingerprint(result)
-    if fp.title:
-        out["title"] = fp.title
-    return out
-
-
-@mcp.tool()
-@active_tool()
-async def tls_inspect(target: str, port: int = 443) -> dict:
-    """Inspect a host's TLS certificate: subject, issuer, validity window, days
-    until expiry, negotiated protocol/cipher, and — most useful for recon — the
-    Subject Alternative Names, which often reveal sibling hostnames. In scope only.
-    """
-
-    host, tls_port = _split_host_port(target, port)
-    result = await tlsmod.inspect_certificate(host, tls_port, timeout=get_context().settings.timeout, connect_pin=_connect_pin())
-    return to_dict(result)
-
-
-@mcp.tool()
-@active_tool()
-async def analyze_headers(target: str) -> dict:
-    """Fetch a URL and audit its HTTP security headers.
-
-    Grades (A-F) the presence of HSTS, CSP, X-Frame-Options, X-Content-Type-
-    Options, Referrer-Policy and Permissions-Policy; flags information-leaking
-    headers (Server, X-Powered-By, ...) and risky Set-Cookie flags. In scope only.
-    """
-
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    ctx = get_context()
-    result = await ctx.http.fetch(
-        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
-    )
-    if result.status is None:
-        return {"error": "unreachable", "detail": result.error, "url": url}
-    audit = headersmod.audit_headers(result)
-    return to_dict(audit)
-
-
-@mcp.tool()
-@active_tool()
-async def fingerprint(target: str) -> dict:
-    """Fetch a URL and fingerprint its technology stack: web server, CDN/WAF,
-    language/runtime, frameworks, CMS and front-end libraries, with version hints
-    and the evidence for each match. In scope only.
-    """
-
-    raw = target.strip()
-    url = raw if "://" in raw else f"https://{raw}"
-    host = normalize_target(url)
-    ctx = get_context()
-    result = await ctx.http.fetch(
-        url, follow_redirects=True, max_redirects=ctx.settings.max_redirects, scope_check=_scope_check()
-    )
-    if result.status is None:
-        return {"error": "unreachable", "detail": result.error, "url": url}
-    dns_res = await dnsmod.resolve(host, http_client=ctx.http)
-    ip = (dns_res.a or [None])[0]
-    fp = fpmod.fingerprint(result, ip=ip)
-    return to_dict(fp)
-
-
-@mcp.tool()
-@active_tool()
-async def well_known(target: str) -> dict:
-    """Fetch and parse a host's disclosure files: robots.txt (extracting the
-    referenced paths), sitemap.xml (extracting <loc> URLs), security.txt and
-    humans.txt. A quick, low-noise way to discover structure. In scope only.
-    """
-
-    host, port = _split_host_port(target, 443)
-    raw = target.strip()
-    scheme = "http" if raw.startswith("http://") else "https"
-    ctx = get_context()
-    result = await contentmod.fetch_well_known(
-        ctx.http, host, scheme=scheme, port=port, scope_check=_scope_check()
-    )
-    return to_dict(result)
+# Light-active recon tools live in moonmcp/tools/recon_light.py (imported below).
 
 
 # ---------------------------------------------------------------------------
@@ -3076,7 +2940,7 @@ async def export_findings(format: str = "sarif", target: str | None = None,
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @active_tool(self_scoped=True)
-async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:
+async def probe_batch(targets: list[str], fingerprint: bool = True) -> dict:  # noqa: F811
     """Probe a LIST of hosts/URLs in parallel — the enum→probe step of the recon
     loop. Pass the output of `enumerate_subdomains` to find which hosts are live
     and what they run. For each: status, final URL, title and detected tech.

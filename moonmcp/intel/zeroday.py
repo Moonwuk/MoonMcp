@@ -19,10 +19,8 @@ Anthropic Mythos, and depthfirst:
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
-from urllib.parse import quote
 
 from ..net.http import HttpClient
 from . import cve as cvemod
@@ -593,7 +591,7 @@ def variant_search(pattern: str, *, target: str = "") -> VariantSearchResult:
         poc_pipeline.append({
             "step": "2_verify",
             "tool": "confirm_finding",
-            "action": f"Confirm with confirm_finding: baseline vs payload differential",
+            "action": "Confirm with confirm_finding: baseline vs payload differential",
         })
         poc_pipeline.append({
             "step": "3_reproduce",

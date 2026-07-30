@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 
-
 # Control characters that must never travel into an HTTP header value.
 # Stripping CR/LF (and other C0 controls) on entry closes the header-injection
 # vector at the single source of truth, instead of relying on urllib's late
