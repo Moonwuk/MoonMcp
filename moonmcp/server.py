@@ -793,6 +793,31 @@ async def oast_poll(token: str | None = None) -> dict:
             "interactions": interactions[:200]}
 
 
+async def _collect_oast(ctx, token: str) -> tuple[list[dict], str | None]:
+    """Read OAST interactions for ``token``, distinguishing 'no callback yet'
+    (``[], None``) from 'could not check' (``[], "<reason>"``).
+
+    The blind-vuln lanes must never render a *poll failure* as a clean no-hit: a
+    swallowed poll error is a silent miss — the one failure mode a detection tool
+    cannot have. Callers surface the returned reason as ``oast_error`` so an agent
+    knows the callback channel was never actually verified.
+    """
+
+    server = ctx.oast_server
+    if server is not None and server.running:
+        return server.interactions(token), None
+    poll = ctx.oast.poll_target(token)
+    if not poll:
+        return [], None  # nothing to poll (self-host stopped / unconfigured); other fields say so
+    try:
+        r = await ctx.http.fetch(poll, follow_redirects=True)
+    except Exception as exc:  # noqa: BLE001 - report the failure, never swallow it
+        return [], f"poll request failed: {type(exc).__name__}: {exc}"
+    if r.status is None:
+        return [], f"poll request failed: {r.error or 'unreachable'}"
+    return oastmod.parse_interactions(r.text()), None
+
+
 @mcp.tool()
 @safe_tool
 async def oast_list() -> dict:
@@ -2346,21 +2371,15 @@ async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
     await ctx.http.fetch(url, method="GET", headers={"Authorization": f"Bearer {forged}"},
                          follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits, oast_err = await _collect_oast(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "header_param": param, "canary": cb.http_url, "token_id": cb.token,
            **verdict, "interactions": hits[:20]}
-    if not hits:
+    if oast_err:
+        out["oast_error"] = oast_err
+        out["note"] = ("could not verify the callback channel — the OAST poll failed, so this is "
+                       "NOT a clean no-hit; re-check with oast_poll")
+    elif not hits:
         out["note"] = "no callback yet — the server may fetch the key later; re-check with oast_poll"
     return out
 
@@ -2654,20 +2673,12 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
         else:
             await _cycle(somod.oob_seed(tag, cb.http_url, cb.canary_host))
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        rr = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(rr.text())
-                    except Exception:
-                        oh = []
+            oh, oast_err = await _collect_oast(ctx, cb.token)
             oast_count = len(oh)
             oob_out = {"canary": cb.http_url, "token": cb.token,
                        "interaction_count": oast_count, "interactions": oh[:20]}
+            if oast_err:
+                oob_out["oast_error"] = oast_err
 
     has_error = any(f["error_signatures"] for f in findings)
     verdict = confirmmod.evaluate(
@@ -4310,19 +4321,11 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
     hit_labels = [f"{h['class']}/{h['technology']}" for h in hits]
 
     interactions: list[dict] = []
+    oast_err: str | None = None
     if oast_token:
         # The built-in self-host catcher (oast_selfhost) records callbacks locally
         # and sets no poll_url — read it directly, like ssrf_probe / oast_poll do.
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            interactions = ctx.oast_server.interactions(oast_token)
-        else:
-            poll = ctx.oast.poll_target(oast_token)
-            if poll:
-                try:
-                    r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
-                    interactions = oastmod.parse_interactions(r.text())
-                except Exception:
-                    interactions = []
+        interactions, oast_err = await _collect_oast(ctx, oast_token)
 
     verdict = confirmmod.evaluate(
         reflected=reflected, status_changed=status_changed, length_delta=length_delta,
@@ -4335,6 +4338,8 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
         "reflected": reflected, "injection_matches": hits[:10],
         "oast_interactions": interactions[:20],
     }
+    if oast_err:
+        out["oast_error"] = oast_err
     if verdict["verdict"] == "confirmed" and record:
         ts = ""
         from datetime import datetime, timezone
@@ -4513,20 +4518,12 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
             for _lbl, pl in probesmod.sqli_oob_payloads(cb.canary_host, cb.http_url):
                 await _get(pl)
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        r = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(r.text())
-                    except Exception:
-                        oh = []
+            oh, oast_err = await _collect_oast(ctx, cb.token)
             oast_count = len(oh)
             lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
                             "interaction_count": oast_count, "interactions": oh[:20]}
+            if oast_err:
+                lanes["oob"]["oast_error"] = oast_err
             if oh:
                 extra_hits.append("sqli/oob-callback")
 
@@ -4614,20 +4611,12 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
             for _sep, pl in probesmod.cmdi_oob_payloads(cb.http_url):
                 await _get(pl)
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        r = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(r.text())
-                    except Exception:
-                        oh = []
+            oh, oast_err = await _collect_oast(ctx, cb.token)
             oast_count = len(oh)
             lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
                             "interaction_count": oast_count, "interactions": oh[:20]}
+            if oast_err:
+                lanes["oob"]["oast_error"] = oast_err
             if oh:
                 extra_hits.append("cmdi/oob-callback")
 
@@ -5075,21 +5064,15 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
     tu, tb = _with_param(url, param, cb.http_url, m)
     await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits, oast_err = await _collect_oast(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "param": param, "canary": cb.http_url, "token": cb.token,
            **verdict, "interactions": hits[:20]}
-    if not hits:
+    if oast_err:
+        out["oast_error"] = oast_err
+        out["note"] = ("could not verify the callback channel — the OAST poll failed, so this is "
+                       "NOT a clean no-hit; re-check with oast_poll")
+    elif not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
     return out
 
@@ -5158,20 +5141,12 @@ async def xxe_probe(target: str, body: str = "", content_type: str = "applicatio
                              headers={"Content-Type": "application/xml"},
                              follow_redirects=False, scope_check=sc)
         await asyncio.sleep(max(0.0, min(wait, 8.0)))
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            hits = ctx.oast_server.interactions(cb.token)
-        else:
-            poll = ctx.oast.poll_target(cb.token)
-            hits = []
-            if poll:
-                try:
-                    r = await ctx.http.fetch(poll, follow_redirects=True)
-                    hits = oastmod.parse_interactions(r.text())
-                except Exception:
-                    hits = []
+        hits, oast_err = await _collect_oast(ctx, cb.token)
         oast_count = len(hits)
         result["oob"] = {"canary": cb.http_url, "token": cb.token,
                          "interaction_count": oast_count, "interactions": hits[:20]}
+        if oast_err:
+            result["oob"]["oast_error"] = oast_err
 
     verdict = confirmmod.evaluate(oast_count=oast_count)
     result.update(verdict)
@@ -5315,17 +5290,13 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
         u, b = _with_param(url, param, value, m)
         return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
 
+    poll_errors: list[str] = []
+
     async def _poll(cb) -> list:
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            return ctx.oast_server.interactions(cb.token)
-        pt = ctx.oast.poll_target(cb.token)
-        if not pt:
-            return []
-        try:
-            r = await ctx.http.fetch(pt, follow_redirects=True)
-            return oastmod.parse_interactions(r.text())
-        except Exception:
-            return []
+        hits, err = await _collect_oast(ctx, cb.token)
+        if err and err not in poll_errors:
+            poll_errors.append(err)
+        return hits
 
     # Lane 1 — scheme-deref OAST canaries (one token per scheme for attribution).
     scheme_hits: dict[str, int] = {}
@@ -5359,6 +5330,8 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
         status_changed=bool(reachable))
     out: dict[str, Any] = {"target": url, "param": param, **verdict,
                            "scheme_callbacks": scheme_hits, "reachable_internal_ports": reachable}
+    if poll_errors:
+        out["oast_error"] = poll_errors[0]
     if scheme_note:
         out["scheme_note"] = scheme_note
     if non_http_schemes:
@@ -5400,21 +5373,15 @@ async def fastjson_oast_probe(target: str, method: str = "POST",
                              follow_redirects=False, scope_check=_scope_check())
         sent.append(label)
     await asyncio.sleep(max(0.0, min(wait, 8.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits, oast_err = await _collect_oast(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "canary": cb.http_url, "token": cb.token, "payloads_sent": sent,
            **verdict, "interactions": hits[:20]}
-    if not hits:
+    if oast_err:
+        out["oast_error"] = oast_err
+        out["note"] = ("could not verify the callback channel — the OAST poll failed, so this is "
+                       "NOT a clean no-hit; re-check with oast_poll")
+    elif not hits:
         out["note"] = ("no callback yet — the sink may not deserialize @type, or it calls back later; "
                        "re-check with oast_poll")
     else:
