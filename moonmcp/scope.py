@@ -100,12 +100,25 @@ def canonical_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | N
     return None
 
 
+# Ranges that stdlib ``is_private`` does NOT reliably flag across Python versions
+# but which are off-limits for an SSRF guard: carrier-grade NAT (100.64.0.0/10 —
+# cloud instance metadata lives here, e.g. Alibaba/OCI at 100.100.100.200) and the
+# IETF benchmarking net (198.18.0.0/15). Explicit so the guard doesn't depend on the
+# interpreter version's ipaddress classification.
+_EXTRA_BLOCKED_NETS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("198.18.0.0/15"),
+)
+
+
 def _ip_is_blocked(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """True if *addr* is in a private/reserved range that is off-limits by default."""
 
     mapped = getattr(addr, "ipv4_mapped", None)
     if mapped is not None:  # ::ffff:127.0.0.1 must be judged as its IPv4 form
         addr = mapped
+    if any(addr in net for net in _EXTRA_BLOCKED_NETS):
+        return True
     return bool(
         addr.is_private
         or addr.is_loopback
@@ -232,6 +245,53 @@ class ScopeManager:
                     "SSRF guard (set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)"
                 )
         return None
+
+    def resolve_pin(self, target: str) -> tuple[str | None, str | None]:
+        """Resolve *target* ONCE for the SSRF guard and return
+        ``(block_reason, pinned_ip)``.
+
+        The caller is expected to connect to ``pinned_ip`` (with the original
+        hostname supplied as Host header / TLS SNI), so the address that was vetted
+        is the address that is dialed. This closes the DNS-rebinding TOCTOU where the
+        guard and the connect layer each resolve the name independently and a
+        short-TTL name can answer with a public IP for the guard and a private one
+        for the connect.
+
+        ``block_reason`` non-``None`` ⇒ do not connect. Otherwise ``pinned_ip`` is
+        the vetted address to dial, or ``None`` when pinning does not apply (private
+        guard disabled, an unresolvable name, or no address to pin) — the caller then
+        falls back to connecting by hostname as before.
+        """
+
+        if not self.block_private:
+            return (None, None)  # internal testing opted in — nothing to pin/guard
+        try:
+            host = normalize_target(target)
+        except ValueError:
+            return (None, None)
+        ip = canonical_ip(host)
+        if ip is not None:
+            if _ip_is_blocked(ip):
+                return (f"{host} is a private/reserved address ({ip}) blocked by the SSRF guard", None)
+            return (None, str(ip))  # an IP literal is already its own pin
+        try:
+            resolved = self._resolve(host)
+        except Exception:
+            return (f"{host} could not be resolved for the SSRF guard — blocked (fail-closed; "
+                    "set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)", None)
+        pin: str | None = None
+        for raw in resolved:
+            try:
+                addr = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if _ip_is_blocked(addr):
+                return (f"{host} resolves to {addr}, a private/reserved address — blocked by the "
+                        "SSRF guard (set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)",
+                        None)
+            if pin is None:
+                pin = raw  # first vetted address becomes the pinned connect target
+        return (None, pin)
 
     # -- mutation ----------------------------------------------------------
     @staticmethod

@@ -18,10 +18,13 @@ def _env_bool(name: str, default: bool) -> bool:
     v = raw.strip().lower()
     if v in {"1", "true", "yes", "on", "y", "t", "enable", "enabled"}:
         return True
-    if v in {"0", "false", "no", "off", "n", "f", "disable", "disabled", ""}:
+    if v in {"0", "false", "no", "off", "n", "f", "disable", "disabled"}:
         return False
-    # An unrecognised value must NOT silently disable a safety flag (enforce_scope /
-    # block_private default True) — fall back to the default rather than flip to False.
+    # An unrecognised OR EMPTY value must NOT silently disable a safety flag
+    # (enforce_scope / block_private default True) — an empty string is what MCP
+    # client env blocks and shell wrappers routinely produce for an "unset" var, so
+    # treat it as "use the default", never as "off". Only explicit 0/false/off/…
+    # disable.
     return default
 
 

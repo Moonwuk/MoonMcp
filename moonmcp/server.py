@@ -25,6 +25,7 @@ import os
 import platform
 import re
 import secrets
+import statistics
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -407,13 +408,23 @@ def _host_like_tokens(args: list[str]) -> list[str]:
                 continue
             except ValueError:
                 t = t.split("/", 1)[0]
+        # Normalise (strip scheme/brackets/port) then test for ANY IP literal —
+        # including the obfuscated IPv4 encodings (decimal 2852039166 = 169.254.169.254,
+        # hex 0x7f000001, short 127.1) and IPv6 (::1, [::1]) that the old
+        # ipaddress.ip_address(t.split(':')[0]) missed and would smuggle to the scanner
+        # past the scope check.
         try:
-            ipaddress.ip_address(t.split(":", 1)[0])
-            found.append(t)
-            continue
+            host_only = normalize_target(t)
         except ValueError:
-            pass
-        host_only = t.split(":", 1)[0]
+            continue
+        if canonical_ip(host_only) is not None:
+            # A dotted/hex/short/IPv6 literal is always a target. A BARE decimal
+            # integer also matches benign scanner values (status codes 200/301, ports,
+            # counts, rates), so only treat one as a target when it maps to >= 1.0.0.0
+            # (0x01000000) — every real obfuscated IP does; small values do not.
+            if not host_only.isdigit() or int(host_only) > 0x00FFFFFF:
+                found.append(t)
+                continue
         if _HOSTISH_RE.match(t) and host_only.rsplit(".", 1)[-1].lower() not in _NON_TLD:
             found.append(t)
     return found
@@ -791,6 +802,66 @@ async def oast_poll(token: str | None = None) -> dict:
     interactions = oastmod.parse_interactions(r.text())
     return {"token": token, "status": r.status, "interaction_count": len(interactions),
             "interactions": interactions[:200]}
+
+
+async def _collect_oast(ctx, token: str) -> tuple[list[dict], str | None]:
+    """Read OAST interactions for ``token``, distinguishing 'no callback yet'
+    (``[], None``) from 'could not check' (``[], "<reason>"``).
+
+    The blind-vuln lanes must never render a *poll failure* as a clean no-hit: a
+    swallowed poll error is a silent miss — the one failure mode a detection tool
+    cannot have. Callers surface the returned reason as ``oast_error`` so an agent
+    knows the callback channel was never actually verified.
+    """
+
+    server = ctx.oast_server
+    if server is not None and server.running:
+        return server.interactions(token), None
+    poll = ctx.oast.poll_target(token)
+    if not poll:
+        return [], None  # nothing to poll (self-host stopped / unconfigured); other fields say so
+    try:
+        r = await ctx.http.fetch(poll, follow_redirects=True)
+    except Exception as exc:  # noqa: BLE001 - report the failure, never swallow it
+        return [], f"poll request failed: {type(exc).__name__}: {exc}"
+    if r.status is None:
+        return [], f"poll request failed: {r.error or 'unreachable'}"
+    return oastmod.parse_interactions(r.text()), None
+
+
+async def _run_time_based(get, zero_payloads, delay_payloads, confirm_payloads,
+                          req: float, req_lo: float, label_key: str) -> list[dict]:
+    """Drive the time-based blind lane with REPEATED samples + a scaling re-probe.
+
+    Replaces the old single-shot ``control vs delayed`` compare (jitter false-positive;
+    a slow baseline dropped real hits). For each payload pair it medians several 0s
+    controls and ``req``-second delays, and only when that clears the threshold does it
+    pay for a smaller ``req_lo`` confirm probe and require the induced delay to scale
+    with the sleep (see :func:`probes.assess_timing_samples`). ``label_key`` is
+    ``"dbms"`` (sqli) or ``"separator"`` (cmdi).
+    """
+
+    loop = asyncio.get_event_loop()
+
+    async def _elapsed(pl: str) -> float:
+        s = loop.time()
+        await get(pl)
+        return loop.time() - s
+
+    hits: list[dict] = []
+    for (lbl, zp), (_a, dp), (_b, cp) in zip(zero_payloads, delay_payloads,
+                                             confirm_payloads, strict=True):
+        control = [await _elapsed(zp) for _ in range(3)]
+        primary = [await _elapsed(dp) for _ in range(2)]
+        # cheap gate: skip the (slower) scaling re-probe unless the primary looks real
+        if statistics.median(primary) - statistics.median(control) < max(0.6 * req, 0.5):
+            continue
+        confirm = [await _elapsed(cp) for _ in range(2)]
+        hit = probesmod.assess_timing_samples(control, primary, req,
+                                              confirm=confirm, requested_confirm=req_lo)
+        if hit:
+            hits.append({label_key: lbl, **hit})
+    return hits
 
 
 @mcp.tool()
@@ -2346,21 +2417,15 @@ async def jwt_jku_probe(token: str, target: str, header_param: str = "jku",
     await ctx.http.fetch(url, method="GET", headers={"Authorization": f"Bearer {forged}"},
                          follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits, oast_err = await _collect_oast(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "header_param": param, "canary": cb.http_url, "token_id": cb.token,
            **verdict, "interactions": hits[:20]}
-    if not hits:
+    if oast_err:
+        out["oast_error"] = oast_err
+        out["note"] = ("could not verify the callback channel — the OAST poll failed, so this is "
+                       "NOT a clean no-hit; re-check with oast_poll")
+    elif not hits:
         out["note"] = "no callback yet — the server may fetch the key later; re-check with oast_poll"
     return out
 
@@ -2654,20 +2719,12 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
         else:
             await _cycle(somod.oob_seed(tag, cb.http_url, cb.canary_host))
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        rr = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(rr.text())
-                    except Exception:
-                        oh = []
+            oh, oast_err = await _collect_oast(ctx, cb.token)
             oast_count = len(oh)
             oob_out = {"canary": cb.http_url, "token": cb.token,
                        "interaction_count": oast_count, "interactions": oh[:20]}
+            if oast_err:
+                oob_out["oast_error"] = oast_err
 
     has_error = any(f["error_signatures"] for f in findings)
     verdict = confirmmod.evaluate(
@@ -4310,19 +4367,11 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
     hit_labels = [f"{h['class']}/{h['technology']}" for h in hits]
 
     interactions: list[dict] = []
+    oast_err: str | None = None
     if oast_token:
         # The built-in self-host catcher (oast_selfhost) records callbacks locally
         # and sets no poll_url — read it directly, like ssrf_probe / oast_poll do.
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            interactions = ctx.oast_server.interactions(oast_token)
-        else:
-            poll = ctx.oast.poll_target(oast_token)
-            if poll:
-                try:
-                    r = await ctx.http.fetch(poll, method="GET", follow_redirects=True)
-                    interactions = oastmod.parse_interactions(r.text())
-                except Exception:
-                    interactions = []
+        interactions, oast_err = await _collect_oast(ctx, oast_token)
 
     verdict = confirmmod.evaluate(
         reflected=reflected, status_changed=status_changed, length_delta=length_delta,
@@ -4335,6 +4384,8 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
         "reflected": reflected, "injection_matches": hits[:10],
         "oast_interactions": interactions[:20],
     }
+    if oast_err:
+        out["oast_error"] = oast_err
     if verdict["verdict"] == "confirmed" and record:
         ts = ""
         from datetime import datetime, timezone
@@ -4436,10 +4487,17 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
                                     follow_redirects=False, scope_check=_scope_check())
 
     def _diff(t1, t2, f1, f2) -> tuple[bool, bool]:
-        ts = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
-        fs = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
-        d = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
-        return bool(ts and fs), bool(ts and fs and d)
+        # Tolerate per-request jitter (nonce/timestamp/counter/ad rotation) measured
+        # from the two identical sends of each arm; a real boolean differential must
+        # EXCEED that noise floor, not merely differ by a byte. A byte-exact compare
+        # false-negatived on any dynamic page (the common case for authed endpoints).
+        jitter = max(abs(len(t1.body) - len(t2.body)), abs(len(f1.body) - len(f2.body)))
+        tol = jitter + 16
+        ts = (t1.status == t2.status) and abs(len(t1.body) - len(t2.body)) <= tol
+        fs = (f1.status == f2.status) and abs(len(f1.body) - len(f2.body)) <= tol
+        stable = bool(ts and fs)
+        d = (t1.status != f1.status) or (abs(len(t1.body) - len(f1.body)) > tol)
+        return stable, bool(stable and d)
 
     # --- core: error signatures + reproducible boolean (context-aware) ---
     er = await _get(probesmod.SQLI_ERROR)
@@ -4480,23 +4538,14 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         if wb:
             extra_hits.append("sqli/waf-bypass-encoding" if not bool_diff else "sqli/encoded-differential")
 
-    # --- time-based blind lane (monotonic vs a 0s control) ---
+    # --- time-based blind lane (repeated samples + scaling re-probe) ---
     if time_based:
         req = max(0.0, min(delay_s, 15.0))
-        zero, delayed = probesmod.sqli_time_payloads(0), probesmod.sqli_time_payloads(req)
-        loop = asyncio.get_event_loop()
-        tb: list[dict] = []
-        for (dbms, zp), (_d, dp) in zip(zero, delayed, strict=True):
-            s0 = loop.time()
-            await _get(zp)
-            z_s = loop.time() - s0
-            s1 = loop.time()
-            await _get(dp)
-            d_s = loop.time() - s1
-            hit = probesmod.assess_timing(z_s, d_s, req)
-            if hit:
-                tb.append({"dbms": dbms, **hit})
-        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        req_lo = max(req * 0.4, 0.5)
+        tb = await _run_time_based(
+            _get, probesmod.sqli_time_payloads(0), probesmod.sqli_time_payloads(req),
+            probesmod.sqli_time_payloads(req_lo), req, req_lo, "dbms")
+        lanes["time_based"] = {"requested_s": req, "confirm_s": round(req_lo, 3), "hits": tb}
         if tb:
             extra_hits.append("sqli/time-based")
 
@@ -4513,20 +4562,12 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
             for _lbl, pl in probesmod.sqli_oob_payloads(cb.canary_host, cb.http_url):
                 await _get(pl)
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        r = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(r.text())
-                    except Exception:
-                        oh = []
+            oh, oast_err = await _collect_oast(ctx, cb.token)
             oast_count = len(oh)
             lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
                             "interaction_count": oast_count, "interactions": oh[:20]}
+            if oast_err:
+                lanes["oob"]["oast_error"] = oast_err
             if oh:
                 extra_hits.append("sqli/oob-callback")
 
@@ -4536,6 +4577,7 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         injection_hits=[f"{h['class']}/{h['technology']}" for h in hits] + extra_hits,
         status_changed=bool_diff and (t1.status != f1.status),
         length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0,
+        differential_confirmed=bool_diff,
         oast_count=oast_count, timing_delta_ms=timing_ms)
     out: dict[str, Any] = {
         "target": url, "param": param, "context": context, "placement": placement,
@@ -4583,21 +4625,11 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
 
     if time_based:
         req = max(0.0, min(delay_s, 10.0))
-        zero_payloads = probesmod.cmdi_time_payloads(0)
-        delay_payloads = probesmod.cmdi_time_payloads(req)
-        loop = asyncio.get_event_loop()
-        tb: list[dict] = []
-        for (sep, zp), (_s, dp) in zip(zero_payloads, delay_payloads, strict=True):
-            s0 = loop.time()
-            await _get(zp)
-            z_s = loop.time() - s0
-            s1 = loop.time()
-            await _get(dp)
-            d_s = loop.time() - s1
-            hit = probesmod.assess_timing(z_s, d_s, req)
-            if hit:
-                tb.append({"separator": sep, **hit})
-        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        req_lo = max(req * 0.4, 0.5)
+        tb = await _run_time_based(
+            _get, probesmod.cmdi_time_payloads(0), probesmod.cmdi_time_payloads(req),
+            probesmod.cmdi_time_payloads(req_lo), req, req_lo, "separator")
+        lanes["time_based"] = {"requested_s": req, "confirm_s": round(req_lo, 3), "hits": tb}
         if tb:
             extra_hits.append("cmdi/time-based")
             timing_ms = max(h["delta_s"] for h in tb) * 1000
@@ -4614,26 +4646,29 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
             for _sep, pl in probesmod.cmdi_oob_payloads(cb.http_url):
                 await _get(pl)
             await asyncio.sleep(max(0.0, min(wait, 8.0)))
-            if ctx.oast_server is not None and ctx.oast_server.running:
-                oh = ctx.oast_server.interactions(cb.token)
-            else:
-                poll = ctx.oast.poll_target(cb.token)
-                oh = []
-                if poll:
-                    try:
-                        r = await ctx.http.fetch(poll, follow_redirects=True)
-                        oh = oastmod.parse_interactions(r.text())
-                    except Exception:
-                        oh = []
+            oh, oast_err = await _collect_oast(ctx, cb.token)
             oast_count = len(oh)
             lanes["oob"] = {"canary": cb.http_url, "token": cb.token,
                             "interaction_count": oast_count, "interactions": oh[:20]}
+            if oast_err:
+                lanes["oob"]["oast_error"] = oast_err
             if oh:
                 extra_hits.append("cmdi/oob-callback")
 
     verdict = confirmmod.evaluate(injection_hits=extra_hits, oast_count=oast_count,
                                   timing_delta_ms=timing_ms)
     return {"target": url, "param": param, **verdict, "lanes": lanes}
+
+
+# path-traversal KB signatures that are *not* genuine file-content disclosure:
+# they fire on benign JS (`require(`/`include(`), any generic filesystem-error
+# page, or any host list containing `127.0.0.1 localhost`. They only prove the
+# parameter *reaches* a file API — a weak lead, never a confirmed traversal.
+_LFI_WEAK_SIGS = frozenset({
+    "generic (error-based path leak)",
+    "PHP wrapper error",
+    "Windows hosts file",
+})
 
 
 @mcp.tool()
@@ -4646,7 +4681,12 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
     win.ini `[fonts]`/`[extensions]` markers, and related patterns from the
     `path-traversal` knowledge base) — proof the traversal reached the filesystem,
     not just that a WAF let the payload's *shape* through (that's `waf_bypass_probe`'s
-    canary). Reads only universally-present, non-sensitive files (never app source,
+    canary). A benign baseline is fetched first and any signature it *also* produces
+    is subtracted, so a JS bundle full of `require(` or a page that always echoes a
+    filesystem error cannot be scored as a hit. Only signatures the traversal payload
+    *introduces* count, and only genuine file-content anchors reach the `confirmed`
+    verdict — error-based "reaches a file API" hits are reported as a weak lead.
+    Reads only universally-present, non-sensitive files (never app source,
     credentials, or config) — proving reachability, not extracting data (deeper
     extraction is weaponization → Strix). Intrusive; in scope only.
     """
@@ -4664,21 +4704,47 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
         u, b = _with_param(url, param, value, m)
         return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
 
-    findings: list[dict] = []
+    # Benign baseline: the same request with a harmless, non-traversal value. Any
+    # signature that also fires here is a property of the endpoint (a JS bundle that
+    # contains `require(`, a page that always shows a filesystem error, a config that
+    # lists `127.0.0.1 localhost`), NOT of the traversal — subtract it and only count
+    # signatures the traversal payload *introduces*.
+    base = await _get(f"mcp{secrets.token_hex(3)}", False)
+    base_sigs = {(h["technology"], h["matched"])
+                 for h in injmod.match_signatures(base.text(50_000), class_id="path-traversal")}
+
+    findings: list[dict] = []   # strong: genuine file-content disclosure (confirmed)
+    leads: list[dict] = []      # weak: param reaches a file API (error-based lead)
     for label, payload, is_raw in probesmod.LFI_PAYLOADS:
         r = await _get(payload, is_raw)
         if r.status is None:
             continue
-        hits = injmod.match_signatures(r.text(50_000), class_id="path-traversal")
-        if hits:
+        new = [h for h in injmod.match_signatures(r.text(50_000), class_id="path-traversal")
+               if (h["technology"], h["matched"]) not in base_sigs]
+        if not new:
+            continue
+        strong = [h for h in new if h["technology"] not in _LFI_WEAK_SIGS]
+        weak = [h for h in new if h["technology"] in _LFI_WEAK_SIGS]
+        if strong:
             findings.append({"payload_label": label, "payload": payload,
-                             "status": r.status, "signatures": hits[:5]})
+                             "status": r.status, "signatures": strong[:5]})
+        elif weak:
+            leads.append({"payload_label": label, "payload": payload,
+                          "status": r.status, "signatures": weak[:5]})
 
+    # Only a genuine file-content signature the baseline lacks confirms disclosure.
+    # Error-based leads never set `reflected`, so they cannot reach the strong
+    # ("confirmed") path in confirm.evaluate — they fire on benign JS / error pages.
     verdict = confirmmod.evaluate(
         injection_hits=[f"{h['class']}/{h['technology']}" for f in findings for h in f["signatures"]],
         reflected=bool(findings))
-    return {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
-           **verdict, "findings": findings}
+    out: dict[str, Any] = {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
+                           **verdict, "findings": findings, "leads": leads}
+    if leads and not findings:
+        out["note"] = ("only error-based 'reaches a file API' signals fired (no file "
+                       "content recovered) — a weak lead, not a confirmed traversal; "
+                       "verify the parameter's file-handling context manually")
+    return out
 
 
 @mcp.tool()
@@ -4755,12 +4821,20 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     c_req = nosqlimod.scalar_request(url, param, nosqlimod.CONTROL, m)
     control = (await _send(c_req, m), await _send(c_req, m))
 
-    # Operator lane: bracket twins in the requested method + JSON twins as POST.
+    # Benign nested-key control: `param[zz]=CONTROL` (a NON-operator nested key). A
+    # framework that parses brackets into an object (Express/qs, PHP) flips on this
+    # too, regardless of the backend DB — so a bracket-operator flip that merely
+    # matches this benign one is param parsing, not Mongo injection (corroboration).
+    nested_req = nosqlimod.bracket_request(url, param, "zz", nosqlimod.CONTROL, m)
+    nested_ctrl = (await _send(nested_req, m), await _send(nested_req, m))
+
+    # Operator lane: bracket twins (corroborated vs the benign nested control) in the
+    # requested method + JSON twins as POST.
     operator_hits: list[dict] = []
     for label, op, val in nosqlimod.BRACKET_TWINS:
         req = nosqlimod.bracket_request(url, param, op, val, m)
         twin = (await _send(req, m), await _send(req, m))
-        hit = nosqlimod.assess_operator(control, twin)
+        hit = nosqlimod.assess_operator(control, twin, nested=nested_ctrl)
         if hit:
             operator_hits.append({"variant": label, **hit})
     for label, obj in nosqlimod.JSON_TWINS:
@@ -4788,7 +4862,8 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     verdict = confirmmod.evaluate(
         injection_hits=injection_hits,
         status_changed=bool(strong_op) or bool(where_hit and where_hit["status_changed"]),
-        length_delta=(where_hit["length_delta"] if where_hit else 0))
+        length_delta=(where_hit["length_delta"] if where_hit else 0),
+        differential_confirmed=bool(where_hit))
     return {"target": url, "param": param, "method": m, **verdict,
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],
@@ -5033,21 +5108,15 @@ async def ssrf_probe(target: str, param: str, method: str = "GET",
     tu, tb = _with_param(url, param, cb.http_url, m)
     await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
     await asyncio.sleep(max(0.0, min(wait, 5.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits, oast_err = await _collect_oast(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "param": param, "canary": cb.http_url, "token": cb.token,
            **verdict, "interactions": hits[:20]}
-    if not hits:
+    if oast_err:
+        out["oast_error"] = oast_err
+        out["note"] = ("could not verify the callback channel — the OAST poll failed, so this is "
+                       "NOT a clean no-hit; re-check with oast_poll")
+    elif not hits:
         out["note"] = "no callback yet — the target may call back later; re-check with oast_poll"
     return out
 
@@ -5116,20 +5185,12 @@ async def xxe_probe(target: str, body: str = "", content_type: str = "applicatio
                              headers={"Content-Type": "application/xml"},
                              follow_redirects=False, scope_check=sc)
         await asyncio.sleep(max(0.0, min(wait, 8.0)))
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            hits = ctx.oast_server.interactions(cb.token)
-        else:
-            poll = ctx.oast.poll_target(cb.token)
-            hits = []
-            if poll:
-                try:
-                    r = await ctx.http.fetch(poll, follow_redirects=True)
-                    hits = oastmod.parse_interactions(r.text())
-                except Exception:
-                    hits = []
+        hits, oast_err = await _collect_oast(ctx, cb.token)
         oast_count = len(hits)
         result["oob"] = {"canary": cb.http_url, "token": cb.token,
                          "interaction_count": oast_count, "interactions": hits[:20]}
+        if oast_err:
+            result["oob"]["oast_error"] = oast_err
 
     verdict = confirmmod.evaluate(oast_count=oast_count)
     result.update(verdict)
@@ -5273,17 +5334,13 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
         u, b = _with_param(url, param, value, m)
         return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
 
+    poll_errors: list[str] = []
+
     async def _poll(cb) -> list:
-        if ctx.oast_server is not None and ctx.oast_server.running:
-            return ctx.oast_server.interactions(cb.token)
-        pt = ctx.oast.poll_target(cb.token)
-        if not pt:
-            return []
-        try:
-            r = await ctx.http.fetch(pt, follow_redirects=True)
-            return oastmod.parse_interactions(r.text())
-        except Exception:
-            return []
+        hits, err = await _collect_oast(ctx, cb.token)
+        if err and err not in poll_errors:
+            poll_errors.append(err)
+        return hits
 
     # Lane 1 — scheme-deref OAST canaries (one token per scheme for attribution).
     scheme_hits: dict[str, int] = {}
@@ -5317,6 +5374,8 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
         status_changed=bool(reachable))
     out: dict[str, Any] = {"target": url, "param": param, **verdict,
                            "scheme_callbacks": scheme_hits, "reachable_internal_ports": reachable}
+    if poll_errors:
+        out["oast_error"] = poll_errors[0]
     if scheme_note:
         out["scheme_note"] = scheme_note
     if non_http_schemes:
@@ -5358,21 +5417,15 @@ async def fastjson_oast_probe(target: str, method: str = "POST",
                              follow_redirects=False, scope_check=_scope_check())
         sent.append(label)
     await asyncio.sleep(max(0.0, min(wait, 8.0)))
-    if ctx.oast_server is not None and ctx.oast_server.running:
-        hits = ctx.oast_server.interactions(cb.token)
-    else:
-        poll = ctx.oast.poll_target(cb.token)
-        hits = []
-        if poll:
-            try:
-                r = await ctx.http.fetch(poll, follow_redirects=True)
-                hits = oastmod.parse_interactions(r.text())
-            except Exception:
-                hits = []
+    hits, oast_err = await _collect_oast(ctx, cb.token)
     verdict = confirmmod.evaluate(oast_count=len(hits))
     out = {"target": url, "canary": cb.http_url, "token": cb.token, "payloads_sent": sent,
            **verdict, "interactions": hits[:20]}
-    if not hits:
+    if oast_err:
+        out["oast_error"] = oast_err
+        out["note"] = ("could not verify the callback channel — the OAST poll failed, so this is "
+                       "NOT a clean no-hit; re-check with oast_poll")
+    elif not hits:
         out["note"] = ("no callback yet — the sink may not deserialize @type, or it calls back later; "
                        "re-check with oast_poll")
     else:

@@ -12,12 +12,19 @@ from __future__ import annotations
 
 def evaluate(*, reflected: bool = False, status_changed: bool = False,
              length_delta: int = 0, injection_hits: list[str] | None = None,
-             oast_count: int = 0, timing_delta_ms: float = 0.0) -> dict:
+             oast_count: int = 0, timing_delta_ms: float = 0.0,
+             differential_confirmed: bool = False) -> dict:
     """Weigh confirmation signals into a verdict.
 
     Strong confirmation = an out-of-band callback fired, or an injection signature
     matched in a response the payload provably changed. Everything else is a lead
     of varying strength, never an assertion.
+
+    ``differential_confirmed`` marks a **reproducible** boolean/differential oracle
+    (both control pairs stable AND true≠false beyond the noise floor) — the defining
+    signal of blind SQLi/NoSQLi. It carries real weight (a caller only sets it after
+    controlling for reflection and jitter), so such a lead is no longer buried at
+    ``inconclusive`` the way two loose status/length +1s left it.
     """
 
     hits = injection_hits or []
@@ -28,6 +35,10 @@ def evaluate(*, reflected: bool = False, status_changed: bool = False,
         score += 5
     if hits:
         signals.append(f"injection signatures matched: {', '.join(hits[:5])}")
+        score += 3
+    if differential_confirmed:
+        signals.append("reproducible boolean/differential oracle — true≠false, both arms stable "
+                       "(reflection- and jitter-controlled blind-injection signal)")
         score += 3
     if reflected:
         signals.append("payload reflected in the response (and not in the baseline)")

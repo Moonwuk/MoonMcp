@@ -268,6 +268,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/nosqli-bracketparse"):
+            # NOT Mongo: a framework (Express+qs / PHP) that turns ANY bracketed param
+            # into a nested object; a NON-Mongo backend then errors identically whether
+            # the nested key is an operator ($ne) or benign (zz). The bracket "flip" is
+            # param parsing, not operator injection — must NOT be scored as NoSQLi.
+            from urllib.parse import parse_qs
+            keys = parse_qs(raw.decode("utf-8", "replace"))
+            if any("[" in k for k in keys):
+                body = b"<html>500 internal server error - unexpected request shape</html>"
+                self.send_response(500)
+            else:
+                body = b"<html>invalid credentials</html>"
+                self.send_response(401)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/fastjson"):
             # DELIBERATELY VULNERABLE: "deserializes" the @type body by fetching the
             # URL it carries (simulates java.net.URL autoType → outbound lookup).
@@ -532,6 +550,33 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"<html>ok</html>")
+            return
+        if self.path.startswith("/lfi-jsbundle"):
+            # NOT vulnerable: a minified-JS endpoint whose body contains `require(`
+            # regardless of the param. `require(` matches the error-based
+            # path-traversal signature, so a naive matcher false-CONFIRMS here; the
+            # baseline-subtraction fix must score it clean (require( is in the
+            # baseline too).
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"(function(){var a=require('./x');return require('./y');})();")
+            return
+        if self.path.startswith("/lfi-errorleak"):
+            # A parameter that REACHES a file API and reflects a filesystem error for
+            # traversal-ish input, but never returns file CONTENT. This is a weak
+            # "reaches a file API" lead, not a confirmed content disclosure.
+            import urllib.parse as _up
+            from urllib.parse import parse_qs, urlparse
+            v = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            low = _up.unquote(v).lower()
+            if "passwd" in low or "../" in low or "..\\" in low or "win.ini" in low:
+                body = (b"Warning: include(): Failed opening '../etc/passwd' for "
+                        b"inclusion: No such file or directory")
+            else:
+                body = b"<html>ok</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path.startswith("/interp-vuln"):
             # VULNERABLE (highly interpretive): simulates escape/quote stripping,

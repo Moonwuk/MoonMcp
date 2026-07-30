@@ -8,6 +8,7 @@ false-positive rate down.  Findings are redacted before they leave the process.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from collections.abc import Callable
@@ -73,7 +74,10 @@ _RAW_PATTERNS: list[tuple[str, str, str, int]] = [
     ("New Relic API Key", r"NRAK-[A-Z0-9]{27}", "low", 0),
     ("Linear API Key", r"lin_api_[0-9A-Za-z]{40}", "low", 0),
     ("Age Secret Key", r"AGE-SECRET-KEY-1[0-9A-Z]{58}", "low", 0),
-    ("Basic Auth in URL", r"(?i)[a-z][a-z0-9+.\-]+://[^/\s:@]+:([^/\s:@]{3,})@", "high", 1),
+    # Bounded quantifiers on the scheme + userinfo so this can't backtrack
+    # quadratically over a large pathological body (ReDoS): a scheme is short and a
+    # DSN userinfo/password is not megabytes long. Linear-time as a result.
+    ("Basic Auth in URL", r"(?i)\b[a-z][a-z0-9+.\-]{1,19}://[^/\s:@]{1,128}:([^/\s:@]{3,128})@", "high", 1),
     ("Generic Secret Assignment",
      r"(?i)(?:api[_-]?key|secret|token|password|passwd|auth)['\"]?\s*[:=]\s*['\"]([0-9a-zA-Z\-_.=]{8,64})['\"]", "high", 1),
 ]
@@ -179,6 +183,13 @@ def scan_text(text: str, source: str = "") -> list[SecretHit]:
             seen.add(key)
             start = max(0, m.start() - 25)
             ctx = text[start:m.start() + len(m.group(0)) + 15].replace("\n", " ").strip()
+            # The context window spans the full match, so it used to carry the secret
+            # in CLEARTEXT — defeating the module's own "redacted before it leaves the
+            # process" contract (the value then flowed into the LLM context, audit log,
+            # exported reports and the shared memory hub). Mask the captured value
+            # inside the window before returning, keeping the surrounding context
+            # (e.g. `api_key="…"`) useful.
+            ctx = ctx.replace(value, _redact(value))
             hits.append(SecretHit(type=name, fp_risk=risk, redacted=_redact(value),
                                   context=ctx[:120], source=source))
     return hits
@@ -201,7 +212,9 @@ async def scan_secrets(
         return scan
     html = page.text(limit=500_000)
     scan.scanned_sources.append(page.final_url or url)
-    scan.hits.extend(scan_text(html, source=page.final_url or url))
+    # Run the regex scan off the event loop — a large attacker-controlled body must
+    # never block every other concurrent MCP tool sharing this process.
+    scan.hits.extend(await asyncio.to_thread(scan_text, html, page.final_url or url))
 
     if include_js:
         _, js, _, _ = _extract(page.final_url or url, html)
@@ -217,5 +230,5 @@ async def scan_secrets(
             if jr.status is None or not jr.body:
                 continue
             scan.scanned_sources.append(jurl)
-            scan.hits.extend(scan_text(jr.text(limit=800_000), source=jurl))
+            scan.hits.extend(await asyncio.to_thread(scan_text, jr.text(limit=800_000), jurl))
     return scan
