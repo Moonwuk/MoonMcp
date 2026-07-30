@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass
+from typing import Any
 
 from .audit import AuditLog, setup_logging
 from .auth import AuthContext
@@ -84,8 +85,13 @@ def build_context(settings: Settings | None = None) -> AppContext:
                       memory=MemoryStore.from_env())
 
 
-def to_dict(obj: object, *, drop_none: bool = True) -> object:
-    """Recursively convert dataclasses/containers into JSON-friendly primitives."""
+def to_dict(obj: object, *, drop_none: bool = True) -> Any:
+    """Recursively convert dataclasses/containers into JSON-friendly primitives.
+
+    Returns ``Any`` (not ``object``): the recursive result is a dict / list / str /
+    number / None depending on the input, and callers index or spread it — typing it
+    ``object`` forced every ``to_dict(...)`` call site to look like a type error.
+    """
 
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         out = {}
