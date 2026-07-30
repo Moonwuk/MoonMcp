@@ -48,12 +48,15 @@ class Governor:
         self.semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
     async def __aenter__(self) -> Governor:
+        # Acquire the rate-limiter token FIRST, then the concurrency slot, so a slot
+        # is held only while a request is actually in flight. The old order (slot then
+        # token) let coroutines that were merely WAITING for a token occupy slots,
+        # collapsing effective concurrency below max_concurrency whenever the rate
+        # gated. If cancelled between the two, a spent token is wasted (not a leak);
+        # __aexit__ runs only when __aenter__ returned, so the slot is never
+        # double-released.
+        await self.limiter.acquire()
         await self.semaphore.acquire()
-        try:
-            await self.limiter.acquire()
-        except BaseException:
-            self.semaphore.release()
-            raise
         return self
 
     async def __aexit__(self, *exc: object) -> None:
