@@ -16,7 +16,10 @@ Design goals:
 from __future__ import annotations
 
 import asyncio
+import functools
+import http.client
 import os
+import socket
 import ssl
 import time
 import urllib.error
@@ -150,6 +153,24 @@ def _trusted_context() -> ssl.SSLContext:
     return ctx
 
 
+def _proxy_applies(url: str) -> bool:
+    """Does a configured proxy handle *url*? If so, IP-pinning must be skipped — the
+    proxy (not us) opens the origin connection and resolves it, and pinning would
+    wrongly dial the origin IP as if it were the proxy address."""
+
+    proxies = urllib.request.getproxies()
+    if not proxies:
+        return False
+    scheme = urlsplit(url).scheme.lower()
+    if scheme not in proxies and "all" not in proxies:
+        return False
+    host = urlsplit(url).hostname or ""
+    try:
+        return not urllib.request.proxy_bypass(host)
+    except Exception:
+        return True
+
+
 def _blocking_fetch(
     url: str,
     method: str,
@@ -158,11 +179,14 @@ def _blocking_fetch(
     timeout: float,
     verify_tls: bool,
     max_body: int,
+    pinned_ip: str | None = None,
 ) -> HttpResult:
     started = time.monotonic()
     req = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
     ctx = _trusted_context() if verify_tls else _insecure_context()
-    opener = _build_opener(ctx)
+    # Pin the vetted IP for the connection unless a proxy owns this request's routing.
+    use_pin = pinned_ip if (pinned_ip and not _proxy_applies(url)) else None
+    opener = _build_opener(ctx, pinned_ip=use_pin)
     resp: HTTPResponse | None = None
     try:
         resp = opener.open(req, timeout=timeout)
@@ -237,6 +261,7 @@ def _curl_cffi_fetch(
     verify_tls: bool,
     max_body: int,
     profile: str,
+    pinned_ip: str | None = None,
 ) -> HttpResult:
     """Browser-impersonating transport via curl_cffi.
 
@@ -248,6 +273,14 @@ def _curl_cffi_fetch(
     hop so the scope guard and credential-drop rules apply per redirect.
     """
     started = time.monotonic()
+    # Pin the vetted IP (curl --resolve semantics) so the request dials the address
+    # the SSRF guard approved, not a re-resolved one — unless a proxy owns routing.
+    pin_kw: dict = {}
+    if pinned_ip and not _proxy_applies(url):
+        sp = urlsplit(url)
+        port = sp.port or (443 if sp.scheme.lower() == "https" else 80)
+        if sp.hostname:
+            pin_kw["resolve"] = [f"{sp.hostname}:{port}:{pinned_ip}"]
     try:
         # content=False so curl_cffi does not auto-decode — we cap+decode
         # ourselves via _decode_body, matching the urllib transport's contract.
@@ -261,6 +294,7 @@ def _curl_cffi_fetch(
             verify=verify_tls,
             impersonate=profile,
             stream=False,
+            **pin_kw,
         )
         raw = r.content if r.content is not None else b""
         # curl_cffi decodes gzip/deflate/br by default; we still cap.
@@ -303,18 +337,79 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _build_opener(ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that dials a pre-vetted IP while keeping the original hostname
+    for the Host header — so the address the SSRF guard approved is the address
+    actually connected to (DNS-rebinding TOCTOU defence)."""
+
+    def __init__(self, host: str, *, _pinned_ip: str, **kw) -> None:
+        super().__init__(host, **kw)
+        self._pinned_ip = _pinned_ip
+
+    def connect(self) -> None:  # noqa: D401
+        self.sock = socket.create_connection((self._pinned_ip, self.port),
+                                              self.timeout, self.source_address)
+        if getattr(self, "_tunnel_host", None):
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection variant of the above. TLS SNI and certificate verification
+    still use the ORIGINAL hostname (``self.host``), never the pinned IP, so cert
+    validation is unchanged — only the TCP connect target is pinned."""
+
+    def __init__(self, host: str, *, _pinned_ip: str, **kw) -> None:
+        super().__init__(host, **kw)
+        self._pinned_ip = _pinned_ip
+
+    def connect(self) -> None:  # noqa: D401
+        sock = socket.create_connection((self._pinned_ip, self.port),
+                                        self.timeout, self.source_address)
+        if getattr(self, "_tunnel_host", None):
+            self.sock = sock
+            self._tunnel()
+            sock = self.sock
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ip: str) -> None:
+        super().__init__()
+        self._pin = pinned_ip
+
+    def http_open(self, req):  # noqa: ANN001, D401
+        return self.do_open(functools.partial(_PinnedHTTPConnection, _pinned_ip=self._pin), req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, context: ssl.SSLContext, pinned_ip: str) -> None:
+        super().__init__(context=context)
+        self._pin = pinned_ip
+
+    def https_open(self, req):  # noqa: ANN001, D401
+        return self.do_open(functools.partial(_PinnedHTTPSConnection, _pinned_ip=self._pin),
+                            req, context=self._context)
+
+
+def _build_opener(ctx: ssl.SSLContext, pinned_ip: str | None = None) -> urllib.request.OpenerDirector:
     """An opener with ONLY http(s) handlers — never urllib's default FileHandler /
     FTPHandler / DataHandler, so a redirect (or crafted URL) to ``file://`` /
     ``ftp://`` / ``data:`` cannot smuggle a local-file read or a non-HTTP fetch past
-    the SSRF guard. Unknown schemes hit UnknownHandler → a clean URLError, not a crash."""
+    the SSRF guard. Unknown schemes hit UnknownHandler → a clean URLError, not a crash.
 
+    When ``pinned_ip`` is set (and no proxy applies, see :func:`_blocking_fetch`) the
+    http(s) handlers dial that pre-vetted IP instead of re-resolving the hostname —
+    closing the DNS-rebinding gap between the guard's lookup and the connect's."""
+
+    http_h = _PinnedHTTPHandler(pinned_ip) if pinned_ip else urllib.request.HTTPHandler()
+    https_h = (_PinnedHTTPSHandler(ctx, pinned_ip) if pinned_ip
+               else urllib.request.HTTPSHandler(context=ctx))
     opener = urllib.request.OpenerDirector()
     for h in (
         urllib.request.ProxyHandler(),
         urllib.request.UnknownHandler(),
-        urllib.request.HTTPHandler(),
-        urllib.request.HTTPSHandler(context=ctx),
+        http_h,
+        https_h,
         urllib.request.HTTPDefaultErrorHandler(),
         _NoRedirect(),
         urllib.request.HTTPErrorProcessor(),
@@ -349,16 +444,18 @@ class HttpClient:
         user_agent: str,
         default_timeout: float = 10.0,
         max_body: int = DEFAULT_MAX_BODY,
-        connect_guard: Callable[[str], str | None] | None = None,
+        connect_pin: Callable[[str], tuple[str | None, str | None]] | None = None,
         auth_provider: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
         self._timeout = default_timeout
         self._max_body = max_body
-        # connect_guard(host) -> reason-if-blocked | None; applied to every hop
-        # (initial + each redirect) so no fetch reaches a private/internal IP.
-        self._connect_guard = connect_guard
+        # connect_pin(host) -> (block_reason | None, pinned_ip | None); applied to
+        # every hop (initial + each redirect). Blocks a private/internal IP AND
+        # returns the vetted IP so the connect dials the address that was checked —
+        # closing the DNS-rebinding TOCTOU between the guard's lookup and the socket's.
+        self._connect_pin = connect_pin
         # auth_provider() -> engagement headers merged into every request unless
         # suppress_auth is set (e.g. the anonymous leg of an access-control diff).
         self._auth_provider = auth_provider
@@ -423,11 +520,14 @@ class HttpClient:
                 result.redirect_blocked = current
                 result.blocked_reason = reason
                 break
-            # SSRF connect-guard: resolve+check this hop's host before we touch it.
-            # The guard does a blocking getaddrinfo, so keep it off the event loop.
-            if self._connect_guard is not None:
+            # SSRF connect-guard: resolve+check this hop's host ONCE before we touch
+            # it, and pin the vetted IP so the connect dials the checked address (no
+            # second lookup a rebinding name could answer differently). The guard does
+            # a blocking getaddrinfo, so keep it off the event loop.
+            pinned_ip: str | None = None
+            if self._connect_pin is not None:
                 host = urlsplit(current).hostname or current
-                reason = await asyncio.to_thread(self._connect_guard, host)
+                reason, pinned_ip = await asyncio.to_thread(self._connect_pin, host)
                 if reason is not None:
                     if result is None:  # the very first hop is blocked
                         return HttpResult(
@@ -450,6 +550,7 @@ class HttpClient:
                         verify_tls,
                         max_body or self._max_body,
                         _IMPERSONATE_PROFILE,
+                        pinned_ip,
                     )
                 else:
                     result = await asyncio.to_thread(
@@ -461,6 +562,7 @@ class HttpClient:
                         timeout or self._timeout,
                         verify_tls,
                         max_body or self._max_body,
+                        pinned_ip,
                     )
             if not follow_redirects or result.status is None or not (300 <= result.status < 400):
                 break

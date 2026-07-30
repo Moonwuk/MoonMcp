@@ -379,13 +379,20 @@ you've declared authorised.
 **Defence in depth.** Beyond the allowlist, MoonMCP:
 
 * **Blocks private/reserved IPs** (RFC1918, loopback, link-local incl. the
-  `169.254.169.254` cloud-metadata endpoint) by default — an SSRF guard no active
-  tool can bypass, even if a broad CIDR was added. Flip `MOONMCP_BLOCK_PRIVATE=0`
-  for authorised internal engagements.
+  `169.254.169.254` cloud-metadata endpoint, and carrier-grade-NAT `100.64.0.0/10`
+  where Alibaba/OCI metadata lives) by default — an SSRF guard no active tool can
+  bypass, even if a broad CIDR was added. Flip `MOONMCP_BLOCK_PRIVATE=0` for
+  authorised internal engagements.
+* **Pins the vetted IP** — the HTTP client resolves each hop's host once for the
+  SSRF guard and dials *that* address (with the original hostname as Host/TLS SNI),
+  so a short-TTL DNS-rebinding name can't pass the guard and then re-resolve to a
+  private IP at connect time.
 * **Re-checks redirects** — the HTTP client refuses to follow a `Location` that
-  leaves the scope, and reports it as `redirect_blocked` instead.
+  leaves the scope, and reports it as `redirect_blocked` instead; crossing to a
+  different origin drops every non-allowlisted header so no credential leaks onward.
 * **Scope-checks external-CLI targets** — `run_scanner` extracts and validates the
-  host/URL from its args, not just the optional `target` field.
+  host/URL from its args (including obfuscated decimal/hex/IPv6 IP encodings), not
+  just the optional `target` field.
 
 ### Program profiles (one header per program)
 

@@ -20,7 +20,7 @@ def _res(url, status, headers=None):
 def _install(monkeypatch, redirect_to):
     captured = []
 
-    def fake_fetch(url, method, merged, body, timeout, verify_tls, max_body):
+    def fake_fetch(url, method, merged, body, timeout, verify_tls, max_body, pinned_ip=None):
         captured.append((url, dict(merged)))
         if url.endswith("/start"):
             return _res(url, 302, [("Location", redirect_to)])
@@ -61,3 +61,35 @@ async def test_same_origin_redirect_keeps_custom_headers(monkeypatch):
                        headers={"X-Api-Key": "k-123"}, follow_redirects=True)
     second = {k.lower(): v for k, v in captured[1][1].items()}
     assert second.get("x-api-key") == "k-123"   # same origin: header is preserved
+
+
+@pytest.mark.asyncio
+async def test_fetch_pins_the_vetted_ip_for_the_connection(monkeypatch):
+    # the connect guard resolves+vets an IP; the transport must dial THAT IP, not
+    # re-resolve the hostname (DNS-rebinding TOCTOU defence).
+    seen = {}
+
+    def fake_fetch(url, method, merged, body, timeout, verify_tls, max_body, pinned_ip=None):
+        seen["pinned_ip"] = pinned_ip
+        return _res(url, 200)
+
+    monkeypatch.setattr(httpmod, "_USE_CURL_CFFI", False)
+    monkeypatch.setattr(httpmod, "_blocking_fetch", fake_fetch)
+    client = HttpClient(Governor(rate=100, max_concurrency=4), user_agent="UA/1.0",
+                        connect_pin=lambda host: (None, "203.0.113.7"))
+    await client.fetch("https://target.example/x")
+    assert seen["pinned_ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_fetch_blocks_when_connect_pin_reports_private(monkeypatch):
+    def fake_fetch(*a, **k):
+        raise AssertionError("must not connect when the guard blocks the host")
+
+    monkeypatch.setattr(httpmod, "_USE_CURL_CFFI", False)
+    monkeypatch.setattr(httpmod, "_blocking_fetch", fake_fetch)
+    client = HttpClient(Governor(rate=100, max_concurrency=4), user_agent="UA/1.0",
+                        connect_pin=lambda host: ("blocked: private/reserved", None))
+    res = await client.fetch("https://rebind.example/x")
+    assert res.status is None
+    assert res.blocked_reason == "blocked: private/reserved"

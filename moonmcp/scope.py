@@ -246,6 +246,53 @@ class ScopeManager:
                 )
         return None
 
+    def resolve_pin(self, target: str) -> tuple[str | None, str | None]:
+        """Resolve *target* ONCE for the SSRF guard and return
+        ``(block_reason, pinned_ip)``.
+
+        The caller is expected to connect to ``pinned_ip`` (with the original
+        hostname supplied as Host header / TLS SNI), so the address that was vetted
+        is the address that is dialed. This closes the DNS-rebinding TOCTOU where the
+        guard and the connect layer each resolve the name independently and a
+        short-TTL name can answer with a public IP for the guard and a private one
+        for the connect.
+
+        ``block_reason`` non-``None`` ⇒ do not connect. Otherwise ``pinned_ip`` is
+        the vetted address to dial, or ``None`` when pinning does not apply (private
+        guard disabled, an unresolvable name, or no address to pin) — the caller then
+        falls back to connecting by hostname as before.
+        """
+
+        if not self.block_private:
+            return (None, None)  # internal testing opted in — nothing to pin/guard
+        try:
+            host = normalize_target(target)
+        except ValueError:
+            return (None, None)
+        ip = canonical_ip(host)
+        if ip is not None:
+            if _ip_is_blocked(ip):
+                return (f"{host} is a private/reserved address ({ip}) blocked by the SSRF guard", None)
+            return (None, str(ip))  # an IP literal is already its own pin
+        try:
+            resolved = self._resolve(host)
+        except Exception:
+            return (f"{host} could not be resolved for the SSRF guard — blocked (fail-closed; "
+                    "set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)", None)
+        pin: str | None = None
+        for raw in resolved:
+            try:
+                addr = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if _ip_is_blocked(addr):
+                return (f"{host} resolves to {addr}, a private/reserved address — blocked by the "
+                        "SSRF guard (set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)",
+                        None)
+            if pin is None:
+                pin = raw  # first vetted address becomes the pinned connect target
+        return (None, pin)
+
     # -- mutation ----------------------------------------------------------
     @staticmethod
     def _parse_domain(entry: str) -> _DomainRule:

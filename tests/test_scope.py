@@ -114,6 +114,22 @@ def test_obfuscated_ip_literals_are_blocked():
     assert s.blocked_connect_reason("::ffff:127.0.0.1") is not None
 
 
+def test_resolve_pin_returns_vetted_ip_and_blocks_private():
+    # resolve_pin resolves ONCE and hands back the address to dial, so the connect
+    # layer can't re-resolve to a different (private) IP — the DNS-rebinding defence.
+    resolved = {"good.example.com": ["93.184.216.34"], "bad.example.com": ["10.0.0.5"]}
+    s = ScopeManager(enforce=False, block_private=True,
+                     resolver=lambda h: resolved.get(h, []))
+    assert s.resolve_pin("good.example.com") == (None, "93.184.216.34")   # public → pin it
+    reason, pin = s.resolve_pin("bad.example.com")                         # private → block
+    assert reason and pin is None
+    assert s.resolve_pin("8.8.8.8") == (None, "8.8.8.8")                   # IP literal is its own pin
+    reason, pin = s.resolve_pin("169.254.169.254")                        # blocked literal
+    assert reason and pin is None
+    # block_private off (authorised internal testing): nothing to pin or guard
+    assert ScopeManager(enforce=False, block_private=False).resolve_pin("x.example.com") == (None, None)
+
+
 def test_cgnat_and_benchmark_ranges_blocked():
     # 100.64.0.0/10 (carrier-grade NAT) hosts cloud instance metadata on some
     # providers (Alibaba/OCI at 100.100.100.200); stdlib is_private doesn't flag it
