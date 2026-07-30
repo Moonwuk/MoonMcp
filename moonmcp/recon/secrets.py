@@ -179,6 +179,13 @@ def scan_text(text: str, source: str = "") -> list[SecretHit]:
             seen.add(key)
             start = max(0, m.start() - 25)
             ctx = text[start:m.start() + len(m.group(0)) + 15].replace("\n", " ").strip()
+            # The context window spans the full match, so it used to carry the secret
+            # in CLEARTEXT — defeating the module's own "redacted before it leaves the
+            # process" contract (the value then flowed into the LLM context, audit log,
+            # exported reports and the shared memory hub). Mask the captured value
+            # inside the window before returning, keeping the surrounding context
+            # (e.g. `api_key="…"`) useful.
+            ctx = ctx.replace(value, _redact(value))
             hits.append(SecretHit(type=name, fp_risk=risk, redacted=_redact(value),
                                   context=ctx[:120], source=source))
     return hits
