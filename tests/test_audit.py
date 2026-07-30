@@ -7,10 +7,18 @@ import sys
 import pytest
 
 from moonmcp import server as srv
-from moonmcp.audit import AuditLog, setup_logging
+from moonmcp.audit import _LOGGER_NAME, AuditLog, setup_logging
 
 
 def test_logger_writes_to_stderr_not_stdout():
+    # setup_logging() is idempotent and binds its handler to sys.stderr at the FIRST
+    # call. Under pytest's per-test stdout/stderr capture, sys.stderr is a different
+    # object each test, so if another test configured the logger first this handler's
+    # stream would be a stale capture object and the identity check would flake. Force
+    # a fresh bind so we assert against the CURRENT stderr.
+    lg = logging.getLogger(_LOGGER_NAME)
+    lg.handlers.clear()
+    lg._moonmcp_configured = False  # type: ignore[attr-defined]
     logger = setup_logging()
     # the stdio MCP transport owns stdout — the handler MUST target stderr
     streams = [h.stream for h in logger.handlers if isinstance(h, logging.StreamHandler)]
