@@ -10,6 +10,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+# Generic browser UA so probe traffic doesn't fingerprint the tool (many WAFs — PT
+# AF, QRATOR — block non-browser UAs). Single source of truth: the Settings default
+# and load_settings() both reference this, so they can never drift apart.
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -28,24 +36,32 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _env_float(name: str, default: float) -> float:
+def _env_float(name: str, default: float, minimum: float | None = None) -> float:
     raw = os.environ.get(name)
     if raw is None:
         return default
     try:
-        return float(raw)
+        val = float(raw)
     except ValueError:
         return default
+    # Clamp nonsensical values (e.g. a negative timeout that would break socket ops)
+    # to a safe floor rather than propagating them into the networking layer.
+    if minimum is not None and val < minimum:
+        return minimum
+    return val
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     raw = os.environ.get(name)
     if raw is None:
         return default
     try:
-        return int(raw)
+        val = int(raw)
     except ValueError:
         return default
+    if minimum is not None and val < minimum:
+        return minimum
+    return val
 
 
 def _env_list(name: str) -> list[str]:
@@ -87,13 +103,10 @@ class Settings:
     rate_limit: float = 10.0
     # Max concurrent outbound connections.
     max_concurrency: int = 20
-    # User-Agent used for HTTP probing. Default is a generic browser UA so the
-    # probe traffic does not fingerprint the tool (many WAFs — PT AF, QRATOR —
-    # block non-browser UAs). Override via MOONMCP_USER_AGENT for a program UA.
-    user_agent: str = (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    )
+    # User-Agent used for HTTP probing. Default is a generic browser UA (see
+    # _DEFAULT_USER_AGENT) so probe traffic does not fingerprint the tool. Override
+    # via MOONMCP_USER_AGENT for a program UA.
+    user_agent: str = _DEFAULT_USER_AGENT
     # Follow HTTP redirects when probing.
     follow_redirects: bool = True
     max_redirects: int = 5
@@ -122,19 +135,15 @@ def load_settings() -> Settings:
         scope_exclude=_env_list("MOONMCP_SCOPE_EXCLUDE"),
         allow_intrusive=_env_bool("MOONMCP_ALLOW_INTRUSIVE", False),
         block_private=_env_bool("MOONMCP_BLOCK_PRIVATE", True),
-        timeout=_env_float("MOONMCP_TIMEOUT", 10.0),
-        rate_limit=_env_float("MOONMCP_RATE_LIMIT", 10.0),
-        max_concurrency=_env_int("MOONMCP_MAX_CONCURRENCY", 20),
-        user_agent=os.environ.get(
-            "MOONMCP_USER_AGENT",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        ),
+        timeout=_env_float("MOONMCP_TIMEOUT", 10.0, minimum=0.1),
+        rate_limit=_env_float("MOONMCP_RATE_LIMIT", 10.0, minimum=0.0),
+        max_concurrency=_env_int("MOONMCP_MAX_CONCURRENCY", 20, minimum=1),
+        user_agent=os.environ.get("MOONMCP_USER_AGENT", _DEFAULT_USER_AGENT),
         follow_redirects=_env_bool("MOONMCP_FOLLOW_REDIRECTS", True),
-        max_redirects=_env_int("MOONMCP_MAX_REDIRECTS", 5),
+        max_redirects=_env_int("MOONMCP_MAX_REDIRECTS", 5, minimum=0),
         shodan_api_key=os.environ.get("MOONMCP_SHODAN_API_KEY") or os.environ.get("SHODAN_API_KEY"),
         nvd_api_key=os.environ.get("MOONMCP_NVD_API_KEY") or os.environ.get("NVD_API_KEY"),
         allow_external_tools=_env_bool("MOONMCP_ALLOW_EXTERNAL_TOOLS", True),
-        external_timeout=_env_float("MOONMCP_EXTERNAL_TIMEOUT", 300.0),
+        external_timeout=_env_float("MOONMCP_EXTERNAL_TIMEOUT", 300.0, minimum=1.0),
         screenshot_dir=os.environ.get("MOONMCP_SCREENSHOT_DIR", ""),
     )
