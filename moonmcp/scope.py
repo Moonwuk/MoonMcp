@@ -100,12 +100,25 @@ def canonical_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | N
     return None
 
 
+# Ranges that stdlib ``is_private`` does NOT reliably flag across Python versions
+# but which are off-limits for an SSRF guard: carrier-grade NAT (100.64.0.0/10 —
+# cloud instance metadata lives here, e.g. Alibaba/OCI at 100.100.100.200) and the
+# IETF benchmarking net (198.18.0.0/15). Explicit so the guard doesn't depend on the
+# interpreter version's ipaddress classification.
+_EXTRA_BLOCKED_NETS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("198.18.0.0/15"),
+)
+
+
 def _ip_is_blocked(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """True if *addr* is in a private/reserved range that is off-limits by default."""
 
     mapped = getattr(addr, "ipv4_mapped", None)
     if mapped is not None:  # ::ffff:127.0.0.1 must be judged as its IPv4 form
         addr = mapped
+    if any(addr in net for net in _EXTRA_BLOCKED_NETS):
+        return True
     return bool(
         addr.is_private
         or addr.is_loopback

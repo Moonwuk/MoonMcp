@@ -408,13 +408,23 @@ def _host_like_tokens(args: list[str]) -> list[str]:
                 continue
             except ValueError:
                 t = t.split("/", 1)[0]
+        # Normalise (strip scheme/brackets/port) then test for ANY IP literal —
+        # including the obfuscated IPv4 encodings (decimal 2852039166 = 169.254.169.254,
+        # hex 0x7f000001, short 127.1) and IPv6 (::1, [::1]) that the old
+        # ipaddress.ip_address(t.split(':')[0]) missed and would smuggle to the scanner
+        # past the scope check.
         try:
-            ipaddress.ip_address(t.split(":", 1)[0])
-            found.append(t)
-            continue
+            host_only = normalize_target(t)
         except ValueError:
-            pass
-        host_only = t.split(":", 1)[0]
+            continue
+        if canonical_ip(host_only) is not None:
+            # A dotted/hex/short/IPv6 literal is always a target. A BARE decimal
+            # integer also matches benign scanner values (status codes 200/301, ports,
+            # counts, rates), so only treat one as a target when it maps to >= 1.0.0.0
+            # (0x01000000) — every real obfuscated IP does; small values do not.
+            if not host_only.isdigit() or int(host_only) > 0x00FFFFFF:
+                found.append(t)
+                continue
         if _HOSTISH_RE.match(t) and host_only.rsplit(".", 1)[-1].lower() not in _NON_TLD:
             found.append(t)
     return found

@@ -114,6 +114,19 @@ def test_obfuscated_ip_literals_are_blocked():
     assert s.blocked_connect_reason("::ffff:127.0.0.1") is not None
 
 
+def test_cgnat_and_benchmark_ranges_blocked():
+    # 100.64.0.0/10 (carrier-grade NAT) hosts cloud instance metadata on some
+    # providers (Alibaba/OCI at 100.100.100.200); stdlib is_private doesn't flag it
+    # across Python versions, so the SSRF guard must deny it explicitly.
+    s = ScopeManager(enforce=True, block_private=True)
+    for form in ("100.64.1.1", "100.100.100.200", "198.18.5.5", "1684366536"):
+        ok, reason = s.evaluate(form)
+        assert not ok, form
+        assert "private/reserved" in reason, form
+    # a normal public IP is still allowed by the private guard (fails scope, not guard)
+    assert ScopeManager(enforce=False, block_private=True).blocked_connect_reason("8.8.8.8") is None
+
+
 def test_blocked_connect_reason_resolves_hostnames():
     # a hostname that RESOLVES to an internal IP must be blocked at connect time,
     # even though it is not an IP literal and is nominally in scope.
