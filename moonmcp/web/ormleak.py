@@ -28,8 +28,14 @@ https://hacktricks.wiki/en/pentesting-web/orm-injection.html . See docs/DATABASE
 
 from __future__ import annotations
 
-# An unlikely prefix value that should match no rows (the "none" side of the diff).
+# Two unlikely-prefix values that should match no rows (the "none" side of the diff).
+# They are the SAME semantically (both unmatchable) but of very different LENGTHS: a
+# genuine "zero rows" page is value-independent, so both must render identically. If
+# the response length instead tracks the injected value's length, the differential is
+# mere reflection/echo of the param (canonical link, "no results for '<x>'", form
+# re-population) — not an applied filter — and must be rejected. See assess_lookup.
 CONTROL_NONE = "zqxjkMoon9174none"
+CONTROL_NONE_ALT = "zqxjkMoon9174none" + "Wq7vLx0" * 6  # markedly longer, still unmatchable
 
 # Hidden fields worth probing for (queryable = a leak surface).
 _DJANGO_FIELDS = ["password", "is_superuser", "is_staff", "email", "api_key", "reset_token"]
@@ -75,11 +81,44 @@ def candidates(orm: str, base: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def assess_lookup(all_pair: tuple, none_pair: tuple) -> bool:
-    """An injected lookup is a hit when the empty-prefix ("all") and unlikely-prefix
-    ("none") probes are each REPRODUCIBLE (both sends agree) and DIFFER from each
-    other — i.e. the lookup is applied as a filter. Each element is ``(status, len)``."""
+def looks_applied(all_pair: tuple, none_pair: tuple) -> bool:
+    """Cheap gate: the empty-prefix ("all") and unlikely-prefix ("none") probes are
+    each REPRODUCIBLE (both sends agree on status, length within a jitter floor) and
+    DIFFER from each other beyond that floor — a *necessary-but-not-sufficient* sign
+    the lookup is applied as a filter. Each element is ``(status, length)``.
 
-    a1, a2 = all_pair
-    n1, n2 = none_pair
-    return bool(a1 == a2 and n1 == n2 and a1 != n1)
+    The jitter floor (derived from each arm's own paired sends, mirroring
+    ``sqli_probe``) replaces the old byte-exact compare, which false-negatived every
+    dynamic/authed page carrying a nonce/timestamp/CSRF token. Callers must still
+    clear the reflection control in :func:`assess_lookup` before reporting.
+    """
+
+    (as1, al1), (as2, al2) = all_pair
+    (ns1, nl1), (ns2, nl2) = none_pair
+    tol = max(abs(al1 - al2), abs(nl1 - nl2)) + 16
+    if as1 != as2 or ns1 != ns2:
+        return False  # an arm is not reproducible → noise, not a filter
+    return as1 != ns1 or abs(al1 - nl1) > tol
+
+
+def assess_lookup(all_pair: tuple, none_pair: tuple, none_alt_pair: tuple) -> bool:
+    """A hit requires :func:`looks_applied` AND a **reflection control**: a second
+    no-match value of a very different length (``CONTROL_NONE_ALT``) must render the
+    SAME page as the first ("no rows" is value-independent). If the response length
+    tracks the injected value instead, the differential is an echo of the parameter,
+    not an applied filter — so the "high-severity, field is queryable" verdict is
+    withheld. Each element is ``(status, length)``.
+    """
+
+    if not looks_applied(all_pair, none_pair):
+        return False
+    (ns1, nl1), (ns2, nl2) = none_pair
+    (xs1, xl1), (xs2, xl2) = none_alt_pair
+    # Floor from the *none* arm's own reproducibility — do NOT let an unstable alt
+    # arm inflate its own tolerance (that would absorb the very reflection signal
+    # we are testing for). The alt control must be stable within this floor...
+    tol = abs(nl1 - nl2) + 16
+    if xs1 != xs2 or abs(xl1 - xl2) > tol:
+        return False  # alt control not reproducible → can't trust the reflection check
+    # ...and render the same page as the first no-match value (value-independent).
+    return ns1 == xs1 and abs(nl1 - xl1) <= tol

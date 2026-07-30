@@ -3973,7 +3973,13 @@ async def orm_leak_probe(target: str, orm: str = "auto", base: str = "filter",
     for family, label, pname in cands:
         all_pair = (await _get(pname, ""), await _get(pname, ""))
         none_pair = (await _get(pname, ormmod.CONTROL_NONE), await _get(pname, ormmod.CONTROL_NONE))
-        if ormmod.assess_lookup(all_pair, none_pair):
+        # Cheap gate first: only pay for the reflection control (a second, longer
+        # no-match value) when a reproducible differential already looks present.
+        if not ormmod.looks_applied(all_pair, none_pair):
+            continue
+        none_alt = (await _get(pname, ormmod.CONTROL_NONE_ALT),
+                    await _get(pname, ormmod.CONTROL_NONE_ALT))
+        if ormmod.assess_lookup(all_pair, none_pair, none_alt):
             findings.append({
                 "orm": family, "field": label, "param": pname,
                 "severity": "high", "verdict": "review",

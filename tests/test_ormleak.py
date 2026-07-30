@@ -24,13 +24,42 @@ def test_candidates_selection():
     assert {f for f, _, _ in orm.candidates("django", "filter")} == {"django"}
 
 
-def test_assess_lookup():
-    # empty-prefix "all" (200, 500) reproducible; "none" (200, 30) reproducible; differ → hit
-    assert orm.assess_lookup(((200, 500), (200, 500)), ((200, 30), (200, 30))) is True
-    # no differential → not a hit
-    assert orm.assess_lookup(((200, 500), (200, 500)), ((200, 500), (200, 500))) is False
-    # non-reproducible "all" → rejected (noise)
-    assert orm.assess_lookup(((200, 500), (200, 480)), ((200, 30), (200, 30))) is False
+def test_looks_applied():
+    # reproducible differential (all=500 vs none=30) → gate passes
+    assert orm.looks_applied(((200, 500), (200, 500)), ((200, 30), (200, 30))) is True
+    # no differential → gate fails
+    assert orm.looks_applied(((200, 500), (200, 500)), ((200, 500), (200, 500))) is False
+    # a status flip that beats no length change is still a real differential
+    assert orm.looks_applied(((200, 500), (200, 500)), ((404, 500), (404, 500))) is True
+    # non-reproducible status on an arm → rejected as noise
+    assert orm.looks_applied(((200, 500), (500, 500)), ((200, 30), (200, 30))) is False
+    # sub-jitter length wobble is tolerated (nonce/timestamp), not a hit on its own
+    assert orm.looks_applied(((200, 500), (200, 508)), ((200, 503), (200, 505))) is False
+
+
+def test_assess_lookup_reflection_control():
+    # genuine filter: the "no rows" page is value-independent, so the longer alt
+    # no-match value renders the same length as CONTROL_NONE → hit.
+    assert orm.assess_lookup(
+        ((200, 500), (200, 500)),      # all: matches everything
+        ((200, 30), (200, 30)),        # none: zero rows
+        ((200, 30), (200, 30)),        # none_alt (longer value): still zero rows, same page
+    ) is True
+    # reflection/echo: response length tracks the injected value's length, so the
+    # longer alt value produces a longer page → NOT a filter, verdict withheld.
+    assert orm.assess_lookup(
+        ((200, 100), (200, 100)),      # all: value="" → short
+        ((200, 117), (200, 117)),      # none: 17-char value reflected
+        ((200, 161), (200, 161)),      # none_alt: 61-char value reflected → longer
+    ) is False
+    # no differential at all → not a hit regardless of the control
+    assert orm.assess_lookup(
+        ((200, 500), (200, 500)), ((200, 500), (200, 500)), ((200, 500), (200, 500))
+    ) is False
+    # non-reproducible alt control → rejected (can't trust the reflection check)
+    assert orm.assess_lookup(
+        ((200, 500), (200, 500)), ((200, 30), (200, 30)), ((200, 30), (200, 90))
+    ) is False
 
 
 # -- end-to-end --------------------------------------------------------------
@@ -47,6 +76,17 @@ async def test_orm_leak_no_false_positive(local_server, fresh_context):
     base, _ = local_server
     res = await srv.orm_leak_probe(target=f"{base}/orm-safe", orm="django")
     assert res["findings"] == [] and res["verdict"] == "unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_orm_leak_reflection_not_reported(local_server, fresh_context):
+    # An endpoint that merely ECHOES the injected value produces a reproducible
+    # empty-vs-nonempty length differential, but is not an ORM leak. The reflection
+    # control (a longer no-match value) must keep it out of the findings.
+    base, _ = local_server
+    res = await srv.orm_leak_probe(target=f"{base}/orm-reflect", orm="django")
+    assert res["findings"] == [], res
+    assert res["verdict"] == "unconfirmed"
 
 
 @pytest.mark.asyncio

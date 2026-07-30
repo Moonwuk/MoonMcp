@@ -4,8 +4,8 @@ import threading
 
 import pytest
 
+import moonmcp.server as srv  # noqa: F401  (registers all tool families at collection time)
 from moonmcp import mcp_core
-from moonmcp import server as srv
 from moonmcp.context import build_context
 
 # A deliberately-vulnerable SPA: it deep-merges location.search + location.hash into
@@ -755,6 +755,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 body = b"<html>users: alice bob carol dave erin frank grace heidi ivan</html>"
             else:
                 body = b"<html>users:</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/orm-reflect"):
+            # NOT vulnerable: ignores ORM lookups but ECHOES the injected value into
+            # the page (search-term echo / canonical link). Empty vs non-empty differ
+            # purely by the reflected byte count — the reflection control (a longer
+            # no-match value) must reject this as an echo, not an applied filter.
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            injected = ""
+            for k, vals in qs.items():
+                kl = k.lower()
+                if kl.endswith("__startswith") or "startswith" in kl or k.endswith("_start]") or k.endswith("_start"):
+                    injected = vals[0]
+                    break
+            body = f"<html>results for: {injected}</html>".encode()
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)
