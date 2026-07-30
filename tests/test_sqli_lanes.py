@@ -26,8 +26,45 @@ def test_oob_and_time_payloads():
 def test_assess_timing():
     assert probesmod.assess_timing(0.02, 5.1, 5.0)["delta_s"] == pytest.approx(5.08, abs=0.01)
     assert probesmod.assess_timing(0.02, 0.4, 5.0) is None      # not slow enough
-    assert probesmod.assess_timing(4.9, 5.2, 5.0) is None       # uniformly slow (control already slow)
+    assert probesmod.assess_timing(4.9, 5.2, 5.0) is None       # uniformly slow (delta too small)
     assert probesmod.assess_timing(0.0, 9.0, 0) is None         # no delay requested
+    # A genuine SLEEP(5) is no longer discarded just because the backend's own
+    # baseline (control) is above the requested delay — control subtraction, not an
+    # absolute floor, is what rejects a uniformly-slow endpoint.
+    assert probesmod.assess_timing(5.5, 10.5, 5.0)["delta_s"] == pytest.approx(5.0, abs=0.01)
+
+
+def test_assess_timing_samples_confirms_scaling_delay():
+    # real injection: delta scales with the requested sleep (1.0s -> ~1.0, 0.5s -> ~0.5)
+    hit = probesmod.assess_timing_samples(
+        control=[0.02, 0.03, 0.02], delayed=[1.01, 0.99], requested=1.0,
+        confirm=[0.51, 0.49], requested_confirm=0.5)
+    assert hit and hit["delta_s"] == pytest.approx(0.98, abs=0.05)
+    assert hit["scaled"] >= 1.5
+
+
+def test_assess_timing_samples_rejects_uniformly_slow_no_scaling():
+    # a uniformly-slow endpoint: every request ~2s regardless of sleep value.
+    # control subtraction already yields ~0 delta -> rejected.
+    assert probesmod.assess_timing_samples(
+        control=[2.0, 2.1, 1.95], delayed=[2.05, 2.0], requested=1.0,
+        confirm=[2.02, 1.98], requested_confirm=0.5) is None
+
+
+def test_assess_timing_samples_rejects_constant_offset_that_beats_threshold():
+    # a target that always adds a big constant delay to THIS param (not sleep-scaled):
+    # delayed and confirm both ~1.2s over control -> no scaling -> rejected.
+    assert probesmod.assess_timing_samples(
+        control=[0.02, 0.03, 0.02], delayed=[1.2, 1.25], requested=1.0,
+        confirm=[1.2, 1.18], requested_confirm=0.5) is None
+
+
+def test_assess_timing_samples_rejects_jitter_within_control_spread():
+    # control itself is very noisy (0.1..1.5s); a delayed median 0.75s over it is not
+    # separable from that jitter floor -> rejected before the scaling check.
+    assert probesmod.assess_timing_samples(
+        control=[0.1, 1.5, 0.2], delayed=[1.0, 0.9], requested=1.0,
+        confirm=[0.6, 0.5], requested_confirm=0.5) is None
 
 
 # -- per-lane end-to-end -----------------------------------------------------

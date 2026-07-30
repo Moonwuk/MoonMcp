@@ -25,6 +25,7 @@ import os
 import platform
 import re
 import secrets
+import statistics
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -816,6 +817,41 @@ async def _collect_oast(ctx, token: str) -> tuple[list[dict], str | None]:
     if r.status is None:
         return [], f"poll request failed: {r.error or 'unreachable'}"
     return oastmod.parse_interactions(r.text()), None
+
+
+async def _run_time_based(get, zero_payloads, delay_payloads, confirm_payloads,
+                          req: float, req_lo: float, label_key: str) -> list[dict]:
+    """Drive the time-based blind lane with REPEATED samples + a scaling re-probe.
+
+    Replaces the old single-shot ``control vs delayed`` compare (jitter false-positive;
+    a slow baseline dropped real hits). For each payload pair it medians several 0s
+    controls and ``req``-second delays, and only when that clears the threshold does it
+    pay for a smaller ``req_lo`` confirm probe and require the induced delay to scale
+    with the sleep (see :func:`probes.assess_timing_samples`). ``label_key`` is
+    ``"dbms"`` (sqli) or ``"separator"`` (cmdi).
+    """
+
+    loop = asyncio.get_event_loop()
+
+    async def _elapsed(pl: str) -> float:
+        s = loop.time()
+        await get(pl)
+        return loop.time() - s
+
+    hits: list[dict] = []
+    for (lbl, zp), (_a, dp), (_b, cp) in zip(zero_payloads, delay_payloads,
+                                             confirm_payloads, strict=True):
+        control = [await _elapsed(zp) for _ in range(3)]
+        primary = [await _elapsed(dp) for _ in range(2)]
+        # cheap gate: skip the (slower) scaling re-probe unless the primary looks real
+        if statistics.median(primary) - statistics.median(control) < max(0.6 * req, 0.5):
+            continue
+        confirm = [await _elapsed(cp) for _ in range(2)]
+        hit = probesmod.assess_timing_samples(control, primary, req,
+                                              confirm=confirm, requested_confirm=req_lo)
+        if hit:
+            hits.append({label_key: lbl, **hit})
+    return hits
 
 
 @mcp.tool()
@@ -4485,23 +4521,14 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         if wb:
             extra_hits.append("sqli/waf-bypass-encoding" if not bool_diff else "sqli/encoded-differential")
 
-    # --- time-based blind lane (monotonic vs a 0s control) ---
+    # --- time-based blind lane (repeated samples + scaling re-probe) ---
     if time_based:
         req = max(0.0, min(delay_s, 15.0))
-        zero, delayed = probesmod.sqli_time_payloads(0), probesmod.sqli_time_payloads(req)
-        loop = asyncio.get_event_loop()
-        tb: list[dict] = []
-        for (dbms, zp), (_d, dp) in zip(zero, delayed, strict=True):
-            s0 = loop.time()
-            await _get(zp)
-            z_s = loop.time() - s0
-            s1 = loop.time()
-            await _get(dp)
-            d_s = loop.time() - s1
-            hit = probesmod.assess_timing(z_s, d_s, req)
-            if hit:
-                tb.append({"dbms": dbms, **hit})
-        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        req_lo = max(req * 0.4, 0.5)
+        tb = await _run_time_based(
+            _get, probesmod.sqli_time_payloads(0), probesmod.sqli_time_payloads(req),
+            probesmod.sqli_time_payloads(req_lo), req, req_lo, "dbms")
+        lanes["time_based"] = {"requested_s": req, "confirm_s": round(req_lo, 3), "hits": tb}
         if tb:
             extra_hits.append("sqli/time-based")
 
@@ -4580,21 +4607,11 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
 
     if time_based:
         req = max(0.0, min(delay_s, 10.0))
-        zero_payloads = probesmod.cmdi_time_payloads(0)
-        delay_payloads = probesmod.cmdi_time_payloads(req)
-        loop = asyncio.get_event_loop()
-        tb: list[dict] = []
-        for (sep, zp), (_s, dp) in zip(zero_payloads, delay_payloads, strict=True):
-            s0 = loop.time()
-            await _get(zp)
-            z_s = loop.time() - s0
-            s1 = loop.time()
-            await _get(dp)
-            d_s = loop.time() - s1
-            hit = probesmod.assess_timing(z_s, d_s, req)
-            if hit:
-                tb.append({"separator": sep, **hit})
-        lanes["time_based"] = {"requested_s": req, "hits": tb}
+        req_lo = max(req * 0.4, 0.5)
+        tb = await _run_time_based(
+            _get, probesmod.cmdi_time_payloads(0), probesmod.cmdi_time_payloads(req),
+            probesmod.cmdi_time_payloads(req_lo), req, req_lo, "separator")
+        lanes["time_based"] = {"requested_s": req, "confirm_s": round(req_lo, 3), "hits": tb}
         if tb:
             extra_hits.append("cmdi/time-based")
             timing_ms = max(h["delta_s"] for h in tb) * 1000
