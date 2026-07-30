@@ -4636,6 +4636,17 @@ async def cmdi_probe(target: str, param: str, method: str = "GET",
     return {"target": url, "param": param, **verdict, "lanes": lanes}
 
 
+# path-traversal KB signatures that are *not* genuine file-content disclosure:
+# they fire on benign JS (`require(`/`include(`), any generic filesystem-error
+# page, or any host list containing `127.0.0.1 localhost`. They only prove the
+# parameter *reaches* a file API — a weak lead, never a confirmed traversal.
+_LFI_WEAK_SIGS = frozenset({
+    "generic (error-based path leak)",
+    "PHP wrapper error",
+    "Windows hosts file",
+})
+
+
 @mcp.tool()
 @active_tool(intrusive=True)
 async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
@@ -4646,7 +4657,12 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
     win.ini `[fonts]`/`[extensions]` markers, and related patterns from the
     `path-traversal` knowledge base) — proof the traversal reached the filesystem,
     not just that a WAF let the payload's *shape* through (that's `waf_bypass_probe`'s
-    canary). Reads only universally-present, non-sensitive files (never app source,
+    canary). A benign baseline is fetched first and any signature it *also* produces
+    is subtracted, so a JS bundle full of `require(` or a page that always echoes a
+    filesystem error cannot be scored as a hit. Only signatures the traversal payload
+    *introduces* count, and only genuine file-content anchors reach the `confirmed`
+    verdict — error-based "reaches a file API" hits are reported as a weak lead.
+    Reads only universally-present, non-sensitive files (never app source,
     credentials, or config) — proving reachability, not extracting data (deeper
     extraction is weaponization → Strix). Intrusive; in scope only.
     """
@@ -4664,21 +4680,47 @@ async def lfi_probe(target: str, param: str, method: str = "GET") -> dict:
         u, b = _with_param(url, param, value, m)
         return await ctx.http.fetch(u, method=m, body=b, follow_redirects=False, scope_check=sc)
 
-    findings: list[dict] = []
+    # Benign baseline: the same request with a harmless, non-traversal value. Any
+    # signature that also fires here is a property of the endpoint (a JS bundle that
+    # contains `require(`, a page that always shows a filesystem error, a config that
+    # lists `127.0.0.1 localhost`), NOT of the traversal — subtract it and only count
+    # signatures the traversal payload *introduces*.
+    base = await _get(f"mcp{secrets.token_hex(3)}", False)
+    base_sigs = {(h["technology"], h["matched"])
+                 for h in injmod.match_signatures(base.text(50_000), class_id="path-traversal")}
+
+    findings: list[dict] = []   # strong: genuine file-content disclosure (confirmed)
+    leads: list[dict] = []      # weak: param reaches a file API (error-based lead)
     for label, payload, is_raw in probesmod.LFI_PAYLOADS:
         r = await _get(payload, is_raw)
         if r.status is None:
             continue
-        hits = injmod.match_signatures(r.text(50_000), class_id="path-traversal")
-        if hits:
+        new = [h for h in injmod.match_signatures(r.text(50_000), class_id="path-traversal")
+               if (h["technology"], h["matched"]) not in base_sigs]
+        if not new:
+            continue
+        strong = [h for h in new if h["technology"] not in _LFI_WEAK_SIGS]
+        weak = [h for h in new if h["technology"] in _LFI_WEAK_SIGS]
+        if strong:
             findings.append({"payload_label": label, "payload": payload,
-                             "status": r.status, "signatures": hits[:5]})
+                             "status": r.status, "signatures": strong[:5]})
+        elif weak:
+            leads.append({"payload_label": label, "payload": payload,
+                          "status": r.status, "signatures": weak[:5]})
 
+    # Only a genuine file-content signature the baseline lacks confirms disclosure.
+    # Error-based leads never set `reflected`, so they cannot reach the strong
+    # ("confirmed") path in confirm.evaluate — they fire on benign JS / error pages.
     verdict = confirmmod.evaluate(
         injection_hits=[f"{h['class']}/{h['technology']}" for f in findings for h in f["signatures"]],
         reflected=bool(findings))
-    return {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
-           **verdict, "findings": findings}
+    out: dict[str, Any] = {"target": url, "param": param, "tested": len(probesmod.LFI_PAYLOADS),
+                           **verdict, "findings": findings, "leads": leads}
+    if leads and not findings:
+        out["note"] = ("only error-based 'reaches a file API' signals fired (no file "
+                       "content recovered) — a weak lead, not a confirmed traversal; "
+                       "verify the parameter's file-handling context manually")
+    return out
 
 
 @mcp.tool()

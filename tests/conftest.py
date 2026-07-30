@@ -533,6 +533,33 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html>ok</html>")
             return
+        if self.path.startswith("/lfi-jsbundle"):
+            # NOT vulnerable: a minified-JS endpoint whose body contains `require(`
+            # regardless of the param. `require(` matches the error-based
+            # path-traversal signature, so a naive matcher false-CONFIRMS here; the
+            # baseline-subtraction fix must score it clean (require( is in the
+            # baseline too).
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"(function(){var a=require('./x');return require('./y');})();")
+            return
+        if self.path.startswith("/lfi-errorleak"):
+            # A parameter that REACHES a file API and reflects a filesystem error for
+            # traversal-ish input, but never returns file CONTENT. This is a weak
+            # "reaches a file API" lead, not a confirmed content disclosure.
+            import urllib.parse as _up
+            from urllib.parse import parse_qs, urlparse
+            v = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            low = _up.unquote(v).lower()
+            if "passwd" in low or "../" in low or "..\\" in low or "win.ini" in low:
+                body = (b"Warning: include(): Failed opening '../etc/passwd' for "
+                        b"inclusion: No such file or directory")
+            else:
+                body = b"<html>ok</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/interp-vuln"):
             # VULNERABLE (highly interpretive): simulates escape/quote stripping,
             # NUL-byte truncation, path-segment collapsing, and template-brace
