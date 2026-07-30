@@ -19,14 +19,11 @@ Tool families
 from __future__ import annotations
 
 import asyncio
-import functools
-import inspect
 import os
 import platform
 import re
 import secrets
 import statistics
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import __version__
@@ -53,7 +50,16 @@ from .knowledge import privesc as privescmod
 from .knowledge import techniques as techmod
 from .knowledge import vulns as vulnsmod
 from .knowledge import waf_kb as wafkbmod
-from .mcp_core import ToolBlocked, _host_key, get_context, mcp, safe_tool
+from .mcp_core import (
+    _connect_pin,
+    _host_key,
+    _require_scope,
+    _scope_check,
+    active_tool,
+    get_context,
+    mcp,
+    safe_tool,
+)
 from .net import dns as dnsmod
 from .net import jarm as jarmmod
 from .net import ports as portsmod
@@ -157,116 +163,6 @@ from .web import waf_bypass as wafbypassmod
 from .web import websocket as wsmod
 from .web import workflow as workflowmod
 from .web import xxe as xxemod
-
-
-def _caller_tool() -> str:
-    """Best-effort name of the tool that invoked the scope check (for the audit log)."""
-
-    import sys
-    try:
-        return sys._getframe(2).f_code.co_name
-    except Exception:
-        return "?"
-
-
-async def _require_scope(target: str, *, intrusive: bool = False, tool: str | None = None) -> str:
-    ctx = get_context()
-    tool = tool or _caller_tool()
-    if intrusive and not ctx.settings.allow_intrusive:
-        ctx.audit.record("intrusive_blocked", tool=tool, target=str(target), decision="deny")
-        raise ToolBlocked(
-            "intrusive tools are disabled. Enable with MOONMCP_ALLOW_INTRUSIVE=1."
-        )
-    try:
-        host = ctx.scope.check(target)
-    except ScopeError as exc:
-        ctx.audit.record("scope_check", tool=tool, target=str(target),
-                         decision="deny", reason=str(exc))
-        raise
-    # Resolve-then-check SSRF guard — covers raw-socket tools (port_scan,
-    # tls_inspect, jarm, desync) as well as an in-scope hostname that points at a
-    # private/internal/cloud-metadata IP. No-op when block_private is disabled.
-    # The resolve is a blocking getaddrinfo, so run it off the event loop.
-    reason = await asyncio.to_thread(ctx.scope.blocked_connect_reason, target)
-    if reason is not None:
-        ctx.audit.record("ssrf_blocked", tool=tool, target=str(target),
-                         decision="deny", reason=reason)
-        raise ScopeError(reason)
-    ctx.audit.record("scope_check", tool=tool, target=host, decision="allow")
-    return host
-
-
-def active_tool(
-    target: str | None = None,
-    *,
-    intrusive: bool = False,
-    self_scoped: bool = False,
-) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
-    """Declare a scope-gated **active** tool — the single place scope lives.
-
-    Applies, in one wrapper: the intrusive gate, the scope check + resolve-then-
-    check SSRF guard, the audit trail, and the ``safe_tool`` structured-error
-    envelope. A tool decorated with ``@active_tool()`` no longer calls
-    ``_require_scope`` itself — it just does its work, and its target argument is
-    authorised for it.
-
-    Args:
-        target: name of the parameter holding the host/URL/IP to authorise;
-            defaults to the tool's first parameter.
-        intrusive: gate behind ``MOONMCP_ALLOW_INTRUSIVE`` as well as scope.
-        self_scoped: for the handful of tools that authorise several targets (or
-            a conditional one) *themselves* — the decorator then skips the
-            automatic gate but still marks the tool as active so the scope-
-            coverage guard test passes. Such a body must call ``_require_scope``.
-
-    Every decorated tool carries ``__moonmcp_gated__ = True`` so the guard test
-    can prove no packet-sending tool ships un-gated.
-    """
-
-    def decorate(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
-        sig = inspect.signature(func)
-        names = list(sig.parameters)
-        tname = target if target is not None else (names[0] if names else None)
-
-        @functools.wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if not self_scoped:
-                if tname is None:
-                    raise ValueError(f"{func.__name__}: no target parameter to scope-check")
-                bound = sig.bind_partial(*args, **kwargs)
-                bound.apply_defaults()
-                raw = bound.arguments.get(tname)
-                if raw is None or (isinstance(raw, str) and not raw.strip()):
-                    raise ValueError(f"'{tname}' is required")
-                await _require_scope(str(raw), intrusive=intrusive, tool=func.__name__)
-            return await func(*args, **kwargs)
-
-        gated = safe_tool(wrapper)
-        gated.__moonmcp_gated__ = True  # type: ignore[attr-defined]
-        gated.__moonmcp_intrusive__ = intrusive  # type: ignore[attr-defined]
-        gated.__moonmcp_self_scoped__ = self_scoped  # type: ignore[attr-defined]
-        gated.__moonmcp_scope_target__ = tname  # type: ignore[attr-defined]
-        return gated
-
-    return decorate
-
-
-def _scope_check() -> Callable[[str], bool]:
-    """A predicate the HTTP client uses to refuse out-of-scope redirects."""
-
-    ctx = get_context()
-    return lambda url: ctx.scope.is_in_scope(url)
-
-
-def _connect_pin() -> Callable[[str], tuple[str | None, str | None]]:
-    """The SSRF connect-guard's resolve-and-pin, threaded into the raw-socket tools
-    so they dial the vetted IP instead of re-resolving the hostname (the same
-    DNS-rebinding TOCTOU defence the HTTP client uses). No-op when block_private is
-    off: resolve_pin returns no pin and the dial helper connects by hostname."""
-
-    return get_context().scope.resolve_pin
-
-
 
 
 def _split_host_port(target: str, default_port: int) -> tuple[str, int]:
