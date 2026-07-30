@@ -50,7 +50,13 @@ def frontmatter(props: dict) -> str:
             lines.extend(f"  - {x}" for x in vals)
         else:
             sv = str(v).replace("\n", " ")
-            lines.append(f'{k}: "{sv}"' if (":" in sv or "#" in sv) else f"{k}: {sv}")
+            if ":" in sv or "#" in sv or '"' in sv:
+                # escape backslash then double-quote so a value carrying a `"` can't
+                # break out of the quoted scalar and inject a stray frontmatter key
+                esc = sv.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(f'{k}: "{esc}"')
+            else:
+                lines.append(f"{k}: {sv}")
     lines.append("---")
     return "\n".join(lines)
 

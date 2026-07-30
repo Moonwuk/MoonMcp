@@ -2984,7 +2984,10 @@ async def port_scan(
         host,
         port_list,
         timeout=timeout,
-        concurrency=min(200, ctx.settings.max_concurrency * 10),
+        # Respect the operator's MOONMCP_MAX_CONCURRENCY safety knob (was silently
+        # multiplied by 10, so a configured cap of 20 opened up to 200 sockets); the
+        # shared rate limiter still paces total throughput.
+        concurrency=max(1, ctx.settings.max_concurrency),
         grab_banner=grab_banner,
         limiter=ctx.governor.limiter,
         connect_pin=_connect_pin(),
