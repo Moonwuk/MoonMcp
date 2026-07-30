@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from moonmcp import mcp_core
 from moonmcp import server as srv
 from moonmcp.context import build_context
 from moonmcp.recon.secrets import scan_text
@@ -168,7 +169,7 @@ def web_ctx(monkeypatch):
     ctx.scope.add("127.0.0.1")
     # http_methods is intrusive-gated; the dataclass defaults to False now.
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
-    monkeypatch.setattr(srv, "_CTX", ctx)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)
     return ctx
 
 

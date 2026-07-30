@@ -11,6 +11,7 @@ import threading
 
 import pytest
 
+from moonmcp import mcp_core
 from moonmcp import server as srv
 from moonmcp.context import build_context
 from moonmcp.recon.favicon import favicon_hash, murmur3_32
@@ -136,7 +137,7 @@ def infra_ctx(monkeypatch):
     ctx.scope.add("127.0.0.1")
     # waf_efficacy / behavior probes are intrusive-gated; dataclass defaults to False now.
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
-    monkeypatch.setattr(srv, "_CTX", ctx)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)
     return ctx
 
 

@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+from moonmcp import mcp_core
 from moonmcp import server as srv
 from moonmcp.context import build_context
 from moonmcp.findings import FindingsStore
@@ -37,7 +38,7 @@ def test_findings_invalid_severity_defaults_info():
 @pytest.mark.asyncio
 async def test_findings_tools_roundtrip():
     ctx = build_context()
-    srv._CTX = ctx
+    mcp_core.set_context(ctx)
     try:
         await srv.add_finding(target="x.example", severity="high", title="XSS", detail="reflected")
         listing = await srv.list_findings()
@@ -46,7 +47,7 @@ async def test_findings_tools_roundtrip():
         cleared = await srv.clear_findings()
         assert cleared["removed"] == 1
     finally:
-        srv._CTX = None
+        mcp_core.set_context(None)
 
 
 # --- desync status parser (offline) -------------------------------------
@@ -92,7 +93,7 @@ def ctx_fixture(monkeypatch):
     ctx.scope.add("127.0.0.1")
     # desync_probe is intrusive-gated; dataclass defaults to False now.
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
-    monkeypatch.setattr(srv, "_CTX", ctx)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)
     return ctx
 
 

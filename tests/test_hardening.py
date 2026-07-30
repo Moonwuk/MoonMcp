@@ -6,7 +6,9 @@ import json
 
 import pytest
 
+from moonmcp import mcp_core
 from moonmcp import server as srv
+from moonmcp.context import build_context
 
 
 def _b64(obj: dict) -> str:
@@ -52,10 +54,10 @@ async def test_run_scanner_refuses_smuggled_obfuscated_ip(monkeypatch):
     # obfuscated internal IP (2852039166 == 169.254.169.254) rides along in args. It
     # must be scope-checked and refused, not passed to the scanner unchecked.
     import dataclasses as _dc
-    ctx = srv.build_context()
+    ctx = build_context()
     ctx.scope.add("example.com")
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
-    monkeypatch.setattr(srv, "_CTX", ctx)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)
     out = await srv.run_scanner(tool="nmap", args=["scanme.example.com", "2852039166"])
     assert out.get("error") == "out_of_scope", out
 
@@ -63,13 +65,13 @@ async def test_run_scanner_refuses_smuggled_obfuscated_ip(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_scanner_blocks_file_io(monkeypatch):
     import dataclasses as _dc
-    ctx = srv.build_context()
+    ctx = build_context()
     ctx.scope.add("example.com")
     # run_scanner is intrusive-gated; dataclass defaults to False now. The test
     # is about unsafe-arg rejection, which happens BEFORE the intrusive gate —
     # but the gate fires first, so enable it to reach the arg validator.
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
-    monkeypatch.setattr(srv, "_CTX", ctx)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)
     out = await srv.run_scanner(tool="nuclei", args=["-u", "https://example.com", "-o", "/tmp/out"])
     assert out.get("error") == "unsafe_args"
 

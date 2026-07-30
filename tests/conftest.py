@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+from moonmcp import mcp_core
 from moonmcp import server as srv
 from moonmcp.context import build_context
 
@@ -1038,5 +1039,5 @@ def fresh_context(monkeypatch):
     ctx.scope.block_private = False
     ctx.scope.add("127.0.0.1")
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
-    monkeypatch.setattr(srv, "_CTX", ctx)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)  # get_context() now lives in mcp_core
     return ctx

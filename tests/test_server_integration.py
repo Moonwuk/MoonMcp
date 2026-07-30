@@ -107,10 +107,11 @@ async def test_intrusive_gate(fresh_context):
 @pytest.mark.asyncio
 async def test_scope_management_tools():
     # These do not require network; verify the flow end to end.
+    from moonmcp import mcp_core
     from moonmcp.context import build_context
 
     ctx = build_context()
-    srv._CTX = ctx
+    mcp_core.set_context(ctx)
     add = await srv.scope_add(target="example.org")
     assert "example.org" in add["scope"]["in_scope"]
     excl = await srv.scope_exclude(target="secret.example.org")
@@ -119,4 +120,4 @@ async def test_scope_management_tools():
     assert listing["enforced"] in (True, False)
     rem = await srv.scope_remove(target="example.org")
     assert rem["removed"] is True
-    srv._CTX = None  # reset global for other tests
+    mcp_core.set_context(None)  # reset global for other tests
