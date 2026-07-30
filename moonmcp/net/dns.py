@@ -39,11 +39,12 @@ def _blocking_getaddrinfo(host: str) -> DnsResult:
     except socket.gaierror as exc:
         res.error = str(exc)
         return res
-    a, aaaa = [], []
+    a: list[str] = []
+    aaaa: list[str] = []
     for family, _type, _proto, canon, sockaddr in infos:
         if canon and res.canonical_name is None:
             res.canonical_name = canon.rstrip(".")
-        ip = sockaddr[0]
+        ip = str(sockaddr[0])  # sockaddr[0] is the address string for AF_INET/AF_INET6
         if family == socket.AF_INET and ip not in a:
             a.append(ip)
         elif family == socket.AF_INET6 and ip not in aaaa:

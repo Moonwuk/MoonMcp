@@ -7,7 +7,7 @@
 > not a copy-paste attack kit.
 
 
-**24 entries** — 6 how-it-works · 8 fingerprints · 10 bypass classes.
+**32 entries** — 7 how-it-works · 15 fingerprints · 10 bypass classes.
 
 
 ## How WAFs work

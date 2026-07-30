@@ -136,7 +136,11 @@ async def probe_desync(url: str, *, timeout: float = 12.0,
     if dual is not None and dual < 400 and base_ok:
         result.indicators.append("Server accepted a request with both Content-Length and "
                                  "Transfer-Encoding (RFC says reject) — review for CL.TE/TE.CL desync")
-    accepted_obf = [n for n in variants if (result.probes.get(n) is not None and result.probes[n] < 400)]
+    accepted_obf = []
+    for n in variants:
+        v = result.probes.get(n)
+        if v is not None and v < 400:
+            accepted_obf.append(n)
     if accepted_obf:
         result.indicators.append(f"Obfuscated Transfer-Encoding accepted: {', '.join(accepted_obf)}")
     result.risk = "review" if result.indicators else "low"

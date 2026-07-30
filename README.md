@@ -49,7 +49,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **169 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -77,6 +77,7 @@ MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grou
 | `cloud_buckets` | Enumerate cloud storage buckets (S3 / GCS / Azure Blob): permutate names from a keyword and probe which exist and which are anonymously **listable**. |
 | `email_security` | SPF / DMARC / DKIM / CAA posture with an A–F grade (DNS-based). |
 | `jwt_analyze` | Decode a JWT and flag `alg:none`, weak HS*, missing expiry, key-injection (no traffic). |
+| `jwt_crack` | Offline-brute an **HS256/384/512** JWT's signing secret against a weak-secret wordlist — a hit means the token is forgeable. No traffic, offline. |
 | `jwt_alg_confusion` | **JWT algorithm-confusion forgery** — re-signs a captured RS/ES token as HS256/384/512 using the **public key's PEM text** as the HMAC secret (`kid` preserved). If the verifier reuses the same key material for both algorithm families, the forged token validates under the public key alone — full forgery without the private key. No traffic, offline. |
 | `deserialize_fingerprint` | **Deserialization-format fingerprint** (Freddy-lite) — 100% passive byte/base64 signature scan of an already-captured cookie/header/field value: Java native serialization (`ACED0005`/`rO0AB...`), .NET ViewState (LosFormatter `FF01`), PHP `serialize()` objects, Python pickle, Ruby `Marshal`, Fastjson/Jackson polymorphic JSON (`@type`/`@class`). Reports the format; never invokes a gadget chain (→ ysoserial/PHPGGC/ViewGen via Strix). No traffic. |
 
@@ -211,6 +212,18 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `export_obsidian` | "Graphify" the session into an **Obsidian vault** — linked notes (asset ↔ finding, vuln ↔ root cause) + tags + an Obsidian **Canvas** graph. Open the folder and use the graph view. |
 | `surface_diff` / `surface_snapshots` | Track how the attack surface **changes over time** — baseline a set (subdomains/endpoints/…) and surface only what's **new** since last run (persists via `MOONMCP_STATE_DIR`). |
 
+### 🧬 Lead lifecycle, zero-day hunting & supply chain
+| Tool | Purpose |
+| --- | --- |
+| `promote_lead` | **Lead → PoC pipeline** — turn an edge-probe's `review` lead into a concrete confirmation plan (which probe/`confirm_finding` step proves it, what evidence to capture). |
+| `label_finding` | Label a recorded finding's real-world **outcome** (`true_positive` / `false_positive` / …) — feeds the detection scorecard so precision is measurable. |
+| `metrics` | Detection **scorecard**: counts by verdict/outcome across the session (with `label_finding`), so false-positive rate is visible, not guessed. |
+| `cve_patch_diff` | **AI zero-day — patch-diff gap analysis**: fetch a CVE + its patch/PR, identify root cause, and raise incomplete-fix / variant questions (NVD-backed, never touches the target). |
+| `variant_search` | **AI zero-day — variant analysis**: given a root cause / CWE / keyword, map the matching MoonMCP probes, KB payload sources and a discover→verify→reproduce PoC pipeline. Offline. |
+| `version_vuln_check` | **AI zero-day — version gap**: search NVD for a product's CVEs and classify each as patched / unpatched relative to a target version. |
+| `dependency_confusion` | Parse a manifest (`package.json` / `requirements.txt` / …) and flag internal package names claimable on a **public** registry — a supply-chain takeover lead. |
+| `scan_coverage` | The honest, executable map of **what `nuclei` covers vs. what only MoonMCP does** — so you know which native probes add signal a template scan won't. |
+
 ### 🧠 Shared memory hub (persistent, cross-agent)
 | Tool | Purpose |
 | --- | --- |
@@ -232,9 +245,9 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 - **Injections** — **29 classes** (255 detection payloads · 318 response signatures). [`docs/INJECTIONS.md`](docs/INJECTIONS.md)
 - **Exploitation techniques & notable PoCs** — **115 techniques** across **14 categories**, from assembler-level memory corruption to the highest-level web / supply-chain. [`docs/TECHNIQUES.md`](docs/TECHNIQUES.md)
 - **Privilege escalation** — **129 techniques** (Linux · Windows · container · cloud · Active Directory · macOS) + **68 tools**. [`docs/PRIVESC.md`](docs/PRIVESC.md)
-- **Server-side vulnerabilities** — **44 classes** (popular *and* obscure), each mapped to its **root cause** and the concrete point where apps break, + **29 tools**. [`docs/SERVER_SIDE_VULNS.md`](docs/SERVER_SIDE_VULNS.md)
+- **Server-side vulnerabilities** — **50 classes** (popular *and* obscure), each mapped to its **root cause** and the concrete point where apps break, + **29 tools**. [`docs/SERVER_SIDE_VULNS.md`](docs/SERVER_SIDE_VULNS.md)
 - **Root-cause taxonomy** — the **13 fundamental causes** from which nearly all server-side bugs spring, each with its systemic fix. *Where the core of all problems is.* [`docs/ROOT_CAUSES.md`](docs/ROOT_CAUSES.md)
-- **WAF reference** — **24 entries**: how WAFs work, vendor **fingerprints**, and conceptual/defensive **bypass** classes. [`docs/WAF.md`](docs/WAF.md)
+- **WAF reference** — **32 entries**: how WAFs work, vendor **fingerprints**, and conceptual/defensive **bypass** classes. [`docs/WAF.md`](docs/WAF.md)
 
 | Tool | Purpose |
 | --- | --- |
@@ -477,7 +490,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 158 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 169 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator
@@ -518,7 +531,7 @@ native asyncio streams.
 ```bash
 uv venv && source .venv/bin/activate
 uv pip install -e ".[dev,enhanced]"
-pytest -q          # 190+ tests: scope logic, the @active_tool gate, program profiles, parsers, web-app checks, local-server integration
+pytest -q          # 800+ tests: scope logic, the @active_tool gate, program profiles, parsers, web-app checks, local-server integration
 ruff check .
 ```
 

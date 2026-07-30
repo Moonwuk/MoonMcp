@@ -73,19 +73,17 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
-# A growing type-checking baseline: the core logic modules are checked; the
-# heavier I/O modules (and the large server.py monolith) are excluded for now and
-# the exclude list is meant to shrink over time.
+# A shrinking type-checking baseline: every module is checked EXCEPT the three
+# still-unclean ones below. server.py's errors are systemic (tool bodies return
+# the `object`-typed output of shared helpers) and are best resolved alongside the
+# planned per-family split; net.http (private http.client connection internals) and
+# recon.openapi (untyped parsed-JSON access) are the remaining stragglers. This
+# list only shrinks — do not add to it without driving the module clean first.
 [[tool.mypy.overrides]]
 module = [
     "moonmcp.server",
-    "moonmcp.web.browser",
-    "moonmcp.net.tls",
     "moonmcp.net.http",
-    "moonmcp.net.dns",
     "moonmcp.recon.openapi",
-    "moonmcp.recon.subdomains",
-    "moonmcp.web.desync",
 ]
 ignore_errors = true
 

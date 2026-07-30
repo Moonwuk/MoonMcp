@@ -160,7 +160,7 @@ async def enumerate_subdomains(
     # gather(return_exceptions=True) so one misbehaving source can never crash
     # the tool or orphan the other in-flight coroutines.
     for outcome in await asyncio.gather(*tasks, return_exceptions=True):
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             result.errors["unknown"] = f"{type(outcome).__name__}: {outcome}"
             continue
         name, found, err = outcome

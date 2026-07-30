@@ -7,7 +7,7 @@
 > Behind `vuln_info` / `vuln_search` / `rootcause_info` / `vuln_tools` and `vulns://all`.
 
 
-**44 classes** — 21 common · 18 uncommon · 5 rare. Referenced only — no weaponized code.
+**50 classes** — 22 common · 21 uncommon · 7 rare. Referenced only — no weaponized code.
 
 
 ## Common (21)
