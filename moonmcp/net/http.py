@@ -328,8 +328,15 @@ def _origin(u: str) -> tuple[str, str, int | None]:
     return (sp.scheme.lower(), (sp.hostname or "").lower(), sp.port)
 
 
-# Headers that must never be replayed to a different origin across a redirect.
-_SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+# The ONLY headers safe to carry across an origin boundary on a redirect. Anything
+# not on this allowlist is dropped when a redirect crosses to a different origin —
+# not just Authorization/Cookie and engagement auth, but ANY caller-supplied header
+# (X-Api-Key, X-Auth-Token, a custom bearer, Referer, …), since a cross-origin hop
+# must never replay a credential the caller attached for the first origin. An
+# allowlist fails safe: a new/unknown auth header is dropped by default.
+_CROSS_ORIGIN_SAFE_HEADERS = frozenset({
+    "user-agent", "accept", "accept-encoding", "accept-language", "content-type",
+})
 
 
 class HttpClient:
@@ -393,11 +400,8 @@ class HttpClient:
                 headers=[], body=b"", elapsed_ms=0.0,
                 error="out of scope", blocked_reason="out of scope",
             )
-        auth_keys: set[str] = set()
         if self._auth_provider is not None and not suppress_auth:
-            ap = self._auth_provider()
-            auth_keys = set(ap)
-            merged.update(ap)
+            merged.update(self._auth_provider())
         if headers:
             merged.update(headers)  # per-call headers win over engagement auth
         origin0 = _origin(url)
@@ -470,11 +474,13 @@ class HttpClient:
             if scope_check is not None and not scope_check(nxt):
                 result.redirect_blocked = nxt
                 break
-            # Drop credentials before crossing to a different origin — never replay
-            # Authorization/Cookie (or engagement-auth headers) to another host.
+            # Crossing to a different origin: drop every header not on the safe
+            # allowlist — Authorization/Cookie, engagement auth, AND any caller-supplied
+            # custom header (X-Api-Key, X-Auth-Token, Referer, …). Never replay a
+            # credential the caller attached for the first origin to another host.
             if _origin(nxt) != origin0:
                 for k in list(merged):
-                    if k.lower() in _SENSITIVE_HEADERS or k in auth_keys:
+                    if k.lower() not in _CROSS_ORIGIN_SAFE_HEADERS:
                         merged.pop(k, None)
             seen.add(nxt)
             chain.append(nxt)
