@@ -5,6 +5,8 @@ cleartext into the LLM context / audit log / reports / memory hub — exactly th
 sinks the redaction step exists to protect.
 """
 
+import time
+
 from moonmcp.recon.secrets import scan_text
 
 
@@ -35,3 +37,12 @@ def test_context_does_not_leak_basic_auth_password():
     hits = [h for h in scan_text(text) if h.type == "Basic Auth in URL"]
     assert hits
     assert "SuperSecretPw99" not in hits[0].context
+
+
+def test_scan_text_no_redos_on_pathological_body():
+    # a long run of letters with no "://" made the old Basic-Auth pattern backtrack
+    # quadratically; the bounded pattern must scan it in well under a second.
+    payload = "a" * 400_000
+    start = time.perf_counter()
+    scan_text(payload)
+    assert time.perf_counter() - start < 1.5
