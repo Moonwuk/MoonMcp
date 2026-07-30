@@ -261,6 +261,9 @@ def _extract_fix_version(description: str) -> str:
     for pattern in [
         r"(?:upgraded|fixed|patched|updated)\s+to\s+([\d.]+)",
         r"fix(?:ed)?\s+(?:in\s+)?(?:version\s+)?([\d.]+)",
+        # "patched/resolved/addressed in [version] X" (the "in" phrasing pattern 1's
+        # "to" requirement misses)
+        r"(?:patched|resolved|addressed|corrected)\s+(?:in\s+)?(?:version\s+)?([\d.]+)",
         r"release[sd]?\s+([\d.]+)",
         r"upgrade[d]?\s+to\s+([\d.]+)",
     ]:
@@ -501,7 +504,7 @@ def variant_search(pattern: str, *, target: str = "") -> VariantSearchResult:
     else:
         # Check if pattern is a CWE
         cwe_upper = pattern_lower.upper()
-        if cwe_upper.startswith("cwe-"):
+        if cwe_upper.startswith("CWE-"):
             cwes = [cwe_upper]
             for rc_id, rc_cwes in _ROOT_CAUSE_CWE_MAP.items():
                 if cwe_upper in rc_cwes:
