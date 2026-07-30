@@ -90,6 +90,32 @@ def _host_key(target: str) -> str:
         return (target or "").strip().lower()
 
 
+def _split_host_port(target: str, default_port: int) -> tuple[str, int]:
+    host = normalize_target(target)
+    # normalize_target strips the port; recover it if the user supplied one.
+    raw = target.strip()
+    port = default_port
+    if raw.startswith("["):  # [ipv6]:port
+        end = raw.find("]")
+        rest = raw[end + 1:]
+        if rest.startswith(":") and rest[1:].isdigit():
+            port = int(rest[1:])
+    elif "://" in raw:
+        from urllib.parse import urlsplit
+        p = urlsplit(raw)
+        try:
+            parsed_port = p.port
+        except ValueError:
+            parsed_port = None  # out-of-range port in the URL; fall back to default
+        if parsed_port:
+            port = parsed_port
+        elif p.scheme == "http":
+            port = 80
+    elif raw.count(":") == 1 and raw.rsplit(":", 1)[1].isdigit():
+        port = int(raw.rsplit(":", 1)[1])
+    return host, port
+
+
 class ToolBlocked(Exception):
     """Raised when a tool is disabled by configuration (not a scope problem)."""
 
