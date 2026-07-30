@@ -23,7 +23,6 @@ import os
 import platform
 import re
 import secrets
-import statistics
 from typing import Any
 
 from . import __version__
@@ -47,9 +46,11 @@ from .knowledge import techniques as techmod
 from .knowledge import vulns as vulnsmod
 from .knowledge import waf_kb as wafkbmod
 from .mcp_core import (
+    _collect_oast,
     _connect_pin,
     _host_key,
     _require_scope,
+    _run_time_based,
     _scope_check,
     _split_host_port,
     active_tool,
@@ -665,66 +666,6 @@ async def oast_poll(token: str | None = None) -> dict:
     interactions = oastmod.parse_interactions(r.text())
     return {"token": token, "status": r.status, "interaction_count": len(interactions),
             "interactions": interactions[:200]}
-
-
-async def _collect_oast(ctx, token: str) -> tuple[list[dict], str | None]:
-    """Read OAST interactions for ``token``, distinguishing 'no callback yet'
-    (``[], None``) from 'could not check' (``[], "<reason>"``).
-
-    The blind-vuln lanes must never render a *poll failure* as a clean no-hit: a
-    swallowed poll error is a silent miss — the one failure mode a detection tool
-    cannot have. Callers surface the returned reason as ``oast_error`` so an agent
-    knows the callback channel was never actually verified.
-    """
-
-    server = ctx.oast_server
-    if server is not None and server.running:
-        return server.interactions(token), None
-    poll = ctx.oast.poll_target(token)
-    if not poll:
-        return [], None  # nothing to poll (self-host stopped / unconfigured); other fields say so
-    try:
-        r = await ctx.http.fetch(poll, follow_redirects=True)
-    except Exception as exc:  # noqa: BLE001 - report the failure, never swallow it
-        return [], f"poll request failed: {type(exc).__name__}: {exc}"
-    if r.status is None:
-        return [], f"poll request failed: {r.error or 'unreachable'}"
-    return oastmod.parse_interactions(r.text()), None
-
-
-async def _run_time_based(get, zero_payloads, delay_payloads, confirm_payloads,
-                          req: float, req_lo: float, label_key: str) -> list[dict]:
-    """Drive the time-based blind lane with REPEATED samples + a scaling re-probe.
-
-    Replaces the old single-shot ``control vs delayed`` compare (jitter false-positive;
-    a slow baseline dropped real hits). For each payload pair it medians several 0s
-    controls and ``req``-second delays, and only when that clears the threshold does it
-    pay for a smaller ``req_lo`` confirm probe and require the induced delay to scale
-    with the sleep (see :func:`probes.assess_timing_samples`). ``label_key`` is
-    ``"dbms"`` (sqli) or ``"separator"`` (cmdi).
-    """
-
-    loop = asyncio.get_event_loop()
-
-    async def _elapsed(pl: str) -> float:
-        s = loop.time()
-        await get(pl)
-        return loop.time() - s
-
-    hits: list[dict] = []
-    for (lbl, zp), (_a, dp), (_b, cp) in zip(zero_payloads, delay_payloads,
-                                             confirm_payloads, strict=True):
-        control = [await _elapsed(zp) for _ in range(3)]
-        primary = [await _elapsed(dp) for _ in range(2)]
-        # cheap gate: skip the (slower) scaling re-probe unless the primary looks real
-        if statistics.median(primary) - statistics.median(control) < max(0.6 * req, 0.5):
-            continue
-        confirm = [await _elapsed(cp) for _ in range(2)]
-        hit = probesmod.assess_timing_samples(control, primary, req,
-                                              confirm=confirm, requested_confirm=req_lo)
-        if hit:
-            hits.append({label_key: lbl, **hit})
-    return hits
 
 
 @mcp.tool()
