@@ -6,6 +6,12 @@ loudly if one sends traffic without the gate (or if the passive allowlist drifts
 out of date), so an un-gated capability can never ship by accident.
 """
 
+import ast
+import inspect
+import textwrap
+
+import pytest
+
 from moonmcp import server as srv
 
 # Tools that legitimately need NO scope gate: server meta, scope/program/auth/
@@ -84,3 +90,60 @@ def test_intrusive_tools_carry_intrusive_marker():
     for name in ("port_scan", "content_discovery", "http_methods", "waf_efficacy",
                  "desync_probe", "vuln_scan"):
         assert getattr(tools[name], "__moonmcp_intrusive__", False), f"{name} not intrusive"
+
+
+# --- self_scoped tools: the decorator does NOT gate them, so the marker proves
+#     nothing — the BODY must call _require_scope. The declarative test above cannot
+#     catch a self_scoped body that drops the call, so guard it two ways: statically
+#     (every body references _require_scope) and behaviourally (a real out-of-scope
+#     call is refused). -------------------------------------------------------------
+
+def _self_scoped():
+    return {n: fn for n, fn in _tools().items()
+            if getattr(fn, "__moonmcp_self_scoped__", False)}
+
+
+def _calls_require_scope(fn) -> bool:
+    """True if the tool's own body contains a call to _require_scope (AST, so a bare
+    mention in a comment/string doesn't count)."""
+
+    src = textwrap.dedent(inspect.getsource(inspect.unwrap(fn)))
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "_require_scope":
+            return True
+    return False
+
+
+def test_self_scoped_bodies_actually_call_require_scope():
+    # A future refactor that removes the hand-rolled _require_scope from a
+    # self_scoped body would keep the __moonmcp_gated__ marker (it's set
+    # unconditionally) and pass every marker-based test — but ship un-gated traffic.
+    # This static check fails instead.
+    ss = _self_scoped()
+    assert ss, "expected some self_scoped tools to exist"
+    missing = sorted(n for n, fn in ss.items() if not _calls_require_scope(fn))
+    assert not missing, f"self_scoped tools whose body never calls _require_scope: {missing}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool,kwargs", [
+    ("parse_openapi", {"target": "http://evil.example.test/openapi.json"}),
+    ("analyze_config", {"target": "http://evil.example.test/.env"}),
+    ("firebase_exposure", {"target": "http://evil.example.test/"}),
+    ("supabase_exposure", {"target": "http://evil.example.test/"}),
+    ("confirm_finding", {"target": "http://evil.example.test/", "payload": "x", "param": "q"}),
+    ("http_repeater", {"url": "http://evil.example.test/"}),
+])
+async def test_self_scoped_tool_refuses_out_of_scope(tool, kwargs, fresh_context):
+    # fresh_context authorises only 127.0.0.1, so evil.example.test is out of scope.
+    res = await getattr(srv, tool)(**kwargs)
+    assert res.get("error") == "out_of_scope", (tool, res)
+
+
+@pytest.mark.asyncio
+async def test_second_order_probe_refuses_out_of_scope(fresh_context):
+    res = await srv.second_order_sqli_probe(
+        write={"url": "http://evil.example.test/w"},
+        read="http://evil.example.test/r", param="q")
+    assert res.get("error") == "out_of_scope", res
