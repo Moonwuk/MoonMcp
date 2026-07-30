@@ -4477,10 +4477,17 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
                                     follow_redirects=False, scope_check=_scope_check())
 
     def _diff(t1, t2, f1, f2) -> tuple[bool, bool]:
-        ts = (t1.status == t2.status) and (len(t1.body) == len(t2.body))
-        fs = (f1.status == f2.status) and (len(f1.body) == len(f2.body))
-        d = (t1.status != f1.status) or (len(t1.body) != len(f1.body))
-        return bool(ts and fs), bool(ts and fs and d)
+        # Tolerate per-request jitter (nonce/timestamp/counter/ad rotation) measured
+        # from the two identical sends of each arm; a real boolean differential must
+        # EXCEED that noise floor, not merely differ by a byte. A byte-exact compare
+        # false-negatived on any dynamic page (the common case for authed endpoints).
+        jitter = max(abs(len(t1.body) - len(t2.body)), abs(len(f1.body) - len(f2.body)))
+        tol = jitter + 16
+        ts = (t1.status == t2.status) and abs(len(t1.body) - len(t2.body)) <= tol
+        fs = (f1.status == f2.status) and abs(len(f1.body) - len(f2.body)) <= tol
+        stable = bool(ts and fs)
+        d = (t1.status != f1.status) or (abs(len(t1.body) - len(f1.body)) > tol)
+        return stable, bool(stable and d)
 
     # --- core: error signatures + reproducible boolean (context-aware) ---
     er = await _get(probesmod.SQLI_ERROR)
@@ -4560,6 +4567,7 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         injection_hits=[f"{h['class']}/{h['technology']}" for h in hits] + extra_hits,
         status_changed=bool_diff and (t1.status != f1.status),
         length_delta=(len(t1.body) - len(f1.body)) if bool_diff else 0,
+        differential_confirmed=bool_diff,
         oast_count=oast_count, timing_delta_ms=timing_ms)
     out: dict[str, Any] = {
         "target": url, "param": param, "context": context, "placement": placement,
@@ -4803,12 +4811,20 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     c_req = nosqlimod.scalar_request(url, param, nosqlimod.CONTROL, m)
     control = (await _send(c_req, m), await _send(c_req, m))
 
-    # Operator lane: bracket twins in the requested method + JSON twins as POST.
+    # Benign nested-key control: `param[zz]=CONTROL` (a NON-operator nested key). A
+    # framework that parses brackets into an object (Express/qs, PHP) flips on this
+    # too, regardless of the backend DB — so a bracket-operator flip that merely
+    # matches this benign one is param parsing, not Mongo injection (corroboration).
+    nested_req = nosqlimod.bracket_request(url, param, "zz", nosqlimod.CONTROL, m)
+    nested_ctrl = (await _send(nested_req, m), await _send(nested_req, m))
+
+    # Operator lane: bracket twins (corroborated vs the benign nested control) in the
+    # requested method + JSON twins as POST.
     operator_hits: list[dict] = []
     for label, op, val in nosqlimod.BRACKET_TWINS:
         req = nosqlimod.bracket_request(url, param, op, val, m)
         twin = (await _send(req, m), await _send(req, m))
-        hit = nosqlimod.assess_operator(control, twin)
+        hit = nosqlimod.assess_operator(control, twin, nested=nested_ctrl)
         if hit:
             operator_hits.append({"variant": label, **hit})
     for label, obj in nosqlimod.JSON_TWINS:
@@ -4836,7 +4852,8 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     verdict = confirmmod.evaluate(
         injection_hits=injection_hits,
         status_changed=bool(strong_op) or bool(where_hit and where_hit["status_changed"]),
-        length_delta=(where_hit["length_delta"] if where_hit else 0))
+        length_delta=(where_hit["length_delta"] if where_hit else 0),
+        differential_confirmed=bool(where_hit))
     return {"target": url, "param": param, "method": m, **verdict,
             "operator_hits": operator_hits, "where_oracle": where_hit,
             "error_signatures": sig_hits[:10],

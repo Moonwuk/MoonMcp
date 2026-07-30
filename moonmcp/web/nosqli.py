@@ -114,17 +114,34 @@ class Resp:
     session_cookie: bool = False
 
 
+def _len_tol(*lengths: int) -> int:
+    """Per-request length jitter to tolerate (nonce/timestamp/counter): ~5% of the
+    body, floored at 16 bytes. A byte-exact compare false-negatived on any dynamic
+    page; a real flip must exceed this."""
+
+    return max(16, max(lengths) // 20)
+
+
 def _stable(a: Resp, b: Resp) -> bool:
-    return a.status == b.status and a.length == b.length
+    return a.status == b.status and abs(a.length - b.length) <= _len_tol(a.length, b.length)
 
 
-def assess_operator(control: tuple[Resp, Resp], twin: tuple[Resp, Resp]) -> dict | None:
+def assess_operator(control: tuple[Resp, Resp], twin: tuple[Resp, Resp],
+                    nested: tuple[Resp, Resp] | None = None) -> dict | None:
     """Is an operator twin a hit vs the plain-CONTROL baseline?
 
-    Requires the twin to be **reproducible** (both sends agree) — this rejects
-    inter-request noise. A hit *flips the outcome*: a status change or a new
-    session cookie is a **strong** flip; materially more body (only trusted when
-    the control is itself stable) is a **weak** "more records?" flip.
+    Requires the twin to be **reproducible** (both sends agree within the jitter
+    tolerance) — this rejects inter-request noise. A hit *flips the outcome*: a
+    status change or a new session cookie is a **strong** flip; materially more body
+    (only trusted when the control is itself stable) is a **weak** "more records?"
+    flip.
+
+    ``nested`` is an optional **benign nested-key control** (``param[zz]=x`` — NOT an
+    operator). Bracket/dot params turn a string into an object on Express/qs/PHP
+    *regardless of the backend DB*, so a bare bracket "flip" is param parsing, not
+    Mongo operator injection. When ``nested`` is supplied, a flip only counts if the
+    operator differs from that benign nested control too — killing the non-Mongo
+    false positive.
     """
 
     c1, c2 = control
@@ -133,16 +150,20 @@ def assess_operator(control: tuple[Resp, Resp], twin: tuple[Resp, Resp]) -> dict
         return None
     if not _stable(c1, c2):
         return None  # a noisy/unreproducible baseline can't be trusted for a flip
+    n1 = nested[0] if nested and _stable(nested[0], nested[1]) else None
     reasons: list[str] = []
     strong = False
     if r1.status is not None and r1.status != c1.status:
-        reasons.append(f"status {c1.status}→{r1.status}")
-        strong = True
+        if n1 is None or r1.status != n1.status:
+            reasons.append(f"status {c1.status}→{r1.status}")
+            strong = True
     if r1.session_cookie and not c1.session_cookie:
-        reasons.append("new session Set-Cookie appeared")
-        strong = True
+        if n1 is None or not n1.session_cookie:
+            reasons.append("new session Set-Cookie appeared")
+            strong = True
     if r1.length - c1.length >= max(64, c1.length // 2):
-        reasons.append(f"response +{r1.length - c1.length} bytes vs baseline (more records?)")
+        if n1 is None or abs(r1.length - n1.length) >= max(64, c1.length // 2):
+            reasons.append(f"response +{r1.length - c1.length} bytes vs baseline (more records?)")
     if not reasons:
         return None
     return {"strong": strong, "reasons": reasons, "status": r1.status, "length": r1.length}
@@ -158,7 +179,8 @@ def assess_where(true_pair: tuple[Resp, Resp], false_pair: tuple[Resp, Resp]) ->
     f1, f2 = false_pair
     if not (_stable(t1, t2) and _stable(f1, f2)):
         return None
-    differs = t1.status != f1.status or t1.length != f1.length
+    tol = _len_tol(t1.length, f1.length)
+    differs = t1.status != f1.status or abs(t1.length - f1.length) > tol
     if not differs:
         return None
     return {"true_status": t1.status, "true_len": t1.length,

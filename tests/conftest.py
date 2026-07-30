@@ -268,6 +268,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/nosqli-bracketparse"):
+            # NOT Mongo: a framework (Express+qs / PHP) that turns ANY bracketed param
+            # into a nested object; a NON-Mongo backend then errors identically whether
+            # the nested key is an operator ($ne) or benign (zz). The bracket "flip" is
+            # param parsing, not operator injection — must NOT be scored as NoSQLi.
+            from urllib.parse import parse_qs
+            keys = parse_qs(raw.decode("utf-8", "replace"))
+            if any("[" in k for k in keys):
+                body = b"<html>500 internal server error - unexpected request shape</html>"
+                self.send_response(500)
+            else:
+                body = b"<html>invalid credentials</html>"
+                self.send_response(401)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/fastjson"):
             # DELIBERATELY VULNERABLE: "deserializes" the @type body by fetching the
             # URL it carries (simulates java.net.URL autoType → outbound lookup).
