@@ -17,6 +17,22 @@ def test_primitives():
     assert obs.slug("SQLi on /orders!!") == "sqli-on-orders"
 
 
+def test_code_fence_outgrows_backtick_runs():
+    assert obs.code_fence("no backticks") == "```"
+    assert obs.code_fence("has ``` triple") == "````"
+    six = "`" * 6
+    assert obs.code_fence(f"x {six} y") == "`" * 7          # longer than any run inside
+
+
+def test_frontmatter_quotes_yaml_indicator_values():
+    # a value STARTING with a YAML indicator must be quoted or it corrupts the property.
+    fm = obs.frontmatter({"a": "- not a list", "b": "[array]", "c": "@handle", "d": "safe"})
+    assert 'a: "- not a list"' in fm
+    assert 'b: "[array]"' in fm
+    assert 'c: "@handle"' in fm
+    assert "d: safe" in fm                                   # a plain value stays unquoted
+
+
 def test_build_vault_graph(tmp_path):
     root = str(tmp_path)
     findings = [

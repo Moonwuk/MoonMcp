@@ -35,6 +35,38 @@ def _slug(text: str) -> str:
     return out or "finding"
 
 
+# Target-controlled finding text (title/detail/evidence) is rendered into the markdown
+# report — neutralise markdown structure so it can't forge fake sections/headings.
+_MD_STRUCT = set("#>`|-=~+*")
+
+
+def _md_line(s: str) -> str:
+    """Collapse to a single line — for text placed on a heading line."""
+    return str(s).replace("\r", " ").replace("\n", " ").strip()
+
+
+def _md_detail(s: str) -> str:
+    """Keep line breaks (readable), but escape a leading structural markdown character
+    on each line so target text can't forge a heading / rule / fence / list / table."""
+    out = []
+    for ln in str(s).replace("\r", "").split("\n"):
+        i = len(ln) - len(ln.lstrip())
+        if i < len(ln) and ln[i] in _MD_STRUCT:
+            ln = ln[:i] + "\\" + ln[i:]
+        out.append(ln)
+    return "\n".join(out)
+
+
+def _md_fence(content: str) -> str:
+    """A backtick fence longer than any backtick run in *content* (CommonMark), so
+    evidence carrying its own ``` can't close the fence and inject markdown."""
+    longest = run = 0
+    for ch in content:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
 def format_sarif(findings: list[dict], *, version: str = "0.0.0") -> dict:
     """Render findings as a SARIF 2.1.0 document (for GitHub code-scanning, etc.).
 
@@ -128,11 +160,17 @@ def format_markdown(report: dict, *, generated_at: str | None = None) -> str:
             sev = str(f.get("severity", "info")).lower()
             badge = _SEV_BADGE.get(sev, "")
             title = f.get("title", "finding")
-            lines.append(f"### {badge} [{sev.upper()}] {title}")
+            # title on its own heading line → single line (a newline would break out
+            # of the ### and forge a new section from target-controlled text).
+            lines.append(f"### {badge} [{sev.upper()}] {_md_line(title)}")
             if f.get("detail"):
-                lines.append(f"{f['detail']}")
+                lines.append(_md_detail(str(f["detail"])))
             if f.get("evidence"):
-                lines.append(f"> {f['evidence']}")
+                # a `>` blockquote only quotes the FIRST line — the rest of a
+                # target-controlled response injects markdown. Fence it verbatim.
+                ev = str(f["evidence"])
+                fence = _md_fence(ev)
+                lines += [fence, ev, fence]
             lines.append("")
 
     if not findings and not surface and not grades:

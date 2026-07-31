@@ -50,7 +50,11 @@ def frontmatter(props: dict) -> str:
             lines.extend(f"  - {x}" for x in vals)
         else:
             sv = str(v).replace("\n", " ")
-            if ":" in sv or "#" in sv or '"' in sv:
+            # Quote when the value would confuse the YAML scalar parser: trigger
+            # punctuation, a leading YAML indicator character, or leading/trailing
+            # whitespace (a bare '- x' / '[x]' / '@x' start corrupts the property).
+            if (any(c in sv for c in ':#"') or sv == ""
+                    or sv[:1] in "-?:,[]{}#&*!|>'\"%@` " or sv != sv.strip()):
                 # escape backslash then double-quote so a value carrying a `"` can't
                 # break out of the quoted scalar and inject a stray frontmatter key
                 esc = sv.replace("\\", "\\\\").replace('"', '\\"')
@@ -59,6 +63,18 @@ def frontmatter(props: dict) -> str:
                 lines.append(f"{k}: {sv}")
     lines.append("---")
     return "\n".join(lines)
+
+
+def code_fence(content: str) -> str:
+    """A backtick fence LONGER than any backtick run in *content* (CommonMark), so
+    target-controlled evidence carrying its own ``` can't close the fence early and
+    inject markdown (wikilinks/headings/dataview) into the vault."""
+
+    longest = run = 0
+    for ch in content:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
 
 
 def wikilink(name: str, alias: str | None = None) -> str:
@@ -205,7 +221,9 @@ def build_vault(
         if f.get("detail"):
             body += ["", "## Detail", str(f["detail"])]
         if f.get("evidence"):
-            body += ["", "## Evidence", "```", str(f["evidence"])[:4000], "```"]
+            ev = str(f["evidence"])[:4000]
+            fence = code_fence(ev)
+            body += ["", "## Evidence", fence, ev, fence]
         vault.write(f"Findings/{note_name}.md", "\n".join(body))
 
     for host, notes in assets.items():
