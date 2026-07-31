@@ -503,6 +503,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html>hello " + out.encode("utf-8", "replace") + b"</html>")
             return
+        if self.path.startswith("/sqli-numeric"):
+            # DELIBERATELY VULNERABLE numeric context: `WHERE id = <val>` UNQUOTED, so a
+            # non-numeric value itself breaks the query (no quote needed) -> SQL error, while
+            # a bare integer is valid. This is the case where a single string-only benign
+            # baseline self-errors identically to the payload and wrongly subtracts the proof.
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            if not q.isdigit():
+                body = (b"Database error: You have an error in your SQL syntax; check the MySQL "
+                        b"manual near '" + q.encode("utf-8", "replace")[:20] + b"'")
+            else:
+                body = b"<html>item " + q.encode() + b"</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/sqli?") or self.path == "/sqli":
             # DELIBERATELY VULNERABLE: a single quote yields a MySQL error; the
             # boolean pair yields different-length bodies.

@@ -92,6 +92,18 @@ async def test_sqli_default_unchanged(local_server, fresh_context):
 
 
 @pytest.mark.asyncio
+async def test_sqli_numeric_context_error_lane_not_subtracted(local_server, fresh_context):
+    # Regression: in an unquoted numeric context, a non-numeric benign value self-errors
+    # exactly like the payload. A single string baseline would subtract that error signature
+    # and lose the ONLY confirmation (no boolean differential here). The dual (numeric+string)
+    # baseline keeps only genuinely-ambient signatures, so the real error-based SQLi survives.
+    base, _ = local_server
+    res = await srv.sqli_probe(target=f"{base}/sqli-numeric", param="q")
+    assert any(h["class"] == "sqli" for h in res["error_signatures"])
+    assert res["verdict"] in ("likely", "confirmed")
+
+
+@pytest.mark.asyncio
 async def test_sqli_order_by_context(local_server, fresh_context):
     base, _ = local_server
     res = await srv.sqli_probe(target=f"{base}/sqli-order", param="sort", context="order_by")

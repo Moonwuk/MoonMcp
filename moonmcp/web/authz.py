@@ -130,6 +130,22 @@ def absent_id(ref: ObjectRef) -> str:
     return "999999999"
 
 
+def _distinct(r, ctrl, len_jitter: int, content_stable: bool) -> bool:
+    """Is response *r* a DISTINCT object versus the "this id is absent" *ctrl*, beyond noise?
+
+    True on a status change, a body-length change past the endpoint's measured jitter, or
+    (when the absent control is byte-stable across two fetches) ANY content change. Length +
+    content, NOT a fixed-window similarity ratio: a real per-id object differs from the
+    soft-404 shell even when a huge shared HTML chrome dominates the body (which a 4 KB
+    similarity window would call identical), while a constant shell stays within jitter."""
+
+    if r.status != ctrl.status:
+        return True
+    if abs(len(r.body) - len(ctrl.body)) > len_jitter:
+        return True
+    return content_stable and r.body != ctrl.body
+
+
 async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                      max_refs: int = 8, scope_check=None) -> dict:
     """Run the three BOLA signals (direct / sibling sweep / multi-step chain), GET-only."""
@@ -143,28 +159,41 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
         others.append(("user_B", b_headers))
     others.append(("anonymous", None))
 
+    sweeper_name, sweeper_hdr = others[0]
     findings: list[dict] = []
     a = await fetch_as(url)  # owner = current engagement auth
     a_ok = looks_like_object(a.status, a.body)
     refs = object_refs(url)[:max_refs]
 
-    # Negative control (needs an id to mutate): fetch a guaranteed-absent id AS THE OWNER.
-    # If the endpoint still returns an object-like body that resembles the real one (or
-    # the owner body isn't even object-like), it is NOT object-scoped — a soft-404 / SPA
-    # shell / public catch-all. Every signal below ("another identity gets the same body",
-    # "a neighbour id returns an object") is then noise, not BOLA, so suppress them.
-    not_object_scoped = False
+    # Per-ref negative controls. For each id-bearing ref, fetch a guaranteed-absent id TWICE
+    # as the sweeper (to measure THIS endpoint's per-request jitter) and once as the owner.
+    # A neighbour / identity only counts as a real object when its body is DISTINCT from the
+    # "this id is absent" control beyond that jitter — so a soft-404 / SPA / public shell
+    # (absent and present ids look identical) can't false-positive, while a real per-id object
+    # (which differs from the shell) is NOT suppressed even under a huge shared HTML chrome.
+    # Keyed by ref, so a decorative leading numeric segment (year / API version / page) can't
+    # suppress the sweep of the actual object ref.
+    ctl: dict[str, tuple] = {}  # ref.where -> (sweeper_ctrl, len_jitter, content_stable, owner_scoped)
+    for ref in refs:
+        au = with_ref(url, ref, absent_id(ref))
+        s1 = await fetch_as(au, headers=sweeper_hdr, suppress_auth=True)
+        s2 = await fetch_as(au, headers=sweeper_hdr, suppress_auth=True)
+        len_jitter = abs(len(s1.body) - len(s2.body))
+        stable = s1.body == s2.body
+        ao = await fetch_as(au)  # owner: is the owner's REAL object distinct from an absent id?
+        owner_scoped = a_ok and _distinct(a, ao, len_jitter, stable)
+        ctl[ref.where] = (s1, len_jitter, stable, owner_scoped)
+
+    # The endpoint is object-scoped if mutating SOME ref to a nonexistent id changed what the
+    # owner sees; if no ref matters (a shell / catch-all) the direct + chained signals are noise.
+    endpoint_scoped = (not refs) or any(v[3] for v in ctl.values())
     control_note: str | None = None
-    if refs:
-        ctrl = await fetch_as(with_ref(url, refs[0], absent_id(refs[0])))
-        if looks_like_object(ctrl.status, ctrl.body) and (not a_ok or similar(a.body, ctrl.body) >= 0.95):
-            not_object_scoped = True
-            control_note = (f"a nonexistent id returned an object-like body (HTTP {ctrl.status}, "
-                            f"{len(ctrl.body)}B) resembling the real one — endpoint is not "
-                            "object-scoped (soft-404 / SPA / public); BOLA signals suppressed")
+    if refs and not endpoint_scoped:
+        control_note = ("nonexistent ids return the same object-like body as real ones — endpoint "
+                        "is not object-scoped (soft-404 / SPA / public); direct/chained BOLA suppressed")
 
     # Signal 1 — direct BOLA: another identity gets the SAME object from the SAME URL.
-    if a_ok and not not_object_scoped:
+    if a_ok and endpoint_scoped:
         for name, hdr in others:
             r = await fetch_as(url, headers=hdr, suppress_auth=True)
             if looks_like_object(r.status, r.body) and similar(a.body, r.body) >= 0.95:
@@ -175,13 +204,16 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                               "(similarity ≥0.95) — the object is not scoped to its owner",
                 })
 
-    # Signal 2 — sibling sweep: walk the id space as the other identity.
-    sweeper_name, sweeper_hdr = others[0]
-    for ref in refs if not not_object_scoped else []:
+    # Signal 2 — per-ref sibling sweep with a per-neighbour negative control.
+    for ref in refs:
+        s1, len_jitter, stable, _ = ctl[ref.where]
+        ctrl_obj = looks_like_object(s1.status, s1.body)
         for sib in sibling_values(ref):
             swapped = with_ref(url, ref, sib)
             r = await fetch_as(swapped, headers=sweeper_hdr, suppress_auth=True)
-            if looks_like_object(r.status, r.body):
+            # A real IDOR returns a DISTINCT object; a shell returns the absent-id body for
+            # every neighbour too. Require object-like AND distinct-from-the-absent-control.
+            if looks_like_object(r.status, r.body) and (not ctrl_obj or _distinct(r, s1, len_jitter, stable)):
                 findings.append({
                     "kind": "sibling_idor", "identity": sweeper_name, "url": swapped,
                     "ref": ref.value, "reached": sib, "severity": "high", "verdict": "review",
@@ -191,7 +223,7 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                 break  # one neighbour hit per ref is enough signal
 
     # Signal 3 — multi-step chain: extract ids the OWNER exposes, access them as another identity.
-    if a_ok and refs and not not_object_scoped:
+    if a_ok and refs and endpoint_scoped:
         url_vals = {r.value for r in refs}
         owned = [v for v in extract_body_refs(a.text(limit=50_000)) if v not in url_vals][:max_refs]
         ref0 = refs[0]

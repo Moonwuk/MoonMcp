@@ -59,3 +59,22 @@ async def test_error_disclosure_flags_a_real_introduced_trace():
     prof = await mm.profile_behavior(_Client(fn), "https://app.test/")
     assert "Traceback (most recent call last)" in prof.error_disclosure
     assert "error/stack-trace signatures leaked in responses" in prof.notes
+
+
+@pytest.mark.asyncio
+async def test_real_leak_flagged_even_when_token_is_also_ambient():
+    # The baseline footer says "Warning: cookies required" (ambient, 1x). The fuzz path leaks
+    # a REAL "Warning: mysql_connect() ... on line 42" ON TOP of it. The extra occurrence must
+    # be caught — a plain `sig not in base_body` would suppress it because the token is ambient.
+    footer = "<footer>Warning: cookies required</footer>"
+
+    def fn(url, method, headers):
+        if "x-does-not-exist" in url:
+            return _R(404, "<html>nf</html>" + "x" * 300)
+        if any(m in url for m in _FUZZ):
+            return _R(500, "<html>" + footer + " Warning: mysql_connect(): Access denied on line 42</html>")
+        return _R(200, "<html>welcome " + footer + "</html>")
+
+    prof = await mm.profile_behavior(_Client(fn), "https://app.test/")
+    assert "Warning: " in prof.error_disclosure      # 2 occurrences in fuzz vs 1 ambient
+    assert " on line " in prof.error_disclosure       # 1 vs 0

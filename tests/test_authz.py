@@ -117,6 +117,54 @@ async def test_soft_404_app_no_bola_false_positive():
     assert "not object-scoped" in (res.get("note") or "")
 
 
+# A large shared HTML chrome (>4 KB) with a small per-id data block — the case where a
+# 4 KB similarity window sees only identical chrome and would wrongly call a real object a
+# "shell", suppressing genuine IDOR. The jitter-aware length/content control must catch it.
+_CHROME = "<html><head>" + "<meta charset=utf-8>" * 400 + "</head><body><nav>menu</nav>"
+
+
+class _ChromeIDORApp:
+    """Object-scoped HTML app: big shared chrome + a small per-id data block; absent ids
+    soft-404 to a 'not found' shell (same chrome); neighbours return other users' data."""
+
+    async def fetch(self, url, *, method="GET", headers=None, body=None, suppress_auth=False, **kw):
+        m = re.search(r"/orders/(\d+)", url)
+        oid = m.group(1) if m else None
+        if oid in ("100", "99", "101", "205"):
+            return _R(200, _CHROME + f"<div id=data>ORDER {oid} for customer {oid}</div></body></html>")
+        return _R(200, _CHROME + "<div id=data>Order not found</div></body></html>")
+
+
+@pytest.mark.asyncio
+async def test_chrome_heavy_idor_is_not_suppressed():
+    # regression: the object data (<40B) is dwarfed by >4 KB shared chrome, so a 4 KB
+    # similarity control called every id "the same shell" and dropped the real IDOR.
+    res = await az.probe_bola(_ChromeIDORApp(), "https://x.test/orders/100", b_headers={"Cookie": "b=1"})
+    assert "sibling_idor" in {f["kind"] for f in res["findings"]}
+
+
+class _DecorativeRefIDORApp:
+    """/reports/<year>/invoice/<id>: the leading year is decorative (ignored); the invoice
+    id IS object-scoped and absent ones 404. Neighbours are other orgs' invoices."""
+
+    async def fetch(self, url, *, method="GET", headers=None, body=None, suppress_auth=False, **kw):
+        m = re.search(r"/invoice/(\d+)", url)
+        iid = m.group(1) if m else None
+        if iid in ("778899", "778898", "778900", "1", "2"):
+            return _R(200, f'{{"invoice":{iid},"org":"acme","total":42}}')
+        return _R(404, "not found")
+
+
+@pytest.mark.asyncio
+async def test_decorative_leading_ref_does_not_suppress_object_sweep():
+    # regression: the control only probed refs[0] (the year) and globally suppressed the
+    # sweep of the real object ref. It must now sweep the invoice ref independently.
+    res = await az.probe_bola(_DecorativeRefIDORApp(),
+                              "https://x.test/reports/2024/invoice/778899", b_headers={"Cookie": "b=1"})
+    hits = [f for f in res["findings"] if f["kind"] == "sibling_idor"]
+    assert any(f["ref"] == "778899" for f in hits)
+
+
 @pytest.mark.asyncio
 async def test_no_refs_still_runs_direct_only():
     # a URL with no object id → no sibling/multistep, but direct still evaluated

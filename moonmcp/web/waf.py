@@ -125,12 +125,23 @@ async def detect_waf(client: HttpClient, url: str, *, scope_check=None, active: 
             if not blocked and pr.status is not None and pr.body:
                 low = pr.text(limit=20_000).lower()
                 blocked = any(s in low for s in _BLOCK_SIGNS)
-            if blocked and not base_blocked:
-                result.blocked_probe = True
-                result.block_status = pr.status
-                # A block that we didn't otherwise fingerprint still signals *a* WAF.
+            if not blocked:
+                continue
+            result.blocked_probe = True
+            result.block_status = pr.status
+            if not base_blocked:
+                # The attack was blocked and the benign baseline was NOT — attack-specific.
                 if not result.detected:
                     result.detected.append("Unknown WAF (request blocked)")
                     result.evidence["Unknown WAF (request blocked)"] = f"probe returned {pr.status}"
-                break
+            elif not result.detected:
+                # Baseline ALSO blocked: a single request can't separate a WAF that challenges
+                # ALL traffic (Cloudflare under-attack / rate-limit) from a down / auth-walled
+                # host. Don't silently drop it (that misses hardened WAF'd targets) nor assert a
+                # WAF — surface it as a low-confidence lead.
+                result.detected.append("Possible WAF (host blocks all requests)")
+                result.evidence["Possible WAF (host blocks all requests)"] = (
+                    f"benign baseline and attack both returned {pr.status} — a WAF challenging all "
+                    "traffic, or an auth-walled / rate-limited / unavailable host")
+            break
     return result

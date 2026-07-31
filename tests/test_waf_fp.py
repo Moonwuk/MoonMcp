@@ -46,12 +46,14 @@ class _BlocksEverythingClient:
 
 
 @pytest.mark.asyncio
-async def test_no_waf_fp_when_baseline_is_also_blocked():
-    # The benign baseline is already 403, so the attack getting 403 is NOT attack-specific
-    # evidence of a WAF — must not fingerprint an "Unknown WAF".
+async def test_blocks_everything_host_is_ambiguous_not_confident_waf():
+    # The benign baseline is already 403, so the attack getting 403 is NOT attack-specific.
+    # It must NOT be asserted as a confident WAF (that's the FP) — but it must NOT be silently
+    # dropped either (a WAF challenging ALL traffic, e.g. Cloudflare under-attack, looks like
+    # this — dropping it is the FN the review caught). Surface it as a low-confidence lead.
     res = await waf.detect_waf(_BlocksEverythingClient(), "https://t.example", active=True)
-    assert res.blocked_probe is False
-    assert "Unknown WAF (request blocked)" not in res.detected
+    assert "Unknown WAF (request blocked)" not in res.detected     # no over-claim
+    assert any("Possible WAF" in d for d in res.detected)          # but not hidden either
 
 
 class _NotAcceptableClient:
