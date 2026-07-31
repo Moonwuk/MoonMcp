@@ -12,12 +12,14 @@ from moonmcp.net import dial
 
 
 def test_resolve_pin_sync_returns_vetted_ip():
-    pin = lambda h: (None, "93.184.216.34")
+    def pin(h):
+        return (None, "93.184.216.34")
     assert dial.resolve_pin_sync(pin, "example.com") == "93.184.216.34"
 
 
 def test_resolve_pin_sync_blocks():
-    pin = lambda h: ("private/reserved", None)
+    def pin(h):
+        return ("private/reserved", None)
     with pytest.raises(dial.ConnectBlocked):
         dial.resolve_pin_sync(pin, "rebind.example")
 
