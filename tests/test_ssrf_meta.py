@@ -76,6 +76,27 @@ async def test_probe_no_leak_returns_empty():
 
 
 @pytest.mark.asyncio
+async def test_probe_default_mode_benign_has_no_confirmed_finding():
+    # Default mode always appends the informational dry_run note, so `findings` is
+    # never empty — but on a benign target NONE is verdict="confirmed". The tool must
+    # key `vulnerable` off confirmed leaks, not bool(findings).
+    findings = await sm.probe_ssrf_metadata(
+        _Client(lambda url, h: _R(200, "totally benign page")), "https://x.test/fetch", "url")
+    assert findings  # the dry_run note is present
+    assert not any(f.get("verdict") == "confirmed" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_ssrf_metadata_tool_not_vulnerable_on_benign(local_server, fresh_context):
+    from dataclasses import replace
+    base, _ = local_server
+    fresh_context.settings = replace(fresh_context.settings, allow_intrusive=True)
+    res = await srv.ssrf_metadata_probe(target=f"{base}/echo", param="url")
+    assert res["vulnerable"] is False, res            # regression: was always True
+    assert "no metadata credential signatures" in res["note"]
+
+
+@pytest.mark.asyncio
 async def test_ssrf_metadata_tool_registered():
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "ssrf_metadata_probe" in tools

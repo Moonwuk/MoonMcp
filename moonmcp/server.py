@@ -1920,11 +1920,16 @@ async def ssrf_metadata_probe(target: str, param: str, method: str = "GET",
     findings = await ssrfmetamod.probe_ssrf_metadata(
         ctx.http, url, param, method=method, scope_check=_scope_check(),
         confirm_creds=confirm_creds)
+    # `findings` always carries the informational "(note)" dry_run entry in default
+    # mode, so it is never empty — only an actual leak (verdict="confirmed") means
+    # vulnerable. Keying "vulnerable" off bool(findings) reported EVERY probe as a
+    # confirmed metadata SSRF, a critical false positive.
+    leaks = [f for f in findings if f.get("verdict") == "confirmed"]
     return {
         "target": url, "param": param,
-        "vulnerable": bool(findings), "findings": findings,
+        "vulnerable": bool(leaks), "findings": findings,
         "note": ("full-read SSRF to cloud metadata confirmed — rotate the exposed credentials"
-                 if findings else "no metadata credential signatures reflected in the response"),
+                 if leaks else "no metadata credential signatures reflected in the response"),
     }
 
 
