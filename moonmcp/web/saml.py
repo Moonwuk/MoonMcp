@@ -259,16 +259,24 @@ class Resp:
 
 def assess_variant(*, accepted: Resp, corrupted: Resp, variant: Resp,
                    variant_body: str, accepted_body: str, corrupted_body: str,
-                   forged_marker: str) -> dict:
+                   forged_marker: str, echo_control_body: str = "") -> dict:
     """Does *variant*'s response show the ACS consumed the forged identity, or
     at least behaved like the accepted baseline rather than the corrupted one
     (pure)? `reflected_forged_identity` is the strongest possible signal — the
     forged marker showing up in a response it never appears in otherwise is
-    direct proof the forged, unsigned assertion was consumed."""
+    direct proof the forged, unsigned assertion was consumed.
+
+    ``echo_control_body`` is the response to a REFLECTION CONTROL: a document that
+    also carries ``forged_marker`` but whose original signature is corrupted, so any
+    correct SP MUST reject it (no valid signature to trust). If the marker still
+    comes back there, the endpoint simply *echoes* the submitted document (a verbose
+    error/debug page) — so a plain echo can no longer masquerade as consumption and
+    drive confirm.evaluate to a false "confirmed" bypass."""
 
     reflected = (bool(forged_marker) and forged_marker in variant_body
                 and forged_marker not in accepted_body
-                and forged_marker not in corrupted_body)
+                and forged_marker not in corrupted_body
+                and forged_marker not in echo_control_body)
     matches_accepted = variant.status == accepted.status and variant.status != corrupted.status
     return {
         "reflected_forged_identity": reflected,

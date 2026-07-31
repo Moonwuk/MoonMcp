@@ -4202,6 +4202,17 @@ async def saml_xsw_probe(acs_url: str, saml_response: str, relay_state: str = ""
         corrupted_resp = samlmod.Resp(status=r.status, length=len(r.body), location=r.header("Location") or "")
         corrupted_body = r.text(50_000)
 
+    # Reflection control: submit the forged marker in a document any correct SP MUST
+    # reject (the signed original's signature corrupted, so nothing authenticates). If
+    # the marker still reflects here, the endpoint just echoes the posted document (a
+    # verbose error/debug page) — so plain echo can't masquerade as consumption and
+    # drive a false "confirmed" bypass.
+    echo_control_body = ""
+    base_for_echo = corrupted_xml if corrupted_xml is not None else xml_text
+    echo_xml = samlmod.build_variant(base_for_echo, samlmod.VARIANTS[0], forged_nameid=forged_marker)
+    if echo_xml is not None:
+        _echo_resp, echo_control_body = await _post(echo_xml)
+
     variants: dict[str, dict] = {}
     for v in samlmod.VARIANTS:
         mutated = samlmod.build_variant(xml_text, v, forged_nameid=forged_marker)
@@ -4213,7 +4224,7 @@ async def saml_xsw_probe(acs_url: str, saml_response: str, relay_state: str = ""
         variants[v] = samlmod.assess_variant(
             accepted=accepted_resp, corrupted=corrupted_resp, variant=vresp,
             variant_body=vbody, accepted_body=accepted_body, corrupted_body=corrupted_body,
-            forged_marker=forged_marker)
+            forged_marker=forged_marker, echo_control_body=echo_control_body)
 
     scored = {v: a for v, a in variants.items() if "error" not in a}
     # Only the strong, replay-noise-independent signal earns a spot in this

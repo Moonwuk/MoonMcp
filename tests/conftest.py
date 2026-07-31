@@ -57,7 +57,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence
         pass
 
-    def _saml_reply(self, raw: bytes, safe: bool):
+    def _saml_reply(self, raw: bytes, safe: bool, echo: bool = False):
         import base64
         from urllib.parse import parse_qs
         from xml.etree import ElementTree as ET
@@ -73,10 +73,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        # A verbose SP (echo=True) reflects the decoded posted document in its
+        # error/debug page — CORRECT signature handling, but the reflection alone must
+        # not read as "the forged assertion was consumed".
+        echo_suffix = (b"<!--posted:" + xml_text.encode("utf-8", "replace") + b"-->") if echo else b""
         sig = root.find(".//ds:Signature", _SAML_NS)
         sig_val = sig.find("ds:SignatureValue", _SAML_NS) if sig is not None else None
         if sig_val is None or (sig_val.text or "").strip() != _SAML_VALID_SIG:
-            body = b"<html>signature invalid</html>"
+            body = b"<html>signature invalid</html>" + echo_suffix
             self.send_response(403)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -95,7 +99,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             assertion = root.find("saml:Assertion", _SAML_NS)
         nameid = assertion.find(".//saml:Subject/saml:NameID", _SAML_NS) if assertion is not None else None
         identity = nameid.text if nameid is not None else "unknown"
-        body = f"<html>Welcome, {identity}</html>".encode("utf-8", "replace")
+        body = f"<html>Welcome, {identity}</html>".encode("utf-8", "replace") + echo_suffix
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -215,6 +219,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         if self.path.startswith("/saml-acs-vuln"):
             self._saml_reply(raw, safe=False)
+            return
+        if self.path.startswith("/saml-acs-echo"):
+            # NON-vulnerable SP (correct signed-identity resolution) that ALSO reflects
+            # the decoded posted document in a debug/error page. The forged marker then
+            # appears in the variant response purely by echo — the reflection control
+            # must catch this and keep the verdict off "confirmed".
+            self._saml_reply(raw, safe=True, echo=True)
             return
         if self.path.startswith("/saml-acs-safe"):
             self._saml_reply(raw, safe=True)

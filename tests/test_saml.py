@@ -207,6 +207,29 @@ def test_assess_variant_not_reflected_when_marker_also_in_baseline():
     assert res["reflected_forged_identity"] is False  # appears in accepted baseline too
 
 
+def test_assess_variant_reflection_control_demotes_pure_echo():
+    # A verbose SP echoes the submitted document (incl. the forged marker) in its
+    # response — but ALSO in the rejected reflection control. That is echo, not
+    # consumption, so reflected_forged_identity must be withheld.
+    accepted = samlmod.Resp(status=200, length=100)
+    corrupted = samlmod.Resp(status=403, length=80)
+    variant = samlmod.Resp(status=200, length=120)
+    res = samlmod.assess_variant(
+        accepted=accepted, corrupted=corrupted, variant=variant,
+        variant_body="Welcome, alice <!--posted: ...evil@x...-->",
+        accepted_body="Welcome, alice", corrupted_body="signature invalid",
+        forged_marker="evil@x",
+        echo_control_body="signature invalid <!--posted: ...evil@x...-->")
+    assert res["reflected_forged_identity"] is False   # the echo control caught it
+    # without the echo control the same reflection would (wrongly) score:
+    res2 = samlmod.assess_variant(
+        accepted=accepted, corrupted=corrupted, variant=variant,
+        variant_body="Welcome, alice <!--posted: ...evil@x...-->",
+        accepted_body="Welcome, alice", corrupted_body="signature invalid",
+        forged_marker="evil@x", echo_control_body="")
+    assert res2["reflected_forged_identity"] is True
+
+
 def test_assess_variant_not_matching_accepted_when_status_equals_corrupted():
     accepted = samlmod.Resp(status=200, length=100)
     corrupted = samlmod.Resp(status=200, length=100)
@@ -261,6 +284,22 @@ async def test_saml_xsw_probe_safe_endpoint_not_fooled(local_server, fresh_conte
         assert variant["reflected_forged_identity"] is False
     assert res["vulnerable_variants"] == []
     assert res["verdict"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_saml_xsw_probe_echo_endpoint_not_confirmed(local_server, fresh_context):
+    # A verbose but NON-vulnerable SP (correct signed-identity resolution) that echoes
+    # the posted document must NOT be flagged "confirmed" just because the forged
+    # marker reflects: the reflection control resubmits the marker in a rejected doc
+    # and sees it echoed there too, so plain echo can't masquerade as consumption.
+    base, _ = local_server
+    res = await srv.saml_xsw_probe(acs_url=f"{base}/saml-acs-echo",
+                                   saml_response=_SAMPLE_XML,
+                                   forged_marker="x-xsw-forged@internal")
+    for variant in res["variants"].values():
+        assert variant.get("reflected_forged_identity") is False, variant
+    assert res["vulnerable_variants"] == []
+    assert res["verdict"] != "confirmed", res
 
 
 @pytest.mark.asyncio
