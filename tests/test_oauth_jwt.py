@@ -155,6 +155,23 @@ def test_analyze_oidc_clean_doc_has_no_findings():
     assert oauthmod.analyze_oidc_metadata(good) == []
 
 
+def test_analyze_oidc_id_token_only_is_not_implicit():
+    # 'id_token' (bare) is a secure hybrid/id_token response with NO access token in
+    # the fragment — the substring 'token' inside 'id_token' must not flag implicit.
+    doc = {
+        "issuer": "https://idp.example.com",
+        "response_types_supported": ["code", "code id_token", "id_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "id_token_signing_alg_values_supported": ["RS256"],
+    }
+    issues = {f["issue"] for f in oauthmod.analyze_oidc_metadata(doc)}
+    assert "implicit grant enabled" not in issues
+    # but a bare 'token' component still flags it
+    doc["response_types_supported"] = ["id_token token"]
+    issues = {f["issue"] for f in oauthmod.analyze_oidc_metadata(doc)}
+    assert "implicit grant enabled" in issues
+
+
 class _Resp:
     def __init__(self, status, body):
         self.status = status
