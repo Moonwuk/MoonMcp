@@ -28,9 +28,17 @@ def test_attr_single_unescaped_quote_is_injectable():
     assert r.injectable and "'" in r.unescaped
 
 
-def test_attr_unquoted_needs_gt_to_close_tag():
+def test_attr_unquoted_surviving_gt_closes_tag():
     r = _ctx(f"<input value={C}<>\"'{C}>")["attr_unquoted"]
     assert r.injectable and ">" in r.unescaped
+
+
+def test_attr_unquoted_is_a_lead_even_when_gt_is_encoded():
+    # FN regression: an UNQUOTED attribute is exploitable via a literal SPACE (` autofocus
+    # onfocus=alert(1)`) — spaces are never HTML-encoded — even when the app encodes '<'/'>'.
+    # Requiring a surviving '>' would miss this whole class, so unquoted-attr is a lead.
+    r = _ctx(f"<input value={C}&lt;&gt;&quot;&#39;{C} x>")["attr_unquoted"]
+    assert r.injectable and r.unescaped == set()
 
 
 def test_script_unescaped_lt_is_injectable():
@@ -80,6 +88,31 @@ def test_url_attribute_value_start_is_injectable_lead():
     # reflection AT THE START of an href value → a javascript: scheme injects with no specials.
     r = _ctx(f'<a href="{C}<>"\'{C}">x</a>')["url"]
     assert r.injectable and r.attr == "href"
+
+
+def test_non_executing_url_attribute_is_not_a_javascript_lead():
+    # FP regression: `<img src="javascript:...">` does NOT execute, so a value-start reflection
+    # in `<img src>` must NOT be classified as a URL lead — it falls through to a "-quoted attr
+    # (breakout still requires an unescaped '"'). Same for <link href>, poster, background, cite.
+    ctx = _ctx(f'<img src="{C}<>&quot;&#39;{C}">')
+    assert "url" not in ctx
+    assert not ctx["attr_double"].injectable          # '"' is encoded → no breakout
+
+
+def test_url_value_start_survives_leading_whitespace():
+    # FN regression: browsers strip leading ASCII whitespace from a URL before scheme parsing,
+    # so `<a href="   javascript:...">` still fires — the reflection is still the value START.
+    r = _ctx(f'<a href="   {C}<>"\'{C}">x</a>')["url"]
+    assert r.injectable and r.attr == "href"
+
+
+def test_rawtext_lookalike_end_tag_does_not_escape_rcdata():
+    # FP regression: `</textareaX` is NOT an appropriate end tag (the name must be followed by a
+    # terminator), so the reflection is still inside the <textarea> RCDATA where '"'/'>' are inert
+    # — you need an unescaped '<' for </textarea>. A surviving '"' must NOT read as an attr breakout.
+    body = f'<textarea>hi </textareaX y="{C}>&quot;{C}">'
+    assert all(not r.injectable for r in xss.analyze(body, C))
+    assert _ctx(body)["rawtext"].element == "textarea"
 
 
 def test_reflection_in_middle_of_url_value_is_normal_attr_not_url():
