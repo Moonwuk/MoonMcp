@@ -65,20 +65,34 @@ class ReadObs:
     text: str
 
 
-def assess_read(tag: str, control: ReadObs, error: ReadObs, true: ReadObs, false: ReadObs,
+def assess_read(tag: str, control: ReadObs, error: ReadObs,
+                true: tuple[ReadObs, ReadObs], false: tuple[ReadObs, ReadObs],
                 match_fn: Callable[[str], list[dict]]) -> dict | None:
     """Second-order verdict for one read sink.
 
     ``match_fn`` maps response text → SQL error signatures (the injection KB). A finding
     fires when the error seed produces a SQL error the control didn't, or when the tag is
     reflected AND the boolean twins diverge (the stored value reached a second query).
+
+    ``true`` and ``false`` are each a PAIR of reads (the twin sent twice). The boolean
+    differential is trusted only when both arms are reproducible and the true↔false
+    difference EXCEEDS the per-request jitter measured from those pairs — a byte-exact
+    length compare false-positived on any dynamic sink (a rotating timestamp/nonce made
+    len(true) != len(false) even when the value was echoed, not evaluated).
     """
 
+    t1, t2 = true
+    f1, f2 = false
     tag_l = tag.lower()
-    reflected = any(tag_l in (o.text or "").lower() for o in (error, true, false))
+    reflected = any(tag_l in (o.text or "").lower() for o in (error, t1, f1))
     control_sigs = {h["matched"] for h in match_fn(control.text or "")}
     error_sigs = [h for h in match_fn(error.text or "") if h["matched"] not in control_sigs]
-    bool_diff = (true.status != false.status) or (len(true.text or "") != len(false.text or ""))
+    tlen1, tlen2 = len(t1.text or ""), len(t2.text or "")
+    flen1, flen2 = len(f1.text or ""), len(f2.text or "")
+    jitter = max(abs(tlen1 - tlen2), abs(flen1 - flen2))
+    tol = jitter + 16
+    arms_stable = (t1.status == t2.status) and (f1.status == f2.status)
+    bool_diff = arms_stable and ((t1.status != f1.status) or (abs(tlen1 - flen1) > tol))
 
     if not error_sigs and not (reflected and bool_diff):
         return None

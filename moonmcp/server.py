@@ -2115,15 +2115,19 @@ async def second_order_sqli_probe(write: dict, read: list[str] | str, param: str
     seeds = somod.seed_payloads(tag)
     control = await _cycle(seeds["control"])
     error = await _cycle(seeds["error"])
-    true_r = await _cycle(seeds["true"])
-    false_r = await _cycle(seeds["false"])
+    # The boolean twins are sent TWICE each so assess_read can measure per-request jitter
+    # (a dynamic sink's timestamp/nonce) and require the true/false flip to EXCEED it —
+    # a byte-exact length compare false-positived on any dynamic read sink.
+    true_r = (await _cycle(seeds["true"]), await _cycle(seeds["true"]))
+    false_r = (await _cycle(seeds["false"]), await _cycle(seeds["false"]))
 
     def _match(t: str) -> list:
         return injmod.match_signatures(t, class_id="sqli")
 
     findings: list[dict] = []
     for i, r in enumerate(reads):
-        hit = somod.assess_read(tag, control[i], error[i], true_r[i], false_r[i], _match)
+        hit = somod.assess_read(tag, control[i], error[i],
+                                (true_r[0][i], true_r[1][i]), (false_r[0][i], false_r[1][i]), _match)
         if hit:
             findings.append({"read": r["url"], **hit})
 

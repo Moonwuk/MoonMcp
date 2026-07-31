@@ -33,14 +33,18 @@ def _obs(status, text):
     return so.ReadObs(status, text)
 
 
+def _pair(status, text):
+    return (_obs(status, text), _obs(status, text))
+
+
 def test_assess_read_error_lane():
     tag = "x2oXY"
     hit = so.assess_read(
         tag,
         control=_obs(200, f"comment: {tag}ctl"),
         error=_obs(200, f"MySQL syntax error near {tag}'"),
-        true=_obs(200, f"{tag} rows: a b c"),
-        false=_obs(200, f"{tag} rows:"),
+        true=_pair(200, f"{tag} rows: a b c"),
+        false=_pair(200, f"{tag} rows:"),
         match_fn=_mysql_sig)
     assert hit and hit["severity"] == "high" and hit["error_signatures"]
 
@@ -51,16 +55,31 @@ def test_assess_read_boolean_lane_without_error():
         tag,
         control=_obs(200, f"c {tag}ctl"),
         error=_obs(200, f"c {tag}'"),                 # echoed, no SQL error
-        true=_obs(200, f"c {tag} rows: a b c d e"),
-        false=_obs(200, f"c {tag} rows:"),
+        true=_pair(200, f"c {tag} rows: alice bob carol dave erin"),
+        false=_pair(200, f"c {tag} rows:"),
         match_fn=_mysql_sig)
     assert hit and hit["severity"] == "medium" and hit["boolean_differential"] is True
+
+
+def test_assess_read_boolean_lane_ignores_jitter():
+    # A dynamic sink: the equal-length twins are ECHOED but the page carries a rotating
+    # token, so each read differs by a few bytes. That jitter must NOT count as a
+    # boolean differential (regression for the byte-exact length compare).
+    tag = "x2oXY"
+    hit = so.assess_read(
+        tag,
+        control=_obs(200, f"c {tag}ctl"),
+        error=_obs(200, f"c {tag}'"),
+        true=(_obs(200, f"c {tag} nonce=aaaa1"), _obs(200, f"c {tag} nonce=bbbb22")),
+        false=(_obs(200, f"c {tag} nonce=cccc3"), _obs(200, f"c {tag} nonce=dddd44")),
+        match_fn=_mysql_sig)
+    assert hit is None   # tag reflected, but the diff is within the jitter tolerance
 
 
 def test_assess_read_no_signal():
     tag = "x2oXY"
     # tag never reflected, no error, identical reads → nothing
-    assert so.assess_read(tag, _obs(200, "x"), _obs(200, "x"), _obs(200, "x"), _obs(200, "x"),
+    assert so.assess_read(tag, _obs(200, "x"), _obs(200, "x"), _pair(200, "x"), _pair(200, "x"),
                           _mysql_sig) is None
 
 
