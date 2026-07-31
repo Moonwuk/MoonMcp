@@ -104,8 +104,50 @@ async def test_desync_probe_baseline_and_framing(raw_server, ctx_fixture):
     probes = res.get("probes", {})
     # The well-behaved server rejects the ambiguous CL+TE request.
     assert probes.get("cl.te-dual") == 400
-    assert {"te-tab", "te-space-before-colon", "te-nameprefix"} <= set(probes)
-    assert res.get("risk") in ("low", "review")
-    # The naive stdlib server ignores obfuscated TE (serves 200), which the probe
-    # correctly surfaces as a review indicator — no CL.TE-dual false positive.
-    assert not any("both Content-Length" in i for i in res.get("indicators", []))
+    assert {"te-tab", "te-space-before-colon"} <= set(probes)
+    assert "te-nameprefix" not in probes          # dropped: not an obfuscated header
+    # This server ignores the obfuscated TE (serves the same 200 as clean chunked) and
+    # rejects the dual framing — no differential, so NO false-positive indicators.
+    assert res.get("indicators", []) == []
+    assert res.get("risk") == "low"
+
+
+class _DiffH(socketserver.BaseRequestHandler):
+    def handle(self):
+        data = b""
+        try:
+            data = self.request.recv(8192)
+        except OSError:
+            pass
+        # A server that parses the space-obfuscated TE down a DIFFERENT code path,
+        # producing a materially longer body than clean chunked (a real differential).
+        body = b"X" * 200 if b"Transfer-Encoding : chunked" in data else b"ok"
+        resp = (b"HTTP/1.1 200 OK\r\nServer: DiffSrv\r\nContent-Length: "
+                + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+        try:
+            self.request.sendall(resp)
+        except OSError:
+            pass
+
+
+@pytest.fixture()
+def diff_server():
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), _DiffH)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_desync_probe_flags_accepted_differential(diff_server, ctx_fixture):
+    # The obfuscated TE is accepted (200) but processed differently from canonical
+    # chunked (a much longer body) — that genuine differential must be flagged, while
+    # te-tab (handled like canonical) and the dual (same as canonical) stay quiet.
+    res = await srv.desync_probe(target=diff_server)
+    inds = " ".join(res.get("indicators", []))
+    assert "te-space-before-colon" in inds and "Obfuscated Transfer-Encoding" in inds
+    assert "te-tab" not in inds
+    assert res.get("risk") == "review"

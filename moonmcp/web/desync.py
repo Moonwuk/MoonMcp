@@ -50,6 +50,22 @@ def _status_of(data: bytes) -> tuple[int | None, str | None]:
         return None, None
 
 
+def _sig(data: bytes | None) -> tuple[int | None, int] | None:
+    """(status, response-byte-length) for a differential compare, or None if no reply."""
+
+    if data is None:
+        return None
+    return _status_of(data)[0], len(data)
+
+
+def _sig_differs(a: tuple[int | None, int], b: tuple[int | None, int]) -> bool:
+    """Do two response signatures differ materially — a different status, or a length
+    delta beyond a small jitter tolerance (a per-request Date/nonce is length-stable,
+    but leave headroom)?"""
+
+    return a[0] != b[0] or abs(a[1] - b[1]) > 64
+
+
 async def _raw_request(host: str, port: int, tls: bool, raw: bytes, timeout: float,
                        connect_pin=None) -> bytes | None:
     ssl_ctx = None
@@ -111,38 +127,57 @@ async def probe_desync(url: str, *, timeout: float = 12.0,
         return result
     result.baseline_status, result.server = _status_of(base)
 
-    # A complete, empty chunked body advertised with BOTH CL and TE. Both parsers
-    # read exactly this message, so nothing is left dangling.
     complete_chunked = "0\r\n\r\n"
+
+    # Canonical chunked CONTROL: a VALID Transfer-Encoding: chunked with the same
+    # complete 0-chunk body. Every probe below is judged against THIS (its de-obfuscated
+    # form), not against a bare status < 400 — because each probe is itself a complete,
+    # well-formed message, so a compliant server answers < 400 regardless of how it
+    # treated the framing. Flagging status < 400 alone fired a "review" on essentially
+    # every healthy site. A probe only earns an indicator when it is ACCEPTED (< 400)
+    # AND its response DIFFERS from canonical chunked — i.e. the server parsed the
+    # ambiguous/obfuscated framing into a materially different outcome.
+    canon = await _raw_request(host, port, tls, _req(
+        host, path, extra_headers="Transfer-Encoding: chunked\r\n",
+        body=complete_chunked, user_agent=user_agent), timeout, connect_pin)
+    canon_sig = _sig(canon)
+
+    # BOTH Content-Length and Transfer-Encoding on one complete, empty chunked body.
     clte = _req(host, path,
                 extra_headers=f"Content-Length: {len(complete_chunked)}\r\nTransfer-Encoding: chunked\r\n",
                 body=complete_chunked, user_agent=user_agent)
     r = await _raw_request(host, port, tls, clte, timeout, connect_pin)
     result.probes["cl.te-dual"] = _status_of(r)[0] if r else None
+    clte_sig = _sig(r)
 
-    # Obfuscated Transfer-Encoding variants (each a complete message).
+    # Obfuscated Transfer-Encoding variants (each a complete message). 'te-nameprefix'
+    # was removed: 'X: x\r\nTransfer-Encoding: chunked' is a benign header followed by a
+    # PLAIN valid TE — not an obfuscation at all, so it fired on every server.
     variants = {
         "te-space-before-colon": "Transfer-Encoding : chunked\r\n",
         "te-tab": "Transfer-Encoding:\tchunked\r\n",
-        "te-nameprefix": "X: x\r\nTransfer-Encoding: chunked\r\n",
     }
+    var_sigs: dict[str, tuple[int | None, int] | None] = {}
     for name, hdr in variants.items():
         rr = await _raw_request(host, port, tls, _req(host, path, extra_headers=hdr, body=complete_chunked, user_agent=user_agent), timeout, connect_pin)
         result.probes[name] = _status_of(rr)[0] if rr else None
+        var_sigs[name] = _sig(rr)
 
-    # Interpretation (indicators only).
+    # Interpretation: a genuine differential vs canonical chunked, never raw status<400.
     base_ok = result.baseline_status is not None and result.baseline_status < 400
-    dual = result.probes.get("cl.te-dual")
-    if dual is not None and dual < 400 and base_ok:
-        result.indicators.append("Server accepted a request with both Content-Length and "
-                                 "Transfer-Encoding (RFC says reject) — review for CL.TE/TE.CL desync")
-    accepted_obf = []
-    for n in variants:
-        v = result.probes.get(n)
-        if v is not None and v < 400:
-            accepted_obf.append(n)
-    if accepted_obf:
-        result.indicators.append(f"Obfuscated Transfer-Encoding accepted: {', '.join(accepted_obf)}")
+    if base_ok and canon_sig is not None and canon_sig[0] is not None and canon_sig[0] < 400:
+        dual = result.probes.get("cl.te-dual")
+        if dual is not None and dual < 400 and clte_sig is not None and _sig_differs(clte_sig, canon_sig):
+            result.indicators.append(
+                "A dual Content-Length + Transfer-Encoding request was accepted AND handled "
+                "differently from clean chunked (status/length differ) — possible CL.TE/TE.CL "
+                "desync; confirm with desync_modern_probe / a dedicated tool")
+        diff_obf = [n for n, s in var_sigs.items()
+                    if s is not None and s[0] is not None and s[0] < 400 and _sig_differs(s, canon_sig)]
+        if diff_obf:
+            result.indicators.append(
+                f"Obfuscated Transfer-Encoding accepted AND processed differently from canonical "
+                f"chunked ({', '.join(diff_obf)}) — possible TE.TE parser disagreement; verify")
     result.risk = "review" if result.indicators else "low"
     return result
 
