@@ -49,7 +49,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **169 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **170 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -178,6 +178,7 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 | `passive_scan` | One benign GET → all passive analysers at once (header grade + issues, tech fingerprint, redacted secret hits). |
 | `confirm_finding` | **Prove a lead before reporting it:** baseline vs test request → weighs **reflection**, status/length/timing diff, **injection signatures**, and an **out-of-band callback** (OAST) into a verdict (`confirmed` / `likely` / `inconclusive` / `unconfirmed`). Optionally records a confirmed hit. |
 | `ssti_probe` | **SSTI** detector — arithmetic markers per engine (Jinja2/Twig, Freemarker, ERB, Smarty, Velocity, Razor); reports which engine *evaluated* the expression. Intrusive. |
+| `xss_probe` | **Reflected XSS** detector — context-aware and escape-analysis based: reflects a canary wrapped around `< > " '`, classifies each reflection's HTML/JS context (HTML text / quoted or unquoted attribute / `<script>` string or raw / comment) and flags a context ONLY when the metacharacters it needs to break out survive **unescaped** — a page that HTML-encodes `<`/`"` is not flagged. Reports an injectable-context **lead**; confirm execution in a browser (CSP may block). |
 | `sqli_probe` | **SQLi** detector — error signatures + a reproducible boolean pair, plus opt-in lanes: `context` (ORDER BY / LIMIT), `oob` (per-DBMS OAST), `time_based` (monotonic-guarded), `waf_bypass` (JSON-operator), `multibyte` (Shift-JIS/EUC-KR/GBK), and header/cookie placement. Reports the DBMS; no data extraction (→ sqlmap). Intrusive. |
 | `cmdi_probe` | **Blind OS command injection** detector — a small, non-combinatorial set of shell separators (`;` `\|` `&&` `&` backtick `$()`), each carrying only a side-channel payload (`sleep N`, confirmed by the same monotonic-timing check as `sqli_probe`'s `time_based` lane; or an **OAST** callback). Never sends an output-eliciting payload (`id`, `cat /etc/passwd`, `dir`) — command output is never displayed (→ Strix). Intrusive. |
 | `lfi_probe` | **Path traversal / LFI** content-disclosure — depth-escalating `../` (x1/3/6/8), null-byte, double-URL-encoded, and Windows-style variants, confirmed by a genuine **file-content signature** (`root:x:0:0:`, win.ini markers) in the response — proof the traversal reached the filesystem, not just that a WAF let the payload shape through. Reads only universally-present, non-sensitive files. Intrusive. |
@@ -490,7 +491,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 169 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 170 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator

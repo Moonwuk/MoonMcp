@@ -141,6 +141,7 @@ from .tools.injection import (  # noqa: F401,E501
     ssrf_probe,
     ssrf_protocol_probe,
     ssti_probe,
+    xss_probe,
     xxe_probe,
 )
 from .tools.interception import (  # noqa: F401,E501

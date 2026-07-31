@@ -503,6 +503,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html>hello " + out.encode("utf-8", "replace") + b"</html>")
             return
+        if self.path.startswith("/xss-safe"):
+            # reflects the q param but HTML-ENCODES it — safe (must NOT be flagged).
+            from html import escape
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><body><p>You searched: " + escape(q).encode() + b"</p></body></html>")
+            return
+        if self.path.startswith("/xss"):
+            # DELIBERATELY VULNERABLE: reflects the q param UNESCAPED into HTML text.
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><body><p>You searched: " + q.encode("utf-8", "replace")
+                             + b"</p></body></html>")
+            return
         if self.path.startswith("/sqli-numeric"):
             # DELIBERATELY VULNERABLE numeric context: `WHERE id = <val>` UNQUOTED, so a
             # non-numeric value itself breaks the query (no quote needed) -> SQL error, while

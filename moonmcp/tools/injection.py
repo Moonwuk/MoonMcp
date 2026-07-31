@@ -37,6 +37,7 @@ from ..web import parserdiff as parserdiffmod
 from ..web import probes as probesmod
 from ..web import saml as samlmod
 from ..web import ssrf_protocol as sspmod
+from ..web import xss as xssmod
 from ..web import xxe as xxemod
 
 
@@ -180,6 +181,49 @@ async def ssti_probe(target: str, param: str, method: str = "GET") -> dict:
         out["verdict"] = "inconclusive"
         out["note"] = ("multiple template engines appear to evaluate the same arithmetic — likely "
                        "a coincidental digit match on the page, not SSTI; verify manually")
+    return out
+
+
+@mcp.tool()
+@active_tool()
+async def xss_probe(target: str, param: str, method: str = "GET") -> dict:
+    """**Reflected-XSS** probe — context-aware and escape-analysis based, so it flags a
+    *real* injection surface, not mere reflection. Injects a unique canary wrapped around
+    the four XSS metacharacters (`< > " '`), then for each place the canary lands it
+    classifies the HTML/JS **context** (HTML text / quoted or unquoted attribute /
+    `<script>` block / JS string / comment) and checks which metacharacters survived
+    **unescaped**. A context is flagged only when the characters that context needs to
+    break out survive — a page that reflects but HTML-encodes `<`/`"` is NOT flagged.
+    Verdict is a **lead** (`injectable context — script-capable`); confirm actual
+    execution in a browser (`browser_eval`/`cspp_probe`) or hand weaponization to Strix,
+    since CSP can still defuse a reflected payload. Non-destructive; in scope only.
+    """
+
+    raw = target.strip()
+    url = raw if "://" in raw else f"https://{raw}"
+    ctx = get_context()
+    m = method.upper()
+    canary = xssmod.make_canary()
+    payload = xssmod.specials_probe(canary)
+    tu, tb = _with_param(url, param, payload, m)
+    r = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
+    reflections = xssmod.analyze(r.text(500_000), canary)
+    injectable = [refl for refl in reflections if refl.injectable]
+    contexts = [{"context": refl.context, "unescaped": "".join(sorted(refl.unescaped)),
+                 "injectable": refl.injectable, "note": refl.note} for refl in reflections]
+    verdict = confirmmod.evaluate(
+        reflected=bool(injectable),
+        injection_hits=[f"xss/{refl.context}" for refl in injectable])
+    out: dict[str, Any] = {"target": url, "param": param, **verdict, "contexts": contexts}
+    if injectable:
+        out["note"] = (f"reflected UNESCAPED in {len(injectable)} injectable context(s): "
+                       f"{', '.join(sorted({refl.context for refl in injectable}))} — script-capable. "
+                       "Confirm execution in a browser (CSP may still block); weaponize via Strix.")
+    elif reflections:
+        out["note"] = ("the canary reflects but the metacharacters each context needs are escaped "
+                       "— not injectable as reflected input")
+    else:
+        out["note"] = "the canary did not reflect — parameter is not returned in the response"
     return out
 
 
