@@ -38,6 +38,7 @@ async def test_cmdi_probe_registered(fresh_context):
     assert "cmdi_probe" in tools
 
 
+@pytest.mark.timing
 @pytest.mark.asyncio
 async def test_cmdi_time_based_detects_vulnerable_endpoint(local_server, fresh_context):
     base, _ = local_server
@@ -47,6 +48,7 @@ async def test_cmdi_time_based_detects_vulnerable_endpoint(local_server, fresh_c
     assert res["verdict"] in ("likely", "confirmed")
 
 
+@pytest.mark.timing
 @pytest.mark.asyncio
 async def test_cmdi_time_based_no_hit_on_safe_endpoint(local_server, fresh_context):
     base, _ = local_server

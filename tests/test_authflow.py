@@ -21,6 +21,7 @@ def test_scan_flags_reset_link_in_body():
     assert any(f["kind"] == "reset_link_in_body" for f in res)
 
 
+@pytest.mark.timing
 def test_scan_response_leak_bounded_on_keyword_free_url_run():
     # A large body of glued keyword-free `http://` tokens must NOT drive the link regex
     # into an O(n^2) forward scan at every position (ReDoS that stalls the event loop).

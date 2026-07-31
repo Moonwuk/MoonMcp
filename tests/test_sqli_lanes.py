@@ -116,6 +116,7 @@ async def test_sqli_waf_bypass(local_server, fresh_context):
     assert any(e["encoding"] == "pgsql-jsonb" for e in lane["encoded_differentials"])
 
 
+@pytest.mark.timing
 @pytest.mark.asyncio
 async def test_sqli_time_based(local_server, fresh_context):
     base, _ = local_server

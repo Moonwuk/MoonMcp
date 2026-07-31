@@ -12,6 +12,9 @@ import pytest
 
 from moonmcp.net.ratelimit import Governor, RateLimiter
 
+# Every test here asserts on real elapsed time / sleeps — run serially, not under xdist.
+pytestmark = pytest.mark.timing
+
 
 @pytest.mark.asyncio
 async def test_governor_caps_in_flight_concurrency():
