@@ -3739,10 +3739,17 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
         hit = nosqlimod.assess_operator(control, twin, nested=nested_ctrl)
         if hit:
             operator_hits.append({"variant": label, **hit})
+    # The JSON lane needs its OWN content-type-matched baseline: a JSON *scalar*
+    # body ({"param": CONTROL}), so the only variable vs the operator twins is
+    # scalar-vs-object. Comparing a JSON-object POST against the form/GET scalar
+    # `control` misread a JSON-only API's content-type status flip (form 400 → JSON
+    # 200) as $ne injection — a false positive on a non-injectable endpoint.
+    json_control = (await _send(nosqlimod.json_request(url, param, nosqlimod.CONTROL), "POST"),
+                    await _send(nosqlimod.json_request(url, param, nosqlimod.CONTROL), "POST"))
     for label, obj in nosqlimod.JSON_TWINS:
         req = nosqlimod.json_request(url, param, obj)
         twin = (await _send(req, "POST"), await _send(req, "POST"))
-        hit = nosqlimod.assess_operator(control, twin)
+        hit = nosqlimod.assess_operator(json_control, twin)
         if hit:
             operator_hits.append({"variant": label, **hit})
 

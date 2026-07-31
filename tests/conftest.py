@@ -287,6 +287,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/nosqli-jsononly"):
+            # NOT injectable: a JSON-only API. It 400s a form-urlencoded body but 200s
+            # ANY application/json body (scalar OR operator), so the ONLY differential
+            # is content-type, not the operator. Comparing JSON operator twins against
+            # a form/GET scalar baseline misreads that as a $ne injection (regression).
+            ctype = self.headers.get("Content-Type", "").lower()
+            if "json" in ctype:
+                body = b'{"ok":true,"records":["alice","bob","carol"]}'
+                self.send_response(200)
+            else:
+                body = b'{"error":"content-type must be application/json"}'
+                self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/fastjson"):
             # DELIBERATELY VULNERABLE: "deserializes" the @type body by fetching the
             # URL it carries (simulates java.net.URL autoType → outbound lookup).

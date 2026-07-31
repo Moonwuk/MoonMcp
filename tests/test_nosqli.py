@@ -135,6 +135,18 @@ async def test_nosqli_probe_no_fp_on_non_mongo_bracket_parsing(local_server, fre
 
 
 @pytest.mark.asyncio
+async def test_nosqli_probe_no_fp_on_json_only_api(local_server, fresh_context):
+    # A JSON-only API 400s a form body but 200s ANY JSON body (scalar or operator).
+    # The JSON operator lane must use a JSON *scalar* baseline (content-type-matched),
+    # not the form/GET scalar control — else the content-type status flip (form 400 →
+    # JSON 200) is misread as a $ne injection. Regression for that false positive.
+    base, _ = local_server
+    res = await srv.nosqli_probe(target=f"{base}/nosqli-jsononly", param="user")
+    assert not any(h["variant"].startswith("json:") for h in res["operator_hits"]), res
+    assert res["verdict"] == "unconfirmed", res
+
+
+@pytest.mark.asyncio
 async def test_nosqli_probe_intrusive_gated(local_server, fresh_context):
     from dataclasses import replace
     base, _ = local_server
