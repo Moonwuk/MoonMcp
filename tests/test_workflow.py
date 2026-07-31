@@ -23,6 +23,16 @@ def test_assess_step_skip_rules():
     assert wf.assess_step_skip(200, "ORDER CONFIRMED #12", success_marker="order confirmed") is True
 
 
+def test_assess_step_skip_success_marker_wins_over_breadcrumb():
+    # A terminal success page renders a "Step 1 | Step 2 | Step 3" breadcrumb and a
+    # "Restart order" button. With an explicit success marker present the step WAS
+    # served cold — those must not suppress it (regression for the over-broad markers).
+    body = "Order confirmed! <nav>Step 1 | Step 2 | Step 3</nav> <button>Restart order</button>"
+    assert wf.assess_step_skip(200, body, success_marker="order confirmed") is True
+    # and 'step 1'/'restart' alone (no success marker) no longer count as enforcement
+    assert wf.assess_step_skip(200, "Step 1 of 3 shown") is True
+
+
 # -- probe via fake apps ----------------------------------------------------
 class _R:
     def __init__(self, status, body):

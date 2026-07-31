@@ -20,10 +20,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 # Body language that means the flow REJECTED an out-of-order jump (i.e. it is enforced).
+# Kept to REJECTION-specific phrasings: 'step 1'/'restart'/'not allowed'/'begin the'
+# were dropped because they also appear on the legitimate multi-step SUCCESS pages this
+# probe targets (progress breadcrumbs, "Restart order" buttons), where they would
+# suppress a real step-skip.
 _ENFORCE_MARKERS = (
     "complete the previous", "must complete", "previous step", "start over",
-    "session expired", "invalid step", "out of order", "not allowed", "begin the",
-    "please log in", "no items in", "empty cart", "step 1", "restart",
+    "session expired", "invalid step", "out of order",
+    "please log in", "no items in", "empty cart",
 )
 
 
@@ -55,10 +59,14 @@ def assess_step_skip(status: int | None, body_text: str, *, success_marker: str 
     if status is None or not (200 <= status < 300):
         return False  # redirect / 4xx / 5xx → the sequence was enforced
     low = (body_text or "").lower()
-    if any(m in low for m in _ENFORCE_MARKERS):
-        return False  # 2xx but the body says "finish the previous step"
+    # An explicit success_marker is AUTHORITATIVE: if the caller told us what the
+    # completed terminal step looks like and it's present, the step was served cold —
+    # a progress breadcrumb or a "Restart order" button on that very success page must
+    # not override a positive match (the enforcement heuristic is the fallback only).
     if success_marker:
         return success_marker.lower() in low
+    if any(m in low for m in _ENFORCE_MARKERS):
+        return False  # 2xx but the body says "finish the previous step"
     return True  # 2xx, no enforcement language → the step was served cold
 
 
