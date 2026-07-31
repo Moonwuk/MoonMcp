@@ -292,14 +292,23 @@ async def git_forensics(client: HttpClient, base_url: str, *, scope_check=None,
     elif _SHA_RE.search(head_txt):
         queue = shas_from_text(head_txt) + queue
 
-    # 5) bounded loose-object walk: commit → tree → blob, scanning blobs for secrets
+    # 5) bounded loose-object walk: commit → tree → blob, scanning blobs for secrets.
+    # max_objects bounds only SUCCESSFULLY-PARSED objects; a hostile tree/commit can
+    # reference thousands of NON-EXISTENT child SHAs that 404, so bounding parses alone
+    # would let the queue drain unbounded — one scoped GET per fake SHA (a request
+    # flood / long hang, noisy enough to get the researcher blocked). Bound the TOTAL
+    # fetches and the pending queue too.
     seen: set[str] = set()
     pending = list(dict.fromkeys(queue))
-    while pending and res.objects_walked < max_objects:
+    fetch_budget = max(max_objects * 8, 64)
+    queue_cap = fetch_budget * 2
+    fetches = 0
+    while pending and res.objects_walked < max_objects and fetches < fetch_budget:
         sha = pending.pop(0)
         if sha in seen:
             continue
         seen.add(sha)
+        fetches += 1
         r = await _get(object_path(sha))
         if r.status != 200 or not r.body:
             continue
@@ -323,6 +332,12 @@ async def git_forensics(client: HttpClient, base_url: str, *, scope_check=None,
         elif obj.otype == "blob":
             raw_hits += scan_text(obj.payload.decode("utf-8", errors="replace"),
                                   source=f"blob {sha[:12]}")
+        if len(pending) > queue_cap:
+            del pending[queue_cap:]   # a huge fan-out can't blow memory either
+    if pending and fetches >= fetch_budget:
+        res.review.append(f"object walk hit the fetch budget ({fetch_budget} requests) with "
+                          f"{len(pending)} refs still queued — the .git tree references far more "
+                          "objects than max_objects; raise max_objects or pull the repo offline")
 
     # 6) packed history detection (we don't parse packs — flag for delegation)
     packs = await _get(".git/objects/info/packs")

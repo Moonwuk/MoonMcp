@@ -145,6 +145,49 @@ async def test_git_forensics_walk_finds_history_and_secrets():
     assert any(h.type == "GitHub PAT" for h in hits)
 
 
+class _CountingClient(_FakeClient):
+    """Counts loose-object GETs so we can assert the walk stays within its budget."""
+
+    def __init__(self, files):
+        super().__init__(files)
+        self.object_gets = 0
+
+    async def fetch(self, url, **kw):
+        from urllib.parse import urlsplit
+        path = urlsplit(url).path.lstrip("/")
+        if path.startswith(".git/objects/") and len(path) > len(".git/objects/ab/"):
+            self.object_gets += 1
+        return await super().fetch(url, **kw)
+
+
+def _hostile_repo():
+    # A single valid tree that references thousands of NON-EXISTENT child SHAs (all 404).
+    fake_shas = [f"{i:040x}" for i in range(1, 5001)]
+    tree_payload = b"".join(_tree_entry("100644", f"f{i}", s) for i, s in enumerate(fake_shas))
+    tree_sha, tree_raw = _obj("tree", tree_payload)
+    commit_payload = (f"tree {tree_sha}\n"
+                      "author X <x@e.example> 1700000000 +0000\n\nmsg\n").encode()
+    commit_sha, commit_raw = _obj("commit", commit_payload)
+    return {
+        ".git/HEAD": b"ref: refs/heads/main\n",
+        ".git/refs/heads/main": (commit_sha + "\n").encode(),
+        gd.object_path(commit_sha): commit_raw,
+        gd.object_path(tree_sha): tree_raw,
+        # the 5000 children are intentionally absent -> 404
+    }
+
+
+@pytest.mark.asyncio
+async def test_git_forensics_bounds_fetches_on_hostile_tree():
+    # objects_walked (the commit + tree) stays tiny, but the 5000 fake children would
+    # otherwise each fire a scoped GET. The total-fetch budget must cap that flood.
+    client = _CountingClient(_hostile_repo())
+    res, _hits = await gd.git_forensics(client, "http://t.example/", max_objects=60)
+    assert client.object_gets <= 60 * 8 + 5, client.object_gets   # fetch_budget + slack
+    assert res.objects_walked <= 5                                 # only the real objects parsed
+    assert any("fetch budget" in r for r in res.review), res.review
+
+
 @pytest.mark.asyncio
 async def test_git_forensics_not_exposed():
     res, hits = await gd.git_forensics(_FakeClient({}), "http://t.example/")
