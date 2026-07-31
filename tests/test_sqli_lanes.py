@@ -59,6 +59,17 @@ def test_assess_timing_samples_rejects_constant_offset_that_beats_threshold():
         confirm=[1.2, 1.18], requested_confirm=0.5) is None
 
 
+def test_assess_timing_samples_rejects_when_confirm_shows_no_delay():
+    # a jitter/latency spike: the requested-sleep delta clears the thresholds (one
+    # delayed sample spiked to 8s), but the SMALLER confirm sleep induced NO delay
+    # (delta_c ~0). A real injection would delay proportionally at the confirm sleep,
+    # so a ~0 confirm argues AGAINST a vuln and must reject — not confirm via the old
+    # float('inf') "perfect scaling" fallback.
+    assert probesmod.assess_timing_samples(
+        control=[0.95, 1.0, 1.05], delayed=[8.0, 1.1], requested=5.0,
+        confirm=[1.02, 0.98], requested_confirm=2.0) is None
+
+
 def test_assess_timing_samples_rejects_jitter_within_control_spread():
     # control itself is very noisy (0.1..1.5s); a delayed median 0.75s over it is not
     # separable from that jitter floor -> rejected before the scaling check.

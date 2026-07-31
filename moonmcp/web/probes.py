@@ -159,14 +159,22 @@ def assess_timing_samples(control: list[float], delayed: list[float], requested:
     if confirm and requested_confirm > 0:
         dc = statistics.median(confirm)
         delta_c = dc - c
+        # A genuine time-based injection MUST also delay at the SMALLER confirm sleep,
+        # proportionally. If the confirm probe induced no measurable delay, the
+        # `requested`-second delta was jitter/latency-spike noise, not an injected
+        # sleep -> reject. (The old float('inf') fallback treated "no confirm delay" as
+        # PERFECT scaling, inverting the entire purpose of the re-probe and letting a
+        # pure jitter spike confirm as a time-based SQLi/CMDi.)
+        if delta_c <= 0.05:
+            return None
         ratio_req = requested / requested_confirm            # ideal scaling factor
-        scaled = (delta / delta_c) if delta_c > 0.05 else float("inf")
+        scaled = delta / delta_c
         # require at least half of the ideal scaling; a constant offset gives ~1.0.
         if scaled < 1.0 + (ratio_req - 1.0) * 0.5:
             return None
         out.update({"delta_confirm_s": round(delta_c, 3),
                     "requested_confirm_s": round(requested_confirm, 3),
-                    "scaled": round(scaled, 2) if scaled != float("inf") else None})
+                    "scaled": round(scaled, 2)})
     return out
 
 
