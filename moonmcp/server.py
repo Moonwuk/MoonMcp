@@ -50,6 +50,7 @@ from .mcp_core import (
     _connect_pin,
     _host_key,
     _require_scope,
+    _resolve_block,
     _run_time_based,
     _scope_check,
     _split_host_port,
@@ -1400,6 +1401,7 @@ async def browser_open(target: str, capture_html: bool = False,
     result = await browsermod.browse(
         url, capture_html=capture_html, wait_until=wait_until,
         extra_headers=headers, cookies=cookies, scope_ok=_scope_check(),
+        resolve_block=_resolve_block(),
     )
     return to_dict(result)
 
@@ -1431,7 +1433,8 @@ async def cspp_probe(target: str, wait_until: str = "networkidle") -> dict:
     async def _read(u, script):
         # No engagement auth on purpose (nothing to leak); scope-gated navigations.
         return await browsermod.browse(u, script=script, capture_text=False,
-                                       wait_until=wait_until, scope_ok=scope_ok)
+                                       wait_until=wait_until, scope_ok=scope_ok,
+                                       resolve_block=_resolve_block())
 
     baseline = await _read(url, read)
     if not baseline.available:
@@ -1482,6 +1485,7 @@ async def browser_eval(target: str, script: str, wait_until: str = "load") -> di
     result = await browsermod.browse(
         url, script=script, capture_text=False, wait_until=wait_until,
         extra_headers=headers, cookies=cookies, scope_ok=_scope_check(),
+        resolve_block=_resolve_block(),
     )
     out = to_dict(result)
     # trim the network/text noise — browser_eval is about the script result
@@ -1514,7 +1518,7 @@ async def browser_interact(target: str, actions: list[dict]) -> dict:
     headers, cookies = _browser_auth(url)
     result = await browsermod.interact(
         url, actions or [], extra_headers=headers, cookies=cookies,
-        scope_ok=lambda u: get_context().scope.is_in_scope(u),
+        scope_ok=_scope_check(), resolve_block=_resolve_block(),
     )
     return to_dict(result)
 

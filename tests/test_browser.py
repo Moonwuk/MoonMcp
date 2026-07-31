@@ -93,3 +93,69 @@ async def test_browser_interact_flow(local_server, fresh_context):
         {"action": "goto", "url": "http://evil.example.test/"},
     ])
     assert res2["steps"][0].get("error") == "out_of_scope"
+
+
+# ── hermetic scope-guard tests (no Chromium: exercise the route handler directly) ──
+class _FakeReq:
+    def __init__(self, url, navigation, headers):
+        self.url = url
+        self._nav = navigation
+        self.headers = headers
+
+    def is_navigation_request(self):
+        return self._nav
+
+
+class _FakeRoute:
+    def __init__(self, url, navigation=True, headers=None):
+        self.request = _FakeReq(url, navigation, headers or {})
+        self.aborted = False
+        self.continued = None  # None until continue_ is called; then the headers dict
+
+    async def abort(self):
+        self.aborted = True
+
+    async def continue_(self, headers=None):
+        self.continued = headers if headers is not None else {}
+
+
+class _FakeContext:
+    def __init__(self):
+        self.handler = None
+
+    async def route(self, pattern, handler):
+        self.handler = handler
+
+
+@pytest.mark.asyncio
+async def test_scope_guard_resolve_blocks_internal_navigation():
+    # is_in_scope() only blocks IP literals; a hostname RESOLVING to a private/metadata
+    # IP must be aborted on the browser path (it has no connect_pin). resolve_block is
+    # the scope manager's blocked_connect_reason.
+    ctx = _FakeContext()
+    def resolve_block(u):
+        return "private/reserved" if "internal" in u else None
+    await browsermod._install_scope_guard(ctx, lambda u: True, {"Authorization": "x"}, resolve_block)
+
+    r = _FakeRoute("http://internal.acme.com/", navigation=True)
+    await ctx.handler(r)
+    assert r.aborted is True and r.continued is None   # internal-resolving nav aborted
+
+    r2 = _FakeRoute("http://public.acme.com/", navigation=True)
+    await ctx.handler(r2)
+    assert r2.aborted is False and r2.continued is not None   # public nav allowed
+
+
+@pytest.mark.asyncio
+async def test_scope_guard_strips_auth_on_cross_origin_subresource():
+    # The guard (now installed by interact() too) must drop the engagement auth headers
+    # from an out-of-scope subresource so credentials never leak to a third party.
+    ctx = _FakeContext()
+    await browsermod._install_scope_guard(ctx, lambda u: "acme.com" in u, {"Authorization": "Bearer secret"}, None)
+
+    r = _FakeRoute("http://evil.example/lib.js", navigation=False,
+                   headers={"Authorization": "Bearer secret", "Accept": "*/*"})
+    await ctx.handler(r)
+    assert r.aborted is False
+    assert "Authorization" not in (r.continued or {})   # credential stripped
+    assert r.continued.get("Accept") == "*/*"           # benign header kept

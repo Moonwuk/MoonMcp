@@ -13,6 +13,7 @@ driven *authenticated*.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -25,10 +26,17 @@ MAX_ERRORS = 50
 
 
 async def _install_scope_guard(context, scope_ok: Callable[[str], bool],
-                               extra_headers: dict[str, str] | None) -> None:
+                               extra_headers: dict[str, str] | None,
+                               resolve_block: Callable[[str], str | None] | None = None) -> None:
     """Route every request: abort out-of-scope navigations, and strip the engagement
     auth headers from out-of-scope subresources — so Playwright's blanket header
-    application can't leak a credential to a third-party host or a redirect target."""
+    application can't leak a credential to a third-party host or a redirect target.
+
+    ``resolve_block`` (the scope manager's ``blocked_connect_reason``) closes the
+    browser's SSRF-to-internal hole: ``scope_ok``/``is_in_scope`` only blocks private
+    IP *literals*, so an in-scope hostname that RESOLVES to 127.0.0.1 / a metadata IP /
+    an internal host would otherwise navigate freely (the browser has no connect_pin).
+    We resolve-and-block navigation requests, mirroring resolve_pin for ctx.http."""
 
     auth_keys = {k.lower() for k in (extra_headers or {})}
 
@@ -38,6 +46,15 @@ async def _install_scope_guard(context, scope_ok: Callable[[str], bool],
             in_scope = scope_ok(req.url)
         except Exception:
             in_scope = False
+        # Resolve-and-block navigations whose host maps to a private/reserved/metadata
+        # IP (off the loop — getaddrinfo). Only navigations, to keep subresource cost
+        # down; they are the SSRF vector (goto / redirect / initial load).
+        if in_scope and resolve_block is not None and req.is_navigation_request():
+            try:
+                if await asyncio.to_thread(resolve_block, req.url):
+                    in_scope = False
+            except Exception:
+                in_scope = False  # fail closed on a resolver error
         try:
             if not in_scope:
                 if req.is_navigation_request():
@@ -90,6 +107,7 @@ async def browse(
     extra_headers: dict[str, str] | None = None,
     cookies: list[dict] | None = None,
     scope_ok: Callable[[str], bool] | None = None,
+    resolve_block: Callable[[str], str | None] | None = None,
 ) -> BrowserResult:
     """Navigate a headless browser to *url*, collect observability, optionally
     evaluate a JS expression, and return a structured :class:`BrowserResult`.
@@ -148,7 +166,7 @@ async def browse(
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
                 if scope_ok is not None:
-                    await _install_scope_guard(context, scope_ok, extra_headers)
+                    await _install_scope_guard(context, scope_ok, extra_headers, resolve_block)
                 if cookies:
                     try:
                         await context.add_cookies(cookies)
@@ -215,6 +233,7 @@ async def interact(
     extra_headers: dict[str, str] | None = None,
     cookies: list[dict] | None = None,
     scope_ok: Callable[[str], bool] | None = None,
+    resolve_block: Callable[[str], str | None] | None = None,
 ) -> InteractResult:
     """Drive a headless browser through a sequence of *actions* against *url* and
     return the resulting page state, storage and observability.
@@ -265,6 +284,13 @@ async def interact(
                 context = await browser.new_context()
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
+                # interact() previously installed NO route guard, so the engagement auth
+                # headers set above leaked to every cross-origin subresource/redirect and
+                # out-of-scope in-page navigations (clicks/redirects) were never aborted —
+                # only the explicit `goto` action was checked. Install the same guard
+                # browse() uses so scope + credential-scoping hold for the whole flow.
+                if scope_ok is not None:
+                    await _install_scope_guard(context, scope_ok, extra_headers, resolve_block)
                 if cookies:
                     try:
                         await context.add_cookies(cookies)

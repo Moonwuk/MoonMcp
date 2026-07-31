@@ -251,6 +251,15 @@ def _connect_pin() -> Callable[[str], tuple[str | None, str | None]]:
     return get_context().scope.resolve_pin
 
 
+def _resolve_block() -> Callable[[str], str | None]:
+    """Resolve a target's hostname and return a block reason if it maps to a
+    private/reserved/metadata IP — the SSRF-to-internal guard for tools that can't
+    dial a pinned IP (the headless browser). ``is_in_scope`` only blocks IP literals,
+    so a hostname that resolves internally needs this. No-op when block_private is off."""
+
+    return get_context().scope.blocked_connect_reason
+
+
 # --- shared blind-vuln orchestration helpers (OAST poll + time-based sampling) ---
 async def _collect_oast(ctx, token: str) -> tuple[list[dict], str | None]:
     """Read OAST interactions for ``token``, distinguishing 'no callback yet'
