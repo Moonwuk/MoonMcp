@@ -3112,7 +3112,10 @@ async def http_repeater(url: str | None = None, method: str = "GET",
     if result.error:
         out["error"] = result.error
     if passive and result.status is not None:
-        out["passive"] = interceptmod.passive_findings(result)
+        # Off the event loop: passive_findings runs the secret-scan regexes over up to
+        # 500 KB of the (in-scope but attacker-controlled) response body — a large body
+        # must not block concurrent tools (matches the crawl/secrets/binary offloads).
+        out["passive"] = await asyncio.to_thread(interceptmod.passive_findings, result)
     return out
 
 
@@ -3210,8 +3213,9 @@ async def passive_scan(target: str) -> dict:
     if result.status is None:
         return {"error": "unreachable", "detail": result.error, "url": url}
     _record_exchange("passive_scan", "GET", url, {}, b"", result)
-    return {"url": result.final_url or url, "status": result.status,
-            **interceptmod.passive_findings(result)}
+    # Run the passive analysers (incl. the up-to-500 KB secret scan) off the event loop.
+    pf = await asyncio.to_thread(interceptmod.passive_findings, result)
+    return {"url": result.final_url or url, "status": result.status, **pf}
 
 
 @mcp.tool()
