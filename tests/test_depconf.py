@@ -33,30 +33,49 @@ def test_parse_composer_keeps_vendor_names():
 
 # -- registry existence check ------------------------------------------------
 class _R:
-    def __init__(self, status):
+    def __init__(self, status, body=""):
         self.status = status
+        self._body = body
 
     def text(self, limit=None):
-        return ""
+        return self._body
 
 
 class _Client:
-    def __init__(self, present):
-        self._present = set(present)  # names that "exist" (200); others 404
+    def __init__(self, present, scopes_owned=()):
+        self._present = set(present)      # package names that "exist" (200); others 404
+        self._owned = set(scopes_owned)   # scope names (no @) that have published packages
 
     async def fetch(self, url, **kwargs):
+        if "/-/v1/search" in url:         # npm scope-registration probe
+            import re as _re
+            m = _re.search(r"scope:([^&]+)", url)
+            s = m.group(1) if m else ""
+            return _R(200, f'{{"total":{1 if s in self._owned else 0},"objects":[]}}')
         return _R(200 if any(p in url for p in self._present) else 404)
 
 
 @pytest.mark.asyncio
 async def test_check_flags_claimable_and_scoped():
-    client = _Client(present=["react"])  # react exists; the rest 404
+    # @acme is a REGISTERED scope (has packages) → a scoped 404 under it is NOT a
+    # dependency-confusion vuln (an attacker can't publish under a registered scope).
+    client = _Client(present=["react"], scopes_owned=["acme"])
     res = await depconf.check_dependencies(client, ["react", "internal-ui", "@acme/private"], "npm")
     by = {r["name"]: r for r in res}
     assert by["react"]["verdict"] == "exists"
     assert by["internal-ui"]["verdict"] == "claimable" and by["internal-ui"]["severity"] == "medium"
-    # a scoped 404 is higher signal (claim the whole scope)
-    assert by["@acme/private"]["verdict"] == "claimable" and by["@acme/private"]["severity"] == "high"
+    assert by["@acme/private"]["verdict"] == "not_claimable" and by["@acme/private"]["severity"] == "info"
+
+
+@pytest.mark.asyncio
+async def test_check_scoped_unregistered_is_a_verify_lead():
+    # the scope has NO public packages → a genuine (verify-first) claimable lead,
+    # medium not high — we can't positively prove the scope is unregistered.
+    client = _Client(present=["react"], scopes_owned=[])
+    res = await depconf.check_dependencies(client, ["@ghost/lib"], "npm")
+    by = {r["name"]: r for r in res}
+    assert by["@ghost/lib"]["verdict"] == "claimable" and by["@ghost/lib"]["severity"] == "medium"
+    assert "verify" in by["@ghost/lib"]["detail"].lower()
 
 
 @pytest.mark.asyncio
