@@ -72,6 +72,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "timing: wall-clock-sensitive tests (real sleeps / elapsed assertions). Run them SERIALLY (not under xdist) so CPU contention from parallel workers doesn't flake the timing windows.",
+    "integration: tests that talk to REAL services (see tests/integration/docker-compose.yml). Skipped unless MOONMCP_INTEGRATION=1; never run in the default suite / CI.",
 ]
 
 [tool.mypy]

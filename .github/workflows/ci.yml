@@ -37,10 +37,10 @@ jobs:
       # `timing` tests run SERIALLY afterwards so CPU contention from parallel workers
       # can't flake their elapsed-time assertions. Coverage is accumulated across both.
       - name: Test — parallel (non-timing)
-        run: pytest -q -m "not timing" -n auto --cov=moonmcp --cov-report=
+        run: pytest -q -m "not timing and not integration" -n auto --cov=moonmcp --cov-report=
 
       - name: Test — serial (timing)
-        run: pytest -q -m timing --cov=moonmcp --cov-append --cov-report=term-missing --cov-fail-under=70
+        run: pytest -q -m "timing and not integration" --cov=moonmcp --cov-append --cov-report=term-missing --cov-fail-under=70
 
   smoke:
     runs-on: ubuntu-latest

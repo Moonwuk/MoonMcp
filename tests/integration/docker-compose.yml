@@ -1,0 +1,40 @@
+# Real datastores for MoonMCP's exposure-probe integration tests. They validate the
+# probes against ACTUAL service behaviour (not the synthetic fakes the unit suite uses).
+#
+#   docker compose -f tests/integration/docker-compose.yml up -d
+#   MOONMCP_INTEGRATION=1 pytest -m integration tests/integration -q
+#   docker compose -f tests/integration/docker-compose.yml down
+#
+# WARNING: every service here is intentionally UNAUTHENTICATED and bound to 127.0.0.1
+# only. Never start this on a shared or internet-exposed host.
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+
+  memcached:
+    image: memcached:1-alpine
+    ports: ["127.0.0.1:11211:11211"]
+
+  mongodb:
+    image: mongo:7
+    ports: ["127.0.0.1:27017:27017"]
+
+  couchdb:
+    image: couchdb:3
+    environment:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD: integration-only
+    ports: ["127.0.0.1:5984:5984"]
+
+  influxdb:
+    image: influxdb:1.8
+    ports: ["127.0.0.1:8086:8086"]
+
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports: ["127.0.0.1:9200:9200"]
