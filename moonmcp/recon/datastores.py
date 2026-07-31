@@ -231,20 +231,31 @@ def interpret_es(status: int | None, headers: dict[str, str], body: str) -> dict
 def interpret_couchdb(status: int | None, headers: dict[str, str], body: str) -> dict | None:
     low = body.lower()
     if status == 200 and '"couchdb"' in low and "welcome" in low:
-        return {"verdict": "exposed", "severity": "high",
-                "issue": "CouchDB reachable unauthenticated",
-                "detail": "GET / returned the CouchDB welcome banner — /_all_dbs enumerates data; "
-                          "map the version to CVE-2017-12635 (admin bypass) / CVE-2022-24706."}
+        # On CouchDB 3.x the root welcome banner is served WITHOUT auth even on a
+        # hardened node, while /_all_dbs actually requires admin — so the banner alone
+        # is version disclosure, NOT unauthenticated data access. Report it as info and
+        # tell the operator how to substantiate an actual exposure.
+        return {"verdict": "reachable", "severity": "info",
+                "issue": "CouchDB reachable (welcome banner)",
+                "detail": "GET / returned the CouchDB welcome banner. On 3.x this root banner is "
+                          "unauthenticated even when hardened, so it is NOT proof of data access — "
+                          "confirm by reading a protected endpoint (GET /_all_dbs returning a JSON "
+                          "array). Map the version to CVE-2017-12635 (admin bypass) / CVE-2022-24706."}
     return None
 
 
 def interpret_influxdb(status: int | None, headers: dict[str, str], body: str) -> dict | None:
     ver = headers.get("x-influxdb-version") or headers.get("X-Influxdb-Version")
     if status in (200, 204) and ver:
-        return {"verdict": "exposed", "severity": "medium",
-                "issue": "InfluxDB reachable",
-                "detail": f"/ping answered with X-Influxdb-Version={ver} — <1.7.6 is vulnerable to the "
-                          "empty-secret JWT auth bypass (CVE-2019-20933)."}
+        # /ping is an UNAUTHENTICATED health endpoint present on every instance and
+        # returns X-Influxdb-Version regardless of auth — so this is version disclosure,
+        # NOT data exposure. Report as info; a real exposure needs an authed-only query.
+        return {"verdict": "reachable", "severity": "info",
+                "issue": "InfluxDB reachable (version disclosed)",
+                "detail": f"/ping answered with X-Influxdb-Version={ver}. /ping is a public health "
+                          "endpoint (no auth on any instance), so this is version disclosure, not "
+                          "data access — confirm exposure with an authenticated-only query. <1.7.6 "
+                          "is vulnerable to the empty-secret JWT auth bypass (CVE-2019-20933)."}
     return None
 
 

@@ -44,9 +44,14 @@ def test_interpret_mongo_reply_states():
 def test_http_interpreters():
     assert ds.interpret_es(200, {}, '{"cluster_name":"x","number_of_nodes":3}')["severity"] == "high"
     assert ds.interpret_es(401, {}, "nope") is None
-    assert ds.interpret_couchdb(200, {}, '{"couchdb":"Welcome","version":"3.3.2"}')["severity"] == "high"
+    # CouchDB root / and InfluxDB /ping are unauthenticated-by-design banners: report
+    # them as info-level version disclosure, not a high/medium data-exposure claim.
+    couch = ds.interpret_couchdb(200, {}, '{"couchdb":"Welcome","version":"3.3.2"}')
+    assert couch["severity"] == "info" and couch["verdict"] == "reachable"
     assert ds.interpret_couchdb(200, {}, "<html>not couch</html>") is None
-    assert ds.interpret_influxdb(204, {"x-influxdb-version": "1.6.4"}, "")["severity"] == "medium"
+    influx = ds.interpret_influxdb(204, {"x-influxdb-version": "1.6.4"}, "")
+    assert influx["severity"] == "info" and influx["verdict"] == "reachable"
+    assert "1.6.4" in influx["detail"]          # version kept as a CVE lead
     assert ds.interpret_influxdb(204, {}, "") is None
     assert ds.interpret_yarn(200, {}, '{"clusterInfo":{"resourceManagerVersion":"3.3"}}')["severity"] == "critical"
     assert ds.interpret_tidb(200, {}, '{"version":"8.1.0","git_hash":"abc"}')["severity"] == "medium"
