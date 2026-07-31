@@ -1540,7 +1540,11 @@ async def analyze_binary(target: str, decompile: bool = True) -> dict:
     if not fetched.body:
         return {"error": "empty_body", "detail": f"HTTP {fetched.status}", "url": url}
 
-    analysis = binarymod.analyze_bytes(fetched.body, url=fetched.final_url or url)
+    # Run the multi-MB string-extraction + regex scans OFF the event loop — a 12 MiB
+    # attacker-controlled artifact must never block every other concurrent MCP tool
+    # (matches the crawl/secrets modules' to_thread offload).
+    analysis = await asyncio.to_thread(binarymod.analyze_bytes, fetched.body,
+                                       url=fetched.final_url or url)
     analysis.truncated = fetched.truncated
 
     # Optional real decompilation of .NET assemblies via ilspycmd.
