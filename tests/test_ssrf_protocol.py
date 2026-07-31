@@ -27,6 +27,17 @@ def test_assess_reachability():
     assert ssp.assess_reachability((200, 7), (200, 10)) is False    # within noise band
 
 
+def test_assess_reachability_ignores_reflected_url_length_bias():
+    # If the sink echoes the injected URL, a longer multi-digit port lengthens the
+    # response on its own. A ~20-byte delta that is fully explained by echoing a
+    # 4-char-longer port string must NOT read as reachable...
+    assert ssp.assess_reachability((200, 10), (200, 30), reflect_len_delta=4) is False
+    # ...but a status change still wins regardless of the length bias.
+    assert ssp.assess_reachability((200, 10), (500, 30), reflect_len_delta=4) is True
+    # a genuinely large differential (not explainable by the port width) still fires.
+    assert ssp.assess_reachability((200, 10), (200, 200), reflect_len_delta=4) is True
+
+
 # -- end-to-end --------------------------------------------------------------
 def _open_http_port():
     import http.server

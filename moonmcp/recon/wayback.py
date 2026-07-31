@@ -58,8 +58,11 @@ async def fetch_wayback_urls(
         # error envelope) would make `rows[1:]` raise — guard the shape.
         result.error = "unexpected response shape"
         return result
-    # First row is the header when fl=original is used.
-    urls = [row[0] for row in rows[1:] if row]
+    # First row is the header when fl=original is used. The rows come from a third
+    # party (and over a MITM-able transport), so guard each shape: a non-list row, or
+    # a row whose first cell isn't a string, would otherwise crash on `row[0]`.
+    urls = [row[0] for row in rows[1:]
+            if isinstance(row, (list, tuple)) and row and isinstance(row[0], str)]
     seen: set[str] = set()
     deduped = []
     for u in urls:

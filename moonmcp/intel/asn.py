@@ -15,16 +15,20 @@ from dataclasses import dataclass, field
 
 from ..net.http import HttpClient
 
-# substring -> cloud/CDN provider name
+# distinctive prefix -> cloud/CDN provider name. These are long enough that a
+# word-boundary prefix match is safe (e.g. "google" won't hit "googol").
 _CLOUD_MARKERS = {
-    "amazon": "AWS", "aws": "AWS", "ec2": "AWS", "cloudfront": "AWS CloudFront",
-    "google": "Google Cloud", "goog": "Google Cloud",
+    "amazon": "AWS", "amazonaws": "AWS", "ec2": "AWS", "cloudfront": "AWS CloudFront",
+    "google": "Google Cloud",
     "microsoft": "Azure", "azure": "Azure",
     "cloudflare": "Cloudflare", "fastly": "Fastly", "akamai": "Akamai",
-    "digitalocean": "DigitalOcean", "linode": "Linode", "ovh": "OVH",
+    "digitalocean": "DigitalOcean", "linode": "Linode",
     "hetzner": "Hetzner", "oracle": "Oracle Cloud", "vultr": "Vultr",
     "alibaba": "Alibaba Cloud", "leaseweb": "LeaseWeb", "gcore": "Gcore",
 }
+# Short/ambiguous acronyms that must match as a STANDALONE word only, so "aws"
+# doesn't fire on "awsome"/"lawson", "goog" on "googol", nor "ovh" on a substring.
+_CLOUD_WORD_MARKERS = {"aws": "AWS", "gcp": "Google Cloud", "ovh": "OVH"}
 
 
 @dataclass
@@ -44,10 +48,14 @@ class IpIntel:
 
 def _detect_cloud(*fields: str | None) -> str | None:
     blob = " ".join(f for f in fields if f).lower()
-    # Match each marker at a WORD BOUNDARY (prefix), so "aws" hits "aws"/"awselb"
-    # but not "lawson", while prefix markers like "goog" still match "google".
+    # Distinctive markers match at a word-boundary prefix (so "amazon" hits
+    # "amazonaws", "google" hits "googleusercontent").
     for marker, name in _CLOUD_MARKERS.items():
         if re.search(r"\b" + re.escape(marker), blob):
+            return name
+    # Ambiguous acronyms must be a whole word ("aws" but not "awsome"/"awstats").
+    for marker, name in _CLOUD_WORD_MARKERS.items():
+        if re.search(r"\b" + re.escape(marker) + r"\b", blob):
             return name
     return None
 
@@ -78,16 +86,24 @@ async def ip_intel(client: HttpClient, ip: str) -> IpIntel:
         result.error = "unparseable response"
         return result
     if not isinstance(data, dict) or data.get("status") != "success":
-        result.error = data.get("message", "lookup failed") if isinstance(data, dict) else "bad response"
+        msg = data.get("message") if isinstance(data, dict) else None
+        result.error = str(msg) if msg else ("lookup failed" if isinstance(data, dict) else "bad response")
         return result
-    as_field = data.get("as") or ""
+    # ip-api is fetched over plaintext HTTP (MITM-able) and is third-party — coerce
+    # every field to str|None so a non-string value can't crash the string ops below.
+    def _txt(v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        return v if isinstance(v, str) else str(v)
+
+    as_field = _txt(data.get("as")) or ""
     result.asn = as_field.split()[0] if as_field.startswith("AS") else None
-    result.as_name = data.get("asname") or (" ".join(as_field.split()[1:]) or None)
-    result.org = data.get("org") or None
-    result.isp = data.get("isp") or None
-    result.country = data.get("country") or None
-    result.city = data.get("city") or None
-    result.reverse_dns = data.get("reverse") or None
+    result.as_name = _txt(data.get("asname")) or (" ".join(as_field.split()[1:]) or None)
+    result.org = _txt(data.get("org"))
+    result.isp = _txt(data.get("isp"))
+    result.country = _txt(data.get("country"))
+    result.city = _txt(data.get("city"))
+    result.reverse_dns = _txt(data.get("reverse"))
     result.is_hosting = bool(data.get("hosting"))
     result.cloud = _detect_cloud(result.org, result.isp, result.as_name)
     return result

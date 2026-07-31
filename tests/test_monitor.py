@@ -45,6 +45,21 @@ def test_snapshot_clear():
     assert s.clear() == 1  # clears remaining
 
 
+def test_clear_all_also_removes_persisted_snapshots(tmp_path):
+    # clear('*') must delete the on-disk JSON too, else a fresh store resurrects the
+    # "cleared" baseline off disk (stale reload).
+    d = str(tmp_path)
+    s = SnapshotStore(state_dir=d)
+    s.diff("a", ["1", "2"])
+    s.diff("b", ["3"])
+    assert list(tmp_path.glob("snap-*.json"))            # persisted
+    assert s.clear() == 2                                # both cleared
+    assert list(tmp_path.glob("snap-*.json")) == []      # disk wiped too
+    # a fresh store no longer sees a baseline for either name
+    s2 = SnapshotStore(state_dir=d)
+    assert s2.diff("a", ["9"])["baseline_created"] is True
+
+
 @pytest.mark.asyncio
 async def test_surface_tools(fresh_context):
     tools = {t.name for t in await srv.mcp.list_tools()}

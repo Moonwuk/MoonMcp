@@ -27,8 +27,15 @@ def with_param(url: str, param: str | None, value: str,
 
 
 def inject_raw(url: str, param: str, payload: str) -> str:
-    """Append ``param=payload`` to *url* WITHOUT re-encoding (the payload already
-    carries its own percent-encoded bytes, e.g. a CRLF ``%0d%0a``)."""
+    """Place ``param=payload`` in *url*'s query WITHOUT re-encoding the payload (it
+    already carries its own percent-encoded bytes, e.g. a CRLF ``%0d%0a``).
 
-    sep = "&" if urlsplit(url).query else "?"
-    return f"{url}{sep}{param}={payload}"
+    Any pre-existing occurrence of *param* is dropped first: appending a duplicate
+    left the original value in place, and servers that honour the *first* occurrence
+    then never saw the payload (a silent false negative for e.g. ``?redirect=``)."""
+
+    sp = urlsplit(url)
+    kept = [(k, v) for k, v in parse_qsl(sp.query, keep_blank_values=True) if k != param]
+    base = urlencode(kept)
+    query = f"{base}&{param}={payload}" if base else f"{param}={payload}"
+    return urlunsplit(sp._replace(query=query))

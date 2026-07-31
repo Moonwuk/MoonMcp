@@ -40,7 +40,10 @@ _PAYLOADS = {
 _TRANSFORMS = {
     "case-swap": lambda p: p.swapcase(),
     "comment-break": lambda p: p.replace(" ", "/**/").replace("script", "scr/**/ipt"),
-    "double-encode": lambda p: quote(p),  # then the sender encodes once more
+    # Genuinely double-encode: %3C -> %253C. `_send` encodes with safe='%', so a
+    # single quote(p) here would pass straight through unchanged (a silent no-op) —
+    # the '%' of the first encode must itself be encoded, hence quote(quote(p)).
+    "double-encode": lambda p: quote(quote(p)),
     "null-byte": lambda p: p + "%00",
     "mixed": lambda p: p.replace("<", "%3C").replace(">", "%3E"),
 }

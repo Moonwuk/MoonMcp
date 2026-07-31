@@ -30,6 +30,9 @@ def test_assess_rtdb():
     assert fb.assess_rtdb(401, '{"error":"Permission denied"}')["verdict"] == "protected"
     assert fb.assess_rtdb(200, '{"error":"Permission denied"}')["verdict"] == "protected"
     assert fb.assess_rtdb(200, "<html>not json</html>") is None
+    # an OPEN db whose shallow listing has a top-level key named "error" must still be
+    # confirmed — a bare `"error"` substring must not read as Permission-denied.
+    assert fb.assess_rtdb(200, '{"error":true,"users":true}')["verdict"] == "confirmed"
 
 
 # -- Supabase pure -----------------------------------------------------------

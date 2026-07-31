@@ -4353,12 +4353,16 @@ async def ssrf_protocol_probe(target: str, param: str, method: str = "GET",
 
     # Lane 2 — internal-port reachability differential.
     port_list = sspmod.parse_ports(ports)
-    ctrl_r = await _get(sspmod.closed_control_url())
+    ctrl_url = sspmod.closed_control_url()
+    ctrl_r = await _get(ctrl_url)
     ctrl = (ctrl_r.status, len(ctrl_r.body))
     reachable: list[str] = []
     for label, iurl in sspmod.internal_port_targets(port_list):
         r = await _get(iurl)
-        if sspmod.assess_reachability(ctrl, (r.status, len(r.body))):
+        # pass the URL-length bias so a longer (multi-digit) DB port doesn't read as
+        # reachable purely because the sink echoed the longer URL back.
+        if sspmod.assess_reachability(ctrl, (r.status, len(r.body)),
+                                      reflect_len_delta=len(iurl) - len(ctrl_url)):
             reachable.append(label)
 
     non_http_schemes = {s: n for s, n in scheme_hits.items() if s != "http"}

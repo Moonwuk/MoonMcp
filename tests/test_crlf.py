@@ -15,6 +15,17 @@ def test_inject_raw_appends_without_reencoding():
     assert u2 == "https://x.test/p?q=v%0aX"
 
 
+def test_inject_raw_overwrites_existing_param():
+    # an existing `redirect` must be REPLACED, not duplicated — else a first-wins
+    # server keeps the benign value and never sees the CRLF payload (false negative).
+    u = crlf.inject_raw("https://x.test/go?redirect=home&keep=1", "redirect",
+                        "x%0d%0aX-Crlf-Probe-Inj:1")
+    assert u.count("redirect=") == 1
+    assert "redirect=home" not in u
+    assert u.endswith("redirect=x%0d%0aX-Crlf-Probe-Inj:1")
+    assert "keep=1" in u                                     # other params preserved
+
+
 def test_assess_detects_marker_header_and_cookie():
     assert crlf.assess({"X-Crlf-Probe-Inj": "1"}, []) is True
     assert crlf.assess({}, ["crlfprobe=1; Path=/"]) is True

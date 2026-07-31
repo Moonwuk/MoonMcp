@@ -254,6 +254,26 @@ _SECRET_KEY_RE = re.compile(
 _CONN_STR_RE = re.compile(r"(?i)(jdbc:|mongodb(\+srv)?://|postgres(ql)?://|mysql://|redis://|amqp://|sqlserver://)")
 _CONN_CREDS_RE = re.compile(r"://[^/\s:@]+:[^/\s:@]+@")
 
+# A credential-shaped KEY whose value is actually a policy scalar (a number, a
+# boolean, a duration) or whose key names metadata ABOUT a secret (…_name, …_ttl,
+# …_length, …_algorithm) — not the secret itself. Used to stop `jwt_expiry=3600`,
+# `password_min_length=8`, `api_key_header_name=X-Api-Key` reading as leaked secrets.
+_POLICY_KEY_RE = re.compile(
+    r"(?i)(?:^|[._-])(name|header|field|length|len|size|count|ttl|expiry|expiration|"
+    r"timeout|rotation|days|hours|minutes|min|max|algo|algorithm|type|format|"
+    r"strategy|policy|prefix|suffix|scheme|mode|required|enabled|disabled)(?:$|[._-])")
+_DURATION_RE = re.compile(
+    r"(?i)^\d+(?:\.\d+)?\s*(?:ms|s|m|h|d|sec|secs|min|mins|hour|hours|day|days|"
+    r"second|seconds|minute|minutes)?$")
+
+
+def _is_policy_scalar(value: str) -> bool:
+    """True when *value* is a bare number / boolean / duration — a policy setting,
+    never an actual secret (so a credential-named key holding it isn't a leak)."""
+
+    s = value.strip().strip("'\"").lower()
+    return s in _TRUTHY or s in _FALSY or bool(_DURATION_RE.match(s))
+
 
 @dataclass
 class Setting:
@@ -432,6 +452,11 @@ def _rule_checks(key: str, value: str) -> list[ConfigFinding]:
         if vlow in _WEAK_CREDS:
             findings.append(ConfigFinding("high", key, "default/weak credential",
                                           f"credential-like setting uses a weak value ({v!r})"))
+        elif _is_policy_scalar(v) or _POLICY_KEY_RE.search(k):
+            # a numeric/boolean/duration policy value, or a key that names metadata
+            # about a secret (…_name/…_ttl/…_length) — not the secret itself. Skip so
+            # `jwt_expiry=3600` / `api_key_header_name=X-Api-Key` don't flood as HIGH.
+            pass
         else:
             findings.append(ConfigFinding("high", key, "exposed credential",
                                           "a secret/credential value is present in the config"))

@@ -76,6 +76,29 @@ def test_ip_intel_rejects_hostname():
     assert r.error and "IP address" in r.error
 
 
+def test_detect_cloud_prefix_false_positives():
+    from moonmcp.intel.asn import _detect_cloud
+    # ambiguous acronyms must be whole words, not prefixes
+    assert _detect_cloud("Awsome Hosting Ltd") is None      # was 'aws' prefix FP
+    assert _detect_cloud("Googol Analytics Inc") is None    # was 'goog' prefix FP
+    assert _detect_cloud("AWS EC2") == "AWS"                # real AWS still detected
+    assert _detect_cloud("Google LLC") == "Google Cloud"    # real GCP still detected
+
+
+def test_ip_intel_survives_non_string_fields():
+    # ip-api is fetched over MITM-able plaintext HTTP; non-string fields must not crash.
+    from moonmcp.intel.asn import ip_intel
+
+    body = json.dumps({
+        "status": "success", "as": 16509, "asname": ["AMAZON"], "org": 42,
+        "isp": None, "country": {"nested": 1}, "city": 7, "reverse": True,
+        "hosting": 1, "query": "1.2.3.4",
+    })
+    r = asyncio.run(ip_intel(_FakeClient(body), "1.2.3.4"))
+    assert r.error is None                                   # did not crash
+    assert r.is_hosting is True
+
+
 def test_reverse_ip_parses_domain_list():
     from moonmcp.intel.asn import reverse_ip
 

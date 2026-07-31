@@ -73,10 +73,20 @@ def closed_control_url() -> str:
     return f"http://{INTERNAL_HOST}:{CLOSED_CONTROL_PORT}/"
 
 
-def assess_reachability(control: tuple, tested: tuple) -> bool:
+def assess_reachability(control: tuple, tested: tuple, *,
+                        reflect_len_delta: int = 0) -> bool:
     """An internal port is reachable when the sink's response for it differs from the
-    closed-port control (different status or materially different length)."""
+    closed-port control (different status or materially different length).
+
+    ``reflect_len_delta`` is ``len(tested_url) - len(control_url)``: when the sink
+    echoes the injected URL back, a longer port string (``:27017`` vs the 1-digit
+    control ``:9``) inflates the response on its own. Widen the length band by that
+    bias (allowing a couple of echoes) so digit-count alone can't read as reachability.
+    The status-change signal is unaffected — it stays the strongest evidence."""
 
     cs, cl = control
     ts, tl = tested
-    return ts != cs or abs((tl or 0) - (cl or 0)) > 16
+    if ts != cs:
+        return True
+    band = 16 + max(0, reflect_len_delta) * 2
+    return abs((tl or 0) - (cl or 0)) > band

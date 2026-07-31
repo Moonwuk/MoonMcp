@@ -86,9 +86,23 @@ class SnapshotStore:
 
     def clear(self, name: str | None = None) -> int:
         if name is None:
-            n = len(self._mem)
+            names = len(self._mem)
             self._mem.clear()
-            return n
+            # Also remove the persisted snapshots, else the next _load() reads them
+            # back off disk and resurrects the "cleared" baseline (stale reload).
+            files = 0
+            if self.state_dir and os.path.isdir(self.state_dir):
+                try:
+                    for fn in os.listdir(self.state_dir):
+                        if fn.startswith("snap-") and fn.endswith(".json"):
+                            try:
+                                os.remove(os.path.join(self.state_dir, fn))
+                                files += 1
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+            return max(names, files)
         removed = 1 if self._mem.pop(name, None) is not None else 0
         path = self._path(name)
         if path and os.path.exists(path):

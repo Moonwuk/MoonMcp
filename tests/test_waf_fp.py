@@ -36,3 +36,31 @@ async def test_detect_waf_catches_200_block_page():
 async def test_detect_waf_no_false_block_on_clean_200():
     res = await waf.detect_waf(_CleanClient(), "https://t.example", active=True)
     assert res.blocked_probe is False and res.detected == []
+
+
+class _NotAcceptableClient:
+    """A benign page whose body merely contains the phrase 'not acceptable'."""
+
+    async def fetch(self, url, **kwargs):
+        return _res(200, b"<html><p>This behaviour is not acceptable in our community.</p></html>")
+
+
+@pytest.mark.asyncio
+async def test_passive_not_acceptable_prose_is_not_modsecurity():
+    # The passive body scan must not fingerprint a benign 'not acceptable' page as
+    # ModSecurity (the generic body signature was removed).
+    res = await waf.detect_waf(_NotAcceptableClient(), "https://t.example", active=False)
+    assert "ModSecurity" not in res.detected
+
+
+def test_waf_bypass_double_encode_is_a_real_transform():
+    # the double-encode transform must actually double-encode (%3C -> %253C), not be a
+    # silent no-op that _send collapses back to single-encoding.
+    from urllib.parse import quote
+
+    from moonmcp.web import waf_bypass as wb
+    payload = "<script>x</script>"
+    out = wb._TRANSFORMS["double-encode"](payload)
+    # after _send re-encodes with safe='%', the '%25' sequences survive intact
+    sent = quote(out, safe="%")
+    assert "%253C" in sent and "%3C" not in sent.replace("%253C", "")

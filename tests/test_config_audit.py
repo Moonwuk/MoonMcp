@@ -75,6 +75,22 @@ def test_placeholder_values_not_flagged():
     assert "exposed credential" not in _issues(a)
 
 
+def test_policy_values_are_not_exposed_credentials():
+    # credential-NAMED keys whose value is a policy scalar / metadata name are not leaks.
+    a = analyze_config(
+        "jwt_expiry=3600\n"
+        "password_min_length=8\n"
+        "token_ttl=900\n"
+        "secret_rotation_days=30\n"
+        "api_key_header_name=X-Api-Key\n"
+        "session_timeout=30m\n",
+        filename=".env")
+    assert "exposed credential" not in _issues(a)
+    # a real secret value alongside them is still caught.
+    b = analyze_config("jwt_expiry=3600\nAPI_KEY=sk_live_9f8a7b6c5d4e3f2a1b0c", filename=".env")
+    assert "exposed credential" in _issues(b)
+
+
 def test_no_crash_on_garbage():
     a = analyze_config(":::not really config:::\n\x00\x01binary", filename="weird.conf")
     assert a.error is None

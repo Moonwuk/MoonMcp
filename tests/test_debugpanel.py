@@ -63,6 +63,18 @@ async def test_no_false_positive_on_generic_200():
 
 
 @pytest.mark.asyncio
+async def test_generic_console_page_is_not_werkzeug():
+    # A legit product/docs page at /console using the phrase "The console" must NOT
+    # read as the Werkzeug debugger (was a status-agnostic critical FP).
+    site = _Site({"/console": (200, "<html><h1>Welcome to The console</h1> manage your account</html>")})
+    assert await dp.probe_debug_panels(site, "https://x.test") == []
+    # the real debugger (its markup / PIN-lock message) is still flagged
+    site2 = _Site({"/console": (200, "<html>Werkzeug Debugger __debugger__ console is locked</html>")})
+    res = await dp.probe_debug_panels(site2, "https://x.test")
+    assert res and res[0]["severity"] == "critical"
+
+
+@pytest.mark.asyncio
 async def test_flags_db_admin_consoles():
     site = _Site({
         "/db/admin": (200, "<html><title>Mongo Express</title><div id='leftPanel'></div></html>"),

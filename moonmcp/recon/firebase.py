@@ -63,7 +63,11 @@ def assess_rtdb(status: int | None, body: str) -> dict | None:
     if status is None:
         return None
     low = (body or "").lower()
-    if status in (401, 403) or "permission denied" in low or '"error"' in low:
+    # A denied RTDB returns 401/403 with `{"error":"Permission denied"}`. Matching a
+    # bare `"error"` substring wrongly graded an OPEN database as protected whenever it
+    # had a top-level key literally named "error" (the shallow listing echoes the key),
+    # so key off the actual denial signal, not any error-shaped body.
+    if status in (401, 403) or "permission denied" in low:
         return {"verdict": "protected", "severity": "info",
                 "detail": "RTDB rules deny anonymous read (Permission denied)."}
     if status == 200:

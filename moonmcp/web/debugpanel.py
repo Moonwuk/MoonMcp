@@ -48,7 +48,11 @@ _PANELS: dict[str, tuple[str, list[str], str, str]] = {
         "Django Debug Toolbar", ["djDebug", "djdt"], "medium",
         "Django debug toolbar exposed — DEBUG=True in production"),
     "/console": (
-        "Werkzeug/Flask debugger", ["__debugger__", "Werkzeug Debugger", "The console"], "critical",
+        # 'The console' alone matched any product/docs page at /console that used the
+        # phrase (a status-agnostic critical FP). Require a Werkzeug-specific token:
+        # the debugger markup (__debugger__ / the title) or its PIN-lock message.
+        "Werkzeug/Flask debugger",
+        ["__debugger__", "Werkzeug Debugger", "console is locked"], "critical",
         "Werkzeug interactive debugger console — arbitrary code execution if the PIN "
         "is unset or known"),
     "/adminer.php": (
