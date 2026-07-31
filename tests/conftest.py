@@ -315,6 +315,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/nosqli-jserror"):
+            # NOT injectable, but EVERY response (baseline included) carries a benign JS
+            # error banner (an SPA bundle / verbose console). Baseline signature
+            # subtraction must keep this pre-existing string off the verdict.
+            body = b"<html>console: SyntaxError: Unexpected token < in JSON at position 0</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/fastjson"):
             # DELIBERATELY VULNERABLE: "deserializes" the @type body by fetching the
             # URL it carries (simulates java.net.URL autoType → outbound lookup).

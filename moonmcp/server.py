@@ -3792,7 +3792,16 @@ async def nosqli_probe(target: str, param: str, method: str = "POST") -> dict:
     where_hit = nosqlimod.assess_where(wt, wf)
 
     # Error lane: MongoDB/BSON error signatures leaked by any twin.
-    sig_hits = injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+    # Only signatures the OPERATOR payloads INTRODUCE count. A Mongo/JS error string
+    # already present in the plain-scalar control responses (verbose app errors, or an
+    # SPA bundle carrying "SyntaxError:"/"ReferenceError:"/"CastError") is pre-existing,
+    # not injection — subtract it so it can't drive confirm.evaluate to a false "likely"
+    # (mirrors lfi_probe / confirm_finding). A CastError the operator OBJECT actually
+    # triggers is new -> still counted.
+    _base_sig_keys = {(h["technology"], h["matched"])
+                      for h in injmod.match_signatures("\n".join(bodies[:2]), class_id="nosqli")}
+    sig_hits = [h for h in injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+                if (h["technology"], h["matched"]) not in _base_sig_keys]
 
     strong_op = next((h for h in operator_hits if h["strong"]), None)
     injection_hits = [f"nosqli/{h['variant']}" for h in operator_hits]
@@ -3864,7 +3873,14 @@ async def graphql_nosqli(target: str, query: str, variable: str = "moon") -> dic
         if hit:
             operator_hits.append({"operator": label, **hit})
 
-    sig_hits = injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+    # Subtract signatures present in the string-baseline responses (bodies[:2]) so a
+    # pre-existing benign JS/Mongo error (SyntaxError/ReferenceError/CastError in the
+    # app's normal output) can't count as injection — only operator-INTRODUCED
+    # signatures score. Mirrors lfi_probe / confirm_finding / nosqli_probe.
+    _base_sig_keys = {(h["technology"], h["matched"])
+                      for h in injmod.match_signatures("\n".join(bodies[:2]), class_id="nosqli")}
+    sig_hits = [h for h in injmod.match_signatures("\n".join(bodies), class_id="nosqli")
+                if (h["technology"], h["matched"]) not in _base_sig_keys]
     # A type rejection (independent of status) means the variable is strictly typed —
     # not injectable via it. Reported as its own state, never scored as a hit.
     strictly_typed = any_rejected and not operator_hits and not sig_hits

@@ -147,6 +147,17 @@ async def test_nosqli_probe_no_fp_on_json_only_api(local_server, fresh_context):
 
 
 @pytest.mark.asyncio
+async def test_nosqli_probe_ignores_preexisting_js_error(local_server, fresh_context):
+    # A benign JS error banner ("SyntaxError: Unexpected token") in EVERY response
+    # (baseline included) must not, on its own, produce a NoSQLi lead — only
+    # operator-INTRODUCED signatures count (baseline subtraction).
+    base, _ = local_server
+    res = await srv.nosqli_probe(target=f"{base}/nosqli-jserror", param="user")
+    assert res["error_signatures"] == [], res
+    assert res["verdict"] == "unconfirmed", res
+
+
+@pytest.mark.asyncio
 async def test_nosqli_probe_intrusive_gated(local_server, fresh_context):
     from dataclasses import replace
     base, _ = local_server
