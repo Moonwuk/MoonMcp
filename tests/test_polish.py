@@ -18,7 +18,8 @@ async def test_port_scan_respects_max_concurrency(fresh_context, monkeypatch):
         from moonmcp.net.ports import ScanResult
         return ScanResult(host=host)
 
-    monkeypatch.setattr(srv.portsmod, "scan_ports", fake_scan)
+    from moonmcp.net import ports as portsmod
+    monkeypatch.setattr(portsmod, "scan_ports", fake_scan)
     fresh_context.scope.add("scanme.example")
     await srv.port_scan(target="scanme.example", ports="80,443")
     assert captured["concurrency"] == fresh_context.settings.max_concurrency
