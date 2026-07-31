@@ -19,6 +19,7 @@ leaks (those are meant to be in-band).
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Callable
 
@@ -49,12 +50,15 @@ _FIELD_STOPWORDS = frozenset({
     "pending", "enabled", "disabled", "required", "expired", "invalid", "empty",
 })
 
-# A reset / verify / magic link (token-bearing URL) anywhere in the body.
+# A reset / verify / magic link (token-bearing URL) anywhere in the body. The
+# pre-keyword and trailing URL runs are LENGTH-BOUNDED ({0,256}) so a keyword-free
+# body of glued `http://` tokens can't drive the lazy `[^\s"'<>]*?` into an O(n^2)
+# forward scan at every `http://` position — a real token URL fits well under the cap.
 _LINK_RE = re.compile(
-    r'https?://[^\s"\'<>]*?'
+    r'https?://[^\s"\'<>]{0,256}?'
     r'(?:reset[_-]?password|password[_-]?reset|/reset|verify|confirm|activate|'
     r'set[_-]?password|token=|otp=|code=|magic)'
-    r'[^\s"\'<>]*',
+    r'[^\s"\'<>]{0,256}',
     re.I)
 
 # Only hunt bare numeric codes when the body clearly talks about an OTP.
@@ -152,7 +156,9 @@ async def probe_response_leak(client: HttpClient, url: str, *, method: str = "GE
                            follow_redirects=False, timeout=12.0, scope_check=scope_check)
     if r.status is None:
         return []
-    return scan_response_leak(r.text(limit=200_000))
+    # Off the event loop: an in-scope target controls its own response bytes, so the
+    # regex scan over the (bounded) 200 KB body must never block concurrent probes.
+    return await asyncio.to_thread(scan_response_leak, r.text(limit=200_000))
 
 
 # ── GLOBAL-2: password-reset poisoning ─────────────────────────────────────────

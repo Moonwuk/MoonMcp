@@ -21,6 +21,18 @@ def test_scan_flags_reset_link_in_body():
     assert any(f["kind"] == "reset_link_in_body" for f in res)
 
 
+def test_scan_response_leak_bounded_on_keyword_free_url_run():
+    # A large body of glued keyword-free `http://` tokens must NOT drive the link regex
+    # into an O(n^2) forward scan at every position (ReDoS that stalls the event loop).
+    # With the length-bounded runs it stays linear; time-box it as the regression.
+    import time
+    body = "http://" * 28_000  # ~196 KB, keyword-free
+    t0 = time.monotonic()
+    res = af.scan_response_leak(body)
+    assert time.monotonic() - t0 < 3.0, "link regex went quadratic on a keyword-free URL run"
+    assert not any(f["kind"] == "reset_link_in_body" for f in res)
+
+
 def test_scan_flags_bare_code_only_with_otp_context():
     with_ctx = af.scan_response_leak('{"message":"Your one-time code is 991234"}')
     assert any(f["kind"] == "otp_code_in_body" and f["verdict"] == "review" for f in with_ctx)
