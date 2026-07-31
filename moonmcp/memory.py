@@ -93,6 +93,28 @@ def _norm_prov(v: str | None) -> str:
     return v if v in PROVENANCE else "manual"
 
 
+def _host_of(target: str | None) -> str:
+    """The bare host from a memory item's target (which may be a full URL)."""
+
+    t = (target or "").strip().lower()
+    if "://" in t:
+        t = t.split("://", 1)[1]
+    t = t.split("/", 1)[0].split("?", 1)[0]
+    if "@" in t:
+        t = t.split("@", 1)[1]
+    if t.startswith("["):                       # [ipv6]:port
+        return t[1:].split("]", 1)[0]
+    return t.rsplit(":", 1)[0] if t.count(":") == 1 else t
+
+
+def _same_or_subdomain(item_target: str | None, host: str) -> bool:
+    """True when the item's host equals *host* or is a subdomain of it — a HOST-boundary
+    match, not the old substring test that cross-attributed notacme.com to acme.com."""
+
+    ih = _host_of(item_target)
+    return bool(ih) and (ih == host or ih.endswith("." + host))
+
+
 class MemoryStore:
     """A shared, persistent, searchable memory (SQLite + optional FTS5)."""
 
@@ -139,12 +161,19 @@ class MemoryStore:
             # it with near-identical rows and drown retrieval. An exact-signature match
             # folds the new body/source into the existing row instead of inserting.
             existing = self._db.execute(
-                "SELECT id FROM memory WHERE kind=? AND lower(COALESCE(target,''))=? "
+                "SELECT id, trust FROM memory WHERE kind=? AND lower(COALESCE(target,''))=? "
                 "AND lower(title)=? ORDER BY id LIMIT 1",
                 (str(kind), (target or "").lower(), str(title).lower()),
             ).fetchone()
             if existing is not None:
                 existing_id = int(existing["id"])
+                # A CURATED entry must not be silently overwritten by a non-curated
+                # (tool/untrusted) write. The old UPDATE preserved the 'curated' LABEL
+                # but replaced the BODY, letting attacker-controlled content masquerade
+                # as curated knowledge (graph poisoning). Only a curated write may modify
+                # a curated row; otherwise leave the curated entry intact.
+                if existing["trust"] == "curated" and _norm_trust(trust) != "curated":
+                    return existing_id
                 if self._fts:  # remove the stale FTS entry using its CURRENT stored values
                     self._db.execute(
                         "INSERT INTO memory_fts(memory_fts,rowid,title,body,tags) "
@@ -350,7 +379,8 @@ class MemoryStore:
         """One-shot *what we know about TARGET*: entities grouped by kind, confirmed
         findings, open leads, cross-target lessons, and the relation count. ``target``
         should be a host — graph nodes are host-keyed, while memory items (recorded
-        under a full URL) are matched by host substring so both surface."""
+        under a full URL) are matched by HOST (equal or a subdomain), so a URL's items
+        surface without cross-attributing an unrelated look-alike domain."""
 
         host = (target or "").strip().lower()
         g = self.graph(host)
@@ -358,7 +388,7 @@ class MemoryStore:
         for e in g["entities"]:
             by_kind.setdefault(e["kind"], []).append(e["name"])
         pool = self.search("", limit=400)
-        items = [i for i in pool if host and host in (i.get("target") or "").lower()] if host else pool
+        items = [i for i in pool if _same_or_subdomain(i.get("target"), host)] if host else pool
         findings = [i for i in items if i["kind"] in ("finding", "vuln")]
         leads = [i for i in items if i["kind"] in ("lead", "observation")]
         lessons = self.search("", kind="lesson", limit=50)
