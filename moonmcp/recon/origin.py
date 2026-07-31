@@ -27,6 +27,30 @@ _ORIGIN_SUBS = [
     "test", "portal", "vpn", "remote", "backend", "api", "admin", "server",
 ]
 
+# Common multi-label public suffixes — without a full PSL, enough to avoid grafting
+# origin-subdomains onto a bare suffix (example.co.uk must not become mail.co.uk, an
+# UNRELATED third-party domain).
+_PUBLIC_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "net.uk", "ltd.uk", "plc.uk",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au", "co.nz", "net.nz", "org.nz",
+    "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp", "co.kr", "or.kr", "co.za", "org.za",
+    "com.br", "net.br", "org.br", "gov.br", "com.cn", "net.cn", "org.cn", "gov.cn",
+    "com.mx", "com.tr", "com.sg", "com.hk", "com.tw", "co.in", "net.in", "org.in",
+    "com.ar", "com.co", "co.il", "com.my", "co.id", "com.ua", "com.ph", "com.pk",
+})
+
+
+def _origin_base(apex: str) -> str:
+    """The registrable base to graft origin-subdomains onto. Stripping the leftmost
+    label of example.co.uk yields the bare suffix co.uk — grafting mail./origin. onto
+    that enumerates unrelated third-party domains, so keep the apex in that case."""
+
+    parts = apex.split(".")
+    if len(parts) <= 2:
+        return apex
+    stripped = ".".join(parts[1:])
+    return apex if stripped.lower() in _PUBLIC_SUFFIXES else stripped
+
 
 @dataclass
 class OriginCandidate:
@@ -50,7 +74,7 @@ class OriginResult:
 
 
 async def discover_origin(
-    client: HttpClient, host: str, *, max_lookups: int = 12
+    client: HttpClient, host: str, *, max_lookups: int = 12, connect_pin=None
 ) -> OriginResult:
     result = OriginResult(host=host)
     apex = host
@@ -67,13 +91,16 @@ async def discover_origin(
 
     # Collect candidate hostnames: cert SANs + common origin subdomains + MX.
     candidate_hosts: dict[str, str] = {}
-    tls = await inspect_certificate(host, 443)
+    # Pin the vetted IP for the target's cert inspection — inspect_certificate otherwise
+    # re-resolves `host` and connects to whatever DNS returns (DNS-rebinding TOCTOU /
+    # a mixed-A-record internal IP), unlike the other raw-socket tools.
+    tls = await inspect_certificate(host, 443, connect_pin=connect_pin)
     for san in tls.subject_alt_names:
         san = san.lstrip("*.").lower()
         if san and san != host:
             candidate_hosts[san] = f"SAN:{san}"
     if "." in apex:
-        base = apex.split(".", 1)[1] if apex.count(".") >= 2 else apex
+        base = _origin_base(apex)
         for sub in _ORIGIN_SUBS:
             candidate_hosts.setdefault(f"{sub}.{base}", f"subdomain:{sub}")
     mx = await resolve(apex, rdtypes=("MX",), http_client=client)
@@ -108,6 +135,9 @@ async def discover_origin(
     if result.behind_cdn:
         result.likely_origins = sorted({
             c.ip for c in result.candidates
-            if c.enriched and not c.is_cdn and c.cloud != result.front_cloud
+            # An MX points at mail infra (often a SHARED provider — Google/Outlook), not
+            # the web origin; keep it as a candidate but never a likely web origin. The
+            # self-hosted-mail case is still caught via the `subdomain:mail` candidate.
+            if c.enriched and not c.is_cdn and c.cloud != result.front_cloud and c.source != "MX"
         })
     return result

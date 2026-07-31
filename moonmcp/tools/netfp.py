@@ -81,7 +81,7 @@ async def origin_discovery(domain: str) -> dict:
 
     host = normalize_target(domain)
     ctx = get_context()
-    result = await originmod.discover_origin(ctx.http, host)
+    result = await originmod.discover_origin(ctx.http, host, connect_pin=_connect_pin())
     return to_dict(result)
 
 
