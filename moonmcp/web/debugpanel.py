@@ -36,13 +36,17 @@ _PANELS: dict[str, tuple[str, list[str], str, str]] = {
         "Laravel Telescope", ["Telescope", "laravel_telescope"], "high",
         "Telescope dashboard exposed — leaks requests, queries, mail, secrets"),
     "/horizon": (
-        "Laravel Horizon", ["Horizon", "window.Horizon"], "medium",
+        # bare "Horizon" matched any product page / chart named Horizon; the SPA bootstrap
+        # token window.Horizon is distinctive to the real Laravel Horizon dashboard.
+        "Laravel Horizon", ["window.Horizon", "laravel-horizon"], "medium",
         "Horizon queue dashboard exposed"),
     "/actuator/env": (
         "Spring Boot Actuator /env", ["activeProfiles", "propertySources"], "high",
         "Actuator /env exposed — leaks environment and frequently credentials/keys"),
     "/actuator": (
-        "Spring Boot Actuator", ['"_links"', '"health"', '"self"'], "medium",
+        # a lone "_links"/"self" is ANY HAL/HATEOAS API; the actuator base lists its
+        # sub-endpoints as /actuator/<name> hrefs, which a generic HAL resource never carries.
+        "Spring Boot Actuator", ['/actuator/health', '/actuator/info', '/actuator/env'], "medium",
         "Actuator base exposed — enumerate /env, /heapdump, /mappings, /configprops"),
     "/__debug__/": (
         "Django Debug Toolbar", ["djDebug", "djdt"], "medium",

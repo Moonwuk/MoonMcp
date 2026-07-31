@@ -170,6 +170,25 @@ async def test_probe_vector_stores():
 
 
 @pytest.mark.asyncio
+async def test_probe_bitrix_needs_distinctive_token_not_just_russian_auth():
+    # a non-Bitrix Russian app that 200s /bitrix/admin/index.php with only 'авторизация'
+    # (no 'bitrix' token) must NOT be fingerprinted as exposed Bitrix admin.
+    def ru(url, headers):
+        if url.endswith("/bitrix/admin/index.php"):
+            return _R(200, "<html><h1>Вход — авторизация пользователя</h1></html>")
+        return _R(404, "")
+    res = await stacks.probe_stack(_Client(ru), "https://t.test/", include_rce_probes=True)
+    assert not any(f["product"] == "1C-Bitrix" for f in res.findings)
+    # a real Bitrix admin (body references /bitrix/ assets) is still flagged.
+    def bx(url, headers):
+        if url.endswith("/bitrix/admin/index.php"):
+            return _R(200, "<script src='/bitrix/js/main.js'></script> авторизация")
+        return _R(404, "")
+    res2 = await stacks.probe_stack(_Client(bx), "https://t.test/", include_rce_probes=True)
+    assert any(f["product"] == "1C-Bitrix" for f in res2.findings)
+
+
+@pytest.mark.asyncio
 async def test_probe_stack_clean_target_no_findings():
     res = await stacks.probe_stack(_Client(lambda url, h: _R(404, "not found")), "https://t.test/")
     assert res.findings == []

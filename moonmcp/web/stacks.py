@@ -160,7 +160,9 @@ async def _probe_druid(client, base, scope_check) -> dict | None:
 async def _probe_bitrix(client, base, scope_check) -> dict | None:
     r = await _fetch(client, base.rstrip("/") + "/bitrix/admin/index.php", scope_check)
     body = r.text(limit=20_000).lower() if r.status == 200 else ""
-    if r.status == 200 and ("bitrix" in body or "авторизац" in body):
+    # Require the distinctive "bitrix" token (the /bitrix/ asset paths + BITRIX cookies always
+    # carry it). The bare Russian auth stem "авторизац" alone matched any Russian login page.
+    if r.status == 200 and "bitrix" in body:
         return {"product": "1C-Bitrix", "severity": "low", "verdict": "exposed",
                 "issue": "Bitrix admin panel reachable",
                 "detail": "/bitrix/admin/ returned 200 — enumerate module CVEs (e.g. "
@@ -298,7 +300,11 @@ async def probe_stack(client: HttpClient, base_url: str, *,
         result.detected = match_stack_signatures(
             body=home.text(limit=100_000), headers=home.headers_map(),
             set_cookies=home.get_all("set-cookie"))
-    probes = _GATED_PROBES if include_rce_probes else _PASSIVE_PROBES
+    # Passive probes ALWAYS run (docstring contract); the gated ones run IN ADDITION when
+    # include_rce_probes is set. (Was `_GATED_PROBES if include_rce_probes else _PASSIVE_PROBES`,
+    # which SKIPPED every passive detection — Shiro/Bitrix/Chroma/Weaviate/Qdrant/Jeecg —
+    # whenever RCE probes were enabled: a silent false negative.)
+    probes = _ACTIVE_PROBES if include_rce_probes else _PASSIVE_PROBES
     for probe in probes:
         try:
             hit = await probe(client, base_url, scope_check)

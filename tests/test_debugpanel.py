@@ -75,6 +75,24 @@ async def test_generic_console_page_is_not_werkzeug():
 
 
 @pytest.mark.asyncio
+async def test_generic_horizon_word_and_hal_api_are_not_debug_panels():
+    # a product page whose text says "Horizon", and a generic HAL/HATEOAS API whose body is
+    # {"_links":{"self":...}}, must NOT be flagged as Laravel Horizon / Spring Actuator.
+    site = _Site({
+        "/horizon": (200, "<html><h1>Project Horizon</h1> our public roadmap</html>"),
+        "/actuator": (200, '{"_links":{"self":{"href":"https://api.example/users"}}}'),
+    })
+    assert await dp.probe_debug_panels(site, "https://x.test") == []
+    # the real dashboards (distinctive bootstrap token / actuator sub-endpoint hrefs) still flag.
+    site2 = _Site({
+        "/horizon": (200, "<html><script>window.Horizon = {basePath:'/horizon'}</script></html>"),
+        "/actuator": (200, '{"_links":{"health":{"href":"http://h/actuator/health"}}}'),
+    })
+    labels = {f["label"] for f in await dp.probe_debug_panels(site2, "https://x.test")}
+    assert "Laravel Horizon" in labels and "Spring Boot Actuator" in labels
+
+
+@pytest.mark.asyncio
 async def test_flags_db_admin_consoles():
     site = _Site({
         "/db/admin": (200, "<html><title>Mongo Express</title><div id='leftPanel'></div></html>"),
