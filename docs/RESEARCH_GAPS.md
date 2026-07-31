@@ -105,24 +105,24 @@ absent/`plain`), `none`/`HS256` signing, `http` issuer, `jwks_uri` host ≠ issu
 ### 3.2 JWT active attacks 🟡 (offline crack + alg=none forge SHIPPED)
 Implemented in `moonmcp/web/jwt.py` + the `jwt_crack` tool: offline HS256/384/512
 secret crack against a weak-secret wordlist, and an `alg:none` forgery of the token.
-Remaining: live acceptance test (replay the none/forged token) and `jku`/`x5u`→OAST.
+Remaining: live acceptance test (replay the none/forged token — drive it with `http_repeater`). **`jku`/`x5u`→OAST SHIPPED** as the `jwt_jku_probe` tool (`web/jwt.py`).
 - **HMAC secret crack (offline, 0 traffic)** — recompute HMAC over `header.payload` vs a weak-secret wordlist → key disclosure = critical. Source: TrustedSec "Keys to JWT Assessments"; hashcat `-m 16500`.
 - **`alg=none` acceptance** — replay a `none`/`None`/`NONE` token to an authed endpoint, diff status. CVE-2015-9235, CVE-2020-28042.
 - **`jku`/`x5u` SSRF** — set to a MoonMCP OAST canary, poll for callback. CVE-2018-0114.
 - **`kid` injection** — benign path/SQLi canary in `kid`, diff behavior.
 - Turkish (Eresus) variant: server decodes JWT with `verify_signature=False` — same test as `alg=none` against the callback.
 
-### 3.3 OAuth `redirect_uri` validation bypass 🟡
+### 3.3 OAuth `redirect_uri` validation bypass ✅ (SHIPPED as `oauth_redirect_probe`)
 Path tricks (`/callback/../evil`), subdomain/lookalike, **unescaped-dot regex** (`app.example.com` ≈ `app0example.com`). CVE-2024-52289 (Authentik), CVE-2023-6927 (Keycloak). Persian: Voorivex "Abusing a Fully Secured redirect_uri."
 - **Mapping:** OAuth-aware payload set in `web/redirect.py` applied to `redirect_uri` against a discovered `authorization_endpoint`; verdict when a 3xx `Location` lands on the canary carrying `code`/`token`.
 
-### 3.4 SAML endpoint + unsigned-assertion signal ❌
+### 3.4 SAML XML Signature Wrapping ✅ (SHIPPED as `saml_xsw_probe`)
 XML Signature Wrapping (XSW), comment/NameID truncation, XPath smuggling. CVE-2024-45409 (ruby-saml/GitLab, 9.8).
 - **Mapping (safe):** detect ACS/SSO paths + SP metadata; flag `WantAssertionsSigned="false"` / `AuthnRequestsSigned="false"`. Do not attempt live XSW.
 
-### 3.5 Cross-Site WebSocket Hijacking (`cswsh_probe`) ❌
+### 3.5 Cross-Site WebSocket Hijacking ✅ (SHIPPED — folded into `ws_probe`)
 WS handshake authed by cookie without `Origin` validation (CWE-1385).
-- **Mapping (handshake only):** send `Upgrade: websocket` twice — legit vs foreign `Origin` + session cookie; `101 Switching Protocols` for the foreign Origin = CSWSH candidate. Never sends frames.
+- **Mapping (handshake only):** send `Upgrade: websocket` twice — legit vs foreign `Origin` + session cookie; `101 Switching Protocols` for the foreign Origin = CSWSH candidate. Never sends frames. This is `ws_probe`'s flagship check (`web/websocket.py`, `_FOREIGN_ORIGIN`).
 
 ### 3.6 GraphQL batching / aliasing / field-suggestion / GET-CSRF 🟡
 CVE-2024-39895 (Directus alias DoS), Apollo GHSA-2p3c-p3qw-69r4.
@@ -149,7 +149,7 @@ differential/oracle detectors (reuse OAST + differential engine), **not** KB tex
 
 ### 🇨🇳 China (FreeBuf / Seebug / AnQuanKe)
 - **Apache Shiro-550** (CVE-2016-4437) ❌ — `rememberMe=1` → `rememberMe=deleteMe` fingerprint; then a safe **key oracle** over a ~30-key default list (absence of `deleteMe` = key found). Report recovered key; hand exploitation to Strix.
-- **Fastjson/Jackson autoType** (CVE-2017-18349, CVE-2022-25845) ❌ — POST `{"@type":"java.net.Inet4Address","val":"<oast>"}` (+ evasion twins) → **OAST DNS callback**.
+- **Fastjson/Jackson autoType** (CVE-2017-18349, CVE-2022-25845) ✅ SHIPPED as `fastjson_oast_probe` — POST `{"@type":"java.net.Inet4Address","val":"<oast>"}` (+ evasion twins) → **OAST DNS callback**.
 - **ThinkPHP 5 RCE** (CVE-2018-20062/CVE-2019-9082) ❌ — GET `?s=/index/\think\app/invokefunction&function=call_user_func_array&vars[0]=md5&vars[1][]=moonmcp` → deterministic md5 echo (benign proof).
 - **Nacos auth bypass** (CVE-2021-29441) ❌ — `User-Agent: Nacos-Server` on `/nacos/v1/auth/users` returns 200 JSON.
 - **OA suite** ❌ (CNVD/Seebug, PoC-verified): Yonyou NC `bsh.servlet.BshServlet`/`NCFindWeb`; Weaver e-cology `WorkflowServiceXml`; Seeyon `getSessionList.jsp`; Tongda `ispirit/*` upload+LFI; Landray `custom.jsp` SSRF + `treexml.tmpl`.

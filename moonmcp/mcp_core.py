@@ -4,9 +4,13 @@ the ``ToolBlocked`` exception.
 Extracted from ``server.py`` so tool families can live in their own
 ``moonmcp/tools/<family>.py`` modules without importing the server monolith (which
 would be circular). ``server.py`` and every tool module import ``mcp`` / ``safe_tool``
-from here. The context accessor (``get_context`` / ``_CTX``) and the scope-gating
-``active_tool`` decorator deliberately stay in ``server.py`` for now — the active
-tools and the tests that install a context still live there.
+from here.
+
+Scope is enforced HERE: the context accessor (``get_context`` / ``_CTX``), the
+``active_tool`` decorator, ``_require_scope`` and ``_scope_check`` all live in this
+module (see below), so every tool family gets the same scope gate by importing them
+from ``mcp_core``. Only the tool *definitions* live in ``server.py`` (the core
+management/orchestration tools) and ``moonmcp/tools/<family>.py``.
 """
 
 from __future__ import annotations
