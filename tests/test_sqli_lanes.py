@@ -11,6 +11,9 @@ def test_context_twins():
     assert probesmod.sqli_context_twins("value") == (probesmod.SQLI_TRUE, probesmod.SQLI_FALSE)
     ob_t, ob_f = probesmod.sqli_context_twins("order_by")
     assert "WHEN 1=1" in ob_t and "WHEN 1=2" in ob_f
+    # the ELSE branch must be an evaluable multi-row subquery (errors when taken), so a
+    # real DB produces a differential — sorting by a plain constant never does.
+    assert "SELECT 1 UNION SELECT 2" in ob_t and "SELECT 1 UNION SELECT 2" in ob_f
     # unknown context falls back to value
     assert probesmod.sqli_context_twins("weird") == (probesmod.SQLI_TRUE, probesmod.SQLI_FALSE)
 

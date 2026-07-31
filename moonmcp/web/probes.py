@@ -33,11 +33,21 @@ SQLI_FALSE = "1' AND '1'='2"
 
 # Context-specific boolean twins. In a value position the '1'='1' pair works; in an
 # ORDER BY / LIMIT identifier position it is meaningless (a quote often doesn't even
-# error there), so use a CASE expression whose numeric result (sort key / row count)
-# changes ONLY if the DB evaluates it — reflected literally it produces no differential.
+# error there), so use a CASE expression whose result changes ONLY if the DB evaluates
+# it — reflected literally it produces no differential.
+#
+# ORDER BY: sorting by a CONSTANT is a no-op, so a `THEN 1 ELSE 2` CASE returns the
+# SAME rows for true and false (byte-identical) even when injectable — the differential
+# lane sees nothing. Instead, the ELSE branch is a multi-row scalar subquery that a DB
+# errors on ("subquery returns more than one row"): a true condition takes THEN (a
+# constant sort key → normal result), a false condition takes ELSE (evaluated → runtime
+# error), giving a real status/length differential when — and only when — the expression
+# is actually evaluated. Reflected literally, both are inert strings → no differential.
+_ORDER_ELSE_ERR = "(SELECT 1 UNION SELECT 2)"
 SQLI_CONTEXT_TWINS: dict[str, tuple[str, str]] = {
     "value": (SQLI_TRUE, SQLI_FALSE),
-    "order_by": ("(CASE WHEN 1=1 THEN 1 ELSE 2 END)", "(CASE WHEN 1=2 THEN 1 ELSE 2 END)"),
+    "order_by": (f"(CASE WHEN 1=1 THEN 1 ELSE {_ORDER_ELSE_ERR} END)",
+                 f"(CASE WHEN 1=2 THEN 1 ELSE {_ORDER_ELSE_ERR} END)"),
     "limit": ("(CASE WHEN 1=1 THEN 8 ELSE 1 END)", "(CASE WHEN 1=2 THEN 8 ELSE 1 END)"),
 }
 

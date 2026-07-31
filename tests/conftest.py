@@ -507,17 +507,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path.startswith("/sqli-order"):
-            # VULNERABLE ORDER BY: the injected CASE expression is evaluated as a
-            # sort key, so WHEN 1=1 vs WHEN 1=2 yields different-length row sets.
+            # VULNERABLE ORDER BY, modelled like a REAL DB: the injected CASE is the
+            # sort key. A CONSTANT sort key is a no-op (full result set); the ELSE
+            # branch's multi-row scalar subquery errors ("subquery returns more than
+            # one row"). So WHEN 1=1 -> THEN (constant) -> 200 rows; WHEN 1=2 -> ELSE
+            # (subquery) -> 500 error. (The old fixture faked a length diff by keying on
+            # 1=1/1=2, which sorting by a constant can never actually produce.)
+            import re
             from urllib.parse import parse_qs, urlparse
             s = (parse_qs(urlparse(self.path).query).get("sort") or [""])[0]
-            if "WHEN 1=1" in s:
-                body = b"<html>rows: alice bob carol dave erin frank grace</html>"
-            elif "WHEN 1=2" in s:
-                body = b"<html>rows: grace</html>"
+            m = re.search(r"WHEN\s+1=(\d).*?THEN\s+(\S+)\s+ELSE\s+(\(SELECT.*?\))\s+END", s, re.I)
+            if m:
+                cond_true = m.group(1) == "1"
+                branch = m.group(2) if cond_true else m.group(3)
+                if branch.upper().startswith("(SELECT"):
+                    body = b"<html>error: subquery returns more than 1 row</html>"
+                    self.send_response(500)
+                else:
+                    body = b"<html>rows: alice bob carol dave erin frank grace</html>"
+                    self.send_response(200)
             else:
                 body = b"<html>rows: default</html>"
-            self.send_response(200)
+                self.send_response(200)
             self.end_headers()
             self.wfile.write(body)
             return
