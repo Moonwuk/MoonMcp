@@ -75,9 +75,19 @@ async def test_value_tampering_suppressed_when_field_not_validated():
 
 @pytest.mark.asyncio
 async def test_currency_swap_flags_accepted():
-    client = _Seq(_R(200, "x" * 300), _R(200, "x" * 300))
+    # baseline USD (200), invalid-code control REJECTED (400), then each swap accepted (200)
+    client = _SeqList([_R(200, "x" * 300), _R(400, "bad")] + [_R(200, "x" * 300)] * 10)
     res = await v.probe_currency_swap(client, "https://x.test/pay?currency=USD", "currency")
     assert res and all(f["kind"] == "currency_swap" for f in res)
+
+
+@pytest.mark.asyncio
+async def test_currency_swap_suppressed_when_field_not_validated():
+    # baseline AND the invalid-code control both accepted-like-baseline → the field is
+    # ignored, so every swap "acceptance" would be a false positive → bail.
+    client = _Seq(_R(200, "x" * 300), _R(200, "x" * 300))
+    res = await v.probe_currency_swap(client, "https://x.test/pay?currency=USD", "currency")
+    assert res == []
 
 
 @pytest.mark.asyncio

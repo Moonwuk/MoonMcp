@@ -107,6 +107,12 @@ async def probe_currency_swap(client, url: str, field: str, *, base_value: str =
     if base.status is None:
         return []
     blen = len(base.body)
+    # Negative control (like probe_value_tampering / probe_parameter_tampering): if an
+    # obviously-invalid currency code is accepted like the baseline, the field isn't
+    # validated at all — so every swap would be a false positive. Bail.
+    ctrl = await _baseline(client, url, field, "ZZ_invalid", m, scope_check)
+    if assess_tamper(base.status, blen, ctrl.status, len(ctrl.body)):
+        return []
     findings: list[dict] = []
     for cur in CURRENCY_SWAPS:
         if cur.upper() == base_value.upper():
