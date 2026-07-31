@@ -441,6 +441,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.path.startswith("/confirm-verbose-sqlerror"):
+            # Verbose-error mode: EVERY response (baseline included) carries a SQL-error
+            # banner, and the endpoint echoes the ?p= value. A pre-existing signature
+            # plus a benign reflection must NOT confirm a SQLi.
+            from urllib.parse import parse_qs, urlparse
+            v = (parse_qs(urlparse(self.path).query, keep_blank_values=True).get("p") or [""])[0]
+            body = (f"<html>debug: You have an error in your SQL syntax; "
+                    f"echo={v}</html>").encode("utf-8", "replace")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/reflect"):
             # Reflect the value of ?name= into the body (reflected-param signal) and
             # add a chunk of text when ?admin is present (length-change signal).

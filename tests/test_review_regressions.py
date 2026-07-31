@@ -60,6 +60,18 @@ def test_ratelimit_summary_block_from_first_request_is_not_throttling():
 
 
 @pytest.mark.asyncio
+async def test_confirm_finding_ignores_preexisting_error_signature(local_server, fresh_context):
+    # An endpoint in verbose-error mode carries a SQL-error banner in EVERY response
+    # (baseline included) and echoes the param. A benign reflection plus a pre-existing
+    # signature must NOT confirm a SQLi — only payload-INTRODUCED signatures count.
+    base, _ = local_server
+    res = await srv.confirm_finding(target=f"{base}/confirm-verbose-sqlerror", param="p",
+                                    payload="'", injection_class="sqli")
+    assert res["injection_matches"] == [], res     # baseline banner subtracted
+    assert res["verdict"] != "confirmed", res
+
+
+@pytest.mark.asyncio
 async def test_confirm_finding_reads_selfhost_oast(local_server, fresh_context):
     base, _ = local_server
     await srv.oast_selfhost(action="start", host="127.0.0.1")

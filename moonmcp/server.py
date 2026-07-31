@@ -3286,7 +3286,17 @@ async def confirm_finding(target: str, payload: str, param: str | None = None,
     length_delta = len(t.body) - len(b.body)
     timing_delta = (t.elapsed_ms or 0.0) - (b.elapsed_ms or 0.0)
 
-    hits = injmod.match_signatures(t.text(200_000), class_id=injection_class) if injection_class else []
+    hits: list[dict] = []
+    if injection_class:
+        # Only signatures the PAYLOAD INTRODUCES count. A signature already present in
+        # the baseline (an endpoint in verbose-error mode, or an SPA bundle carrying a
+        # "SyntaxError:"/SQL-error banner) is pre-existing, not payload-triggered —
+        # pairing it with an ordinary reflected echo would drive confirm.evaluate to a
+        # false "confirmed". Subtract baseline signatures, mirroring lfi_probe.
+        base_sigs = {(h["technology"], h["matched"])
+                     for h in injmod.match_signatures(b.text(200_000), class_id=injection_class)}
+        hits = [h for h in injmod.match_signatures(t.text(200_000), class_id=injection_class)
+                if (h["technology"], h["matched"]) not in base_sigs]
     hit_labels = [f"{h['class']}/{h['technology']}" for h in hits]
 
     interactions: list[dict] = []
