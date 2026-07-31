@@ -71,9 +71,10 @@ def format_sarif(findings: list[dict], *, version: str = "0.0.0") -> dict:
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
+            # informationUri is optional; an empty string violates SARIF's format:uri
+            # (rejected by strict validators, e.g. non-GitHub DAST pipelines), so omit it.
             "tool": {"driver": {
                 "name": TOOL_NAME,
-                "informationUri": "",
                 "version": version,
                 "rules": list(rules.values()),
             }},

@@ -47,6 +47,9 @@ def test_format_sarif_structure():
     assert r0["ruleId"] == "access-control"
     assert r0["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "https://api.example.com"
     assert {rule["id"] for rule in run["tool"]["driver"]["rules"]} == {"access-control", "info-leak"}
+    # informationUri, if present, must be a non-empty valid URI (never "") so strict
+    # SARIF validators outside GitHub don't reject the document.
+    assert run["tool"]["driver"].get("informationUri", "https://x") != ""
 
 
 @pytest.mark.asyncio
