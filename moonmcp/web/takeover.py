@@ -133,11 +133,24 @@ async def check_takeover(client: HttpClient, host: str, *, scope_check=None) -> 
             else:
                 result.detail = f"CNAME points at {name}; resolves — likely claimed"
         else:
-            hit = next((f for f in fps if f.lower() in body.lower()), None)
-            if hit:
-                result.matched_fingerprint = hit
+            # A SPECIFIC provider fingerprint confirms; a GENERIC not-found phrase
+            # (several providers list only one — Ngrok 'not found', Cargo '404 Not
+            # Found', Surge 'project not found') also appears on a LIVE provider page,
+            # so with the CNAME anchor it is a lead to verify, never a confirmation.
+            specific = next((f for f in fps
+                             if f and f.lower() not in _GENERIC_FPS and f.lower() in body.lower()), None)
+            generic = next((f for f in fps
+                            if f and f.lower() in _GENERIC_FPS and f.lower() in body.lower()), None)
+            if specific:
+                result.matched_fingerprint = specific
                 result.vulnerable = status != "notvuln"
                 result.detail = f"CNAME → {name} and body shows unclaimed-resource fingerprint — potential takeover"
+            elif generic:
+                result.matched_fingerprint = generic
+                result.vulnerable = False
+                result.confidence = "low"
+                result.detail = (f"CNAME → {name} but the only body match is a GENERIC not-found phrase "
+                                 f"('{generic}') — could be a live page; verify ownership before claiming")
             else:
                 result.detail = f"CNAME points at {name} but no unclaimed fingerprint in body"
         return result

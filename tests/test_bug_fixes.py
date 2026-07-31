@@ -138,6 +138,32 @@ async def test_takeover_body_only_hit_is_low_confidence_lead(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_takeover_generic_fp_with_live_cname_is_only_a_lead(monkeypatch):
+    # CNAME points at a provider whose ONLY fingerprint is a generic 'not found', the
+    # record RESOLVES (live), and the page contains 'not found'. That is a live page,
+    # not a confirmed takeover — step 2 must not confirm on a generic phrase.
+    _patch_resolve(monkeypatch, records={"CNAME": ["myapp.ngrok.io"]},
+                   canonical="myapp.ngrok.io", a=["1.2.3.4"])
+    res = await takeover.check_takeover(
+        _Client(200, "<html><body>Search results: not found</body></html>"), "sub.example.com")
+    assert res.service == "Ngrok"
+    assert res.vulnerable is False
+    assert res.confidence == "low"
+
+
+@pytest.mark.asyncio
+async def test_takeover_specific_fp_with_cname_confirms(monkeypatch):
+    # A SPECIFIC provider fingerprint (not a generic phrase) with a matching CNAME
+    # still confirms.
+    _patch_resolve(monkeypatch, records={"CNAME": ["acme.bitbucket.io"]},
+                   canonical="acme.bitbucket.io", a=["1.2.3.4"])
+    res = await takeover.check_takeover(_Client(404, "Repository not found"), "sub.example.com")
+    assert res.service == "Bitbucket"
+    assert res.vulnerable is True
+    assert res.matched_fingerprint == "Repository not found"
+
+
+@pytest.mark.asyncio
 async def test_takeover_dangling_cname_detected(monkeypatch):
     # Dangling CNAME → NXDOMAIN target with no A/AAAA: querying CNAME first must
     # preserve the record so the takeover is flagged.
