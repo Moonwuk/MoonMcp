@@ -55,6 +55,24 @@ def _looks_like_html(text: str) -> bool:
     return head.startswith("<!doctype html") or "<html" in head
 
 
+def _validate_special(path: str, text: str) -> bool:
+    """Positive format validation for the VCS files whose ``_CHECKS`` signature is
+    empty — they have no single substring but a recognisable structure. Without this,
+    an empty signature confirmed on ANY 200 body (a soft-404 / SPA try_files fallback),
+    reporting an exposed .git on essentially every site."""
+
+    if path == "/.git/logs/HEAD":
+        first = text.lstrip().split("\n", 1)[0]
+        return bool(re.match(r"[0-9a-f]{40} [0-9a-f]{40} ", first))
+    if path == "/.hg/requires":
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        return bool(lines) and all(re.fullmatch(r"[a-z0-9][a-z0-9._-]*", ln) for ln in lines[:20])
+    if path == "/.svn/entries":
+        first = text.lstrip().split("\n", 1)[0].strip()
+        return first.isdigit() or first.startswith("<?xml")
+    return False
+
+
 async def check_exposure(client: HttpClient, base_url: str, *, scope_check=None) -> ExposureResult:
     result = ExposureResult(base_url=base_url)
     for path, (signature, label) in _CHECKS.items():
@@ -63,11 +81,15 @@ async def check_exposure(client: HttpClient, base_url: str, *, scope_check=None)
         if r.status != 200 or not r.body:
             continue
         text = r.text(limit=8000)
-        # A soft-404 that returns 200 with an HTML page is not a real exposure.
-        if _looks_like_html(text) and signature not in ("<", ""):
+        # A VCS/config file is never an HTML page, so an HTML body (a soft-404 / SPA
+        # try_files fallback) is never a real exposure — regardless of signature.
+        if _looks_like_html(text):
             confirmed = False
+        elif signature:
+            confirmed = (signature in text) or (signature.encode() in r.body[:64])
         else:
-            confirmed = (signature == "") or (signature in text) or (signature.encode() in r.body[:64])
+            # Empty-signature files require a positive format check, not just a 200.
+            confirmed = _validate_special(path, text)
         entry = ExposedFile(path=path, label=label, status=r.status, size=len(r.body), confirmed=confirmed)
         if confirmed and path == "/.git/config":
             m = _REMOTE_URL_RE.search(text)
