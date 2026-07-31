@@ -101,8 +101,21 @@ class Resp:
     session: bool = False
 
 
+def _len_tol(*lengths: int) -> int:
+    """Per-request length jitter to tolerate (Apollo tracing durations, request/trace
+    ids, timestamps): ~5% of the body, floored at 16 bytes. GraphQL responses are
+    MORE dynamic than typical HTML, so a byte-exact length compare false-negatived a
+    genuine ``{"$ne":null}`` auth-bypass the moment any per-request field varied. A
+    real flip must exceed this floor (the ``data``/``session``/status signals below
+    do not depend on length, and the "more records" flip already clears a larger bar).
+    """
+
+    return max(16, max(lengths) // 20)
+
+
 def _stable(a: Resp, b: Resp) -> bool:
-    return (a.status == b.status and a.length == b.length
+    # Length within the jitter floor (not byte-exact); status/data/session exact.
+    return (a.status == b.status and abs(a.length - b.length) <= _len_tol(a.length, b.length)
             and a.data == b.data and a.session == b.session)
 
 

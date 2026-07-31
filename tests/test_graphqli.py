@@ -83,6 +83,25 @@ def test_assess_operator_directional_status_and_cookie_flips():
     assert hit and hit["strong"] and any("cookie" in r for r in hit["reasons"])
 
 
+def test_assess_operator_tolerates_response_jitter():
+    # Apollo tracing / request-id jitter: the two sends of each arm differ by a few
+    # bytes. A byte-exact _stable dropped a genuine {"$ne":null} data flip here; the
+    # jitter floor keeps it (regression for the byte-exact-length false negative).
+    control = (_r(200, 300, data=False), _r(200, 308, data=False))   # ~8B jitter, no data
+    twin = (_r(200, 900, data=True), _r(200, 912, data=True))        # data flip + jitter
+    hit = gq.assess_operator(control, twin)
+    assert hit and hit["strong"] is True
+    assert any("auth/record flip" in r for r in hit["reasons"])
+
+
+def test_stable_length_tolerance():
+    # within the jitter floor (max(16, len//20)) → stable; a real flip must exceed it
+    assert gq._stable(_r(200, 1000, data=True), _r(200, 1040, data=True)) is True   # 40 <= 50
+    assert gq._stable(_r(200, 1000, data=True), _r(200, 1200, data=True)) is False  # 200 > 50
+    # status/data/session still compared exactly, regardless of length closeness
+    assert gq._stable(_r(200, 1000, data=True), _r(200, 1001, data=False)) is False
+
+
 def test_mongoose_casterror_signature_added_to_kb():
     hits = inj.match_signatures("CastError: Cast to string failed for value \"[object Object]\"",
                                 class_id="nosqli")
