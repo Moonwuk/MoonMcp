@@ -155,6 +155,32 @@ class _DecorativeRefIDORApp:
         return _R(404, "not found")
 
 
+class _DynSoft404IDORApp:
+    """Vulnerable horizontal IDOR + a DYNAMIC soft-404: absent ids return a 200 shell whose
+    length varies per request (a 'recommended for you' block), real ids return distinct orders.
+    The byte-unstable control can't PROVE a shell, so a real object must not be suppressed."""
+
+    def __init__(self):
+        self._n = 0
+
+    async def fetch(self, url, *, method="GET", headers=None, body=None, suppress_auth=False, **kw):
+        m = re.search(r"/orders/(\d+)", url)
+        oid = m.group(1) if m else None
+        if oid in ("99", "100", "101"):
+            return _R(200, f'{{"order":{oid},"buyer":"user{oid}","total":{oid}0}}')
+        self._n += 1                                   # dynamic soft-404 shell: varying length
+        return _R(200, "Order not found. Recommended for you: " + "x" * (self._n % 40))
+
+
+@pytest.mark.asyncio
+async def test_dynamic_soft404_idor_is_surfaced_not_missed():
+    # regression (HIGH FN): a jittery soft-404 both widens the length band and defeats content
+    # comparison; the redesign must not silently suppress the real IDOR — an unprovable shell is
+    # surfaced (low-confidence / soft_404_suspected), never dropped.
+    res = await az.probe_bola(_DynSoft404IDORApp(), "https://x.test/orders/100", b_headers={"Cookie": "b=1"})
+    assert res["findings"], "real IDOR on a dynamic soft-404 endpoint must not be silently missed"
+
+
 @pytest.mark.asyncio
 async def test_decorative_leading_ref_does_not_suppress_object_sweep():
     # regression: the control only probed refs[0] (the year) and globally suppressed the
