@@ -243,17 +243,35 @@ def _host_like_tokens(args: list[str]) -> list[str]:
 
     import ipaddress
 
+    def _loopback_alias(h: str) -> bool:
+        # Well-known loopback hostnames carry no dot+TLD, so `_HOSTISH_RE` misses them,
+        # yet they are prime SSRF-to-loopback scan targets (`nmap … localhost`). Extract
+        # them explicitly. (Arbitrary single-label names are NOT extracted — that would
+        # scope-block benign scanner values like `-tags redis,cve`.)
+        hl = h.strip().lower().rstrip(".")
+        return (hl in ("localhost", "ip6-localhost", "localhost.localdomain")
+                or hl.endswith(".localhost"))
+
     # Expand comma/whitespace-delimited values so an embedded target (e.g.
     # `-u in-scope.example.com,169.254.169.254`) is scope-checked, not skipped whole.
     # `_HOSTISH_RE` requires a dot+TLD and IPs are matched separately, so tag/status
-    # lists (`-tags redis,mongodb`, `-mc 200,301`) never look host-like.
+    # lists (`-tags redis,mongodb`, `-mc 200,301`) never look host-like. A value glued
+    # to a flag with '=' (goflags-style `-u=value`, `--target=value`) is the real
+    # scope-relevant token — pull it out, else the URL/IP rides to the scanner
+    # completely unchecked (an SSRF hole past the scope gate).
     expanded: list[str] = []
     for tok in args:
         t = tok.strip()
-        if t and not t.startswith("-") and ("," in t or " " in t):
+        if t.startswith("-"):
+            if "=" not in t:
+                continue  # a bare flag carries no target
+            t = t.split("=", 1)[1].strip()
+            if not t or t.startswith("-"):
+                continue
+        if "," in t or " " in t:
             expanded.extend(p for p in re.split(r"[,\s]+", t) if p)
-        else:
-            expanded.append(tok)
+        elif t:
+            expanded.append(t)
 
     found: list[str] = []
     for tok in expanded:
@@ -289,6 +307,9 @@ def _host_like_tokens(args: list[str]) -> list[str]:
             if not host_only.isdigit() or int(host_only) > 0x00FFFFFF:
                 found.append(t)
                 continue
+        if _loopback_alias(host_only):
+            found.append(t)
+            continue
         if _HOSTISH_RE.match(t) and host_only.rsplit(".", 1)[-1].lower() not in _NON_TLD:
             found.append(t)
     return found

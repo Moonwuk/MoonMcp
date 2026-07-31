@@ -48,6 +48,29 @@ def test_host_like_tokens_catches_obfuscated_ips_not_status_codes():
     assert tk(["-mc", "200,301,404", "-rl", "150"]) == []
 
 
+def test_host_like_tokens_extracts_flag_glued_target():
+    # goflags-style `-u=value` / `--target=value`: the URL/IP glued after '=' must be
+    # extracted and scope-checked, else it rides to the scanner unchecked (SSRF).
+    tk = srv._host_like_tokens
+    assert "http://169.254.169.254/latest/meta-data/" in tk(
+        ["-u=http://169.254.169.254/latest/meta-data/"])
+    assert "169.254.169.254" in tk(["--target=169.254.169.254"])
+    # comma-glued values after '=' are still split apart
+    got = tk(["-l=in-scope.example.com,127.0.0.1"])
+    assert "127.0.0.1" in got
+    # a bare flag (no '=') still carries no target
+    assert tk(["-silent", "-json"]) == []
+
+
+def test_host_like_tokens_catches_loopback_aliases():
+    # non-dotted loopback hostnames slip past _HOSTISH_RE but are prime SSRF targets
+    tk = srv._host_like_tokens
+    assert "localhost" in tk(["-p6379,27017", "localhost"])
+    assert "foo.localhost" in tk(["foo.localhost"])
+    # arbitrary single-label tags are NOT extracted (would break `-tags redis,cve`)
+    assert tk(["-tags", "redis,cve,mongodb"]) == []
+
+
 @pytest.mark.asyncio
 async def test_run_scanner_refuses_smuggled_obfuscated_ip(monkeypatch):
     # The smuggling exploit: one in-scope token satisfies the no_target guard while an
@@ -59,6 +82,21 @@ async def test_run_scanner_refuses_smuggled_obfuscated_ip(monkeypatch):
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
     monkeypatch.setattr(mcp_core, "_CTX", ctx)
     out = await srv.run_scanner(tool="nmap", args=["scanme.example.com", "2852039166"])
+    assert out.get("error") == "out_of_scope", out
+
+
+@pytest.mark.asyncio
+async def test_run_scanner_refuses_flag_glued_metadata_ssrf(monkeypatch):
+    # `-u=http://169.254.169.254/...` glues the target to the flag: the metadata URL
+    # must be extracted and scope-checked, not passed to the CLI unchecked (SSRF).
+    import dataclasses as _dc
+    ctx = build_context()
+    ctx.scope.add("example.com")
+    ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
+    monkeypatch.setattr(mcp_core, "_CTX", ctx)
+    out = await srv.run_scanner(
+        tool="httpx",
+        args=["-u=http://169.254.169.254/latest/meta-data/", "example.com"])
     assert out.get("error") == "out_of_scope", out
 
 
