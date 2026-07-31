@@ -36,7 +36,8 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _env_float(name: str, default: float, minimum: float | None = None) -> float:
+def _env_float(name: str, default: float, minimum: float | None = None,
+               fallback_on_invalid: bool = False) -> float:
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -45,9 +46,12 @@ def _env_float(name: str, default: float, minimum: float | None = None) -> float
     except ValueError:
         return default
     # Clamp nonsensical values (e.g. a negative timeout that would break socket ops)
-    # to a safe floor rather than propagating them into the networking layer.
+    # to a safe floor rather than propagating them into the networking layer. When
+    # `fallback_on_invalid` is set, a below-floor value falls back to the safe DEFAULT
+    # instead of the floor — for settings whose floor is a dangerous sentinel (rate
+    # limit, where 0 == "unlimited"): a negative must never become "no rate cap".
     if minimum is not None and val < minimum:
-        return minimum
+        return default if fallback_on_invalid else minimum
     return val
 
 
@@ -136,7 +140,7 @@ def load_settings() -> Settings:
         allow_intrusive=_env_bool("MOONMCP_ALLOW_INTRUSIVE", False),
         block_private=_env_bool("MOONMCP_BLOCK_PRIVATE", True),
         timeout=_env_float("MOONMCP_TIMEOUT", 10.0, minimum=0.1),
-        rate_limit=_env_float("MOONMCP_RATE_LIMIT", 10.0, minimum=0.0),
+        rate_limit=_env_float("MOONMCP_RATE_LIMIT", 10.0, minimum=0.0, fallback_on_invalid=True),
         max_concurrency=_env_int("MOONMCP_MAX_CONCURRENCY", 20, minimum=1),
         user_agent=os.environ.get("MOONMCP_USER_AGENT", _DEFAULT_USER_AGENT),
         follow_redirects=_env_bool("MOONMCP_FOLLOW_REDIRECTS", True),

@@ -15,6 +15,24 @@ def test_env_float_clamps_below_minimum(monkeypatch):
     assert _env_float("MM_T", 10.0, minimum=0.1) == 10.0
 
 
+def test_env_float_fallback_on_invalid_avoids_dangerous_floor(monkeypatch):
+    # rate_limit's floor is 0.0 == "unlimited"; a negative must fall back to the safe
+    # DEFAULT, never coerce into "no rate cap".
+    monkeypatch.setenv("MM_R", "-1")
+    assert _env_float("MM_R", 10.0, minimum=0.0, fallback_on_invalid=True) == 10.0
+    # an explicit 0 is a deliberate "unlimited" and is still honored
+    monkeypatch.setenv("MM_R", "0")
+    assert _env_float("MM_R", 10.0, minimum=0.0, fallback_on_invalid=True) == 0.0
+    # a normal positive value passes through
+    monkeypatch.setenv("MM_R", "5")
+    assert _env_float("MM_R", 10.0, minimum=0.0, fallback_on_invalid=True) == 5.0
+
+
+def test_load_settings_negative_rate_limit_falls_back(monkeypatch):
+    monkeypatch.setenv("MOONMCP_RATE_LIMIT", "-3")
+    assert load_settings().rate_limit == 10.0   # not 0.0 (which would disable limiting)
+
+
 def test_env_int_clamps_below_minimum(monkeypatch):
     monkeypatch.setenv("MM_I", "0")
     assert _env_int("MM_I", 20, minimum=1) == 1
