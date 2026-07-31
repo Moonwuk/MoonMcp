@@ -209,10 +209,12 @@ async def xss_probe(target: str, param: str, method: str = "GET") -> dict:
     r = await ctx.http.fetch(tu, method=m, body=tb, follow_redirects=False, scope_check=_scope_check())
     reflections = xssmod.analyze(r.text(500_000), canary)
     injectable = [refl for refl in reflections if refl.injectable]
-    contexts = [{"context": refl.context, "unescaped": "".join(sorted(refl.unescaped)),
-                 "injectable": refl.injectable, "note": refl.note} for refl in reflections]
+    contexts = [{"context": refl.context, "element": refl.element, "attr": refl.attr,
+                 "unescaped": "".join(sorted(refl.unescaped)), "injectable": refl.injectable,
+                 "note": refl.note} for refl in reflections]
+    # drive the verdict off the specific injectable hits ONLY (not also `reflected`, which
+    # would double-count the same single signal into confirm.evaluate).
     verdict = confirmmod.evaluate(
-        reflected=bool(injectable),
         injection_hits=[f"xss/{refl.context}" for refl in injectable])
     out: dict[str, Any] = {"target": url, "param": param, **verdict, "contexts": contexts}
     if injectable:

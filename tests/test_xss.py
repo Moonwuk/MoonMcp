@@ -33,15 +33,17 @@ def test_attr_unquoted_needs_gt_to_close_tag():
     assert r.injectable and ">" in r.unescaped
 
 
-def test_script_raw_is_injectable_on_reflection():
-    r = _ctx(f"<script>var q = {C}<>\"'{C};</script>")["script_raw"]
-    assert r.injectable                                   # raw JS: no breakout needed
+def test_script_unescaped_lt_is_injectable():
+    # a <script> is RAWTEXT: an unescaped '<' allows the </script> break-out.
+    r = _ctx(f"<script>var q = '{C}<>\"'{C}';</script>")["rawtext"]
+    assert r.injectable and r.element == "script" and "<" in r.unescaped
 
 
-def test_script_string_injectable_when_lt_survives():
-    # inside a "-quoted JS string; an unescaped '<' allows the </script> break-out.
-    r = _ctx(f'<script>var q = "{C}<>"\'{C}";</script>')["script_string_double"]
-    assert r.injectable and "<" in r.unescaped
+def test_title_unescaped_lt_is_injectable_via_end_tag():
+    # RCDATA: a raw '<' in <title> is genuinely injectable via </title><script> (a well-behaved
+    # app HTML-encodes it — see the encoded test below — so this is a TRUE positive, not an FP).
+    r = _ctx(f"<title>Results for {C}<>\"'{C}</title>")["rawtext"]
+    assert r.injectable and r.element == "title" and "<" in r.unescaped
 
 
 # -- SAFE: reflected but the required metachar is escaped -> NOT injectable ---
@@ -55,18 +57,53 @@ def test_attr_double_encoded_quote_is_not_injectable():
     assert not r.injectable and '"' not in r.unescaped
 
 
-def test_script_string_backslash_escaped_quote_is_not_injectable():
-    # the "-quoted JS string reflects a backslash-escaped \" and a JS-unicode-escaped <.
-    # The literal '"' byte is present (as \") but there is NO literal '<', so the </script>
-    # route is closed and we must NOT flag — the backslash-escaped quote is inert.
+def test_script_template_island_with_encoded_specials_is_not_injectable():
+    # regression (was a FP: empty requirement set): a <script type=text/template> data island
+    # that HTML-encodes every special must NOT be flagged (nothing survived → no </script>).
+    r = _ctx(f'<script type="text/template">{C}&lt;&gt;&quot;&#39;{C}</script>')["rawtext"]
+    assert not r.injectable and r.unescaped == set()
+
+
+def test_script_encoded_lt_is_not_injectable():
+    # a <script> that JS-unicode-escapes '<' (\\u003c) has no literal '<' → </script> closed.
     mid = "\\u003c\\u003e" + '\\"' + "'"        # literal: < > \" '
-    r = _ctx(f'<script>var q = "{C}{mid}{C}";</script>')["script_string_double"]
+    r = _ctx(f'<script>var q = "{C}{mid}{C}";</script>')["rawtext"]
     assert not r.injectable and "<" not in r.unescaped
 
 
 def test_html_comment_reported_but_not_auto_injectable():
-    r = _ctx(f"<!-- note: {C}<>\"'{C} -->")["html_comment"]
-    assert r.context == "html_comment" and not r.injectable   # needs '-->', which we don't probe
+    r = _ctx(f"<!-- note: {C}<>\"'{C} -->")["comment"]
+    assert r.context == "comment" and not r.injectable   # needs '-->', which we don't probe
+
+
+def test_url_attribute_value_start_is_injectable_lead():
+    # reflection AT THE START of an href value → a javascript: scheme injects with no specials.
+    r = _ctx(f'<a href="{C}<>"\'{C}">x</a>')["url"]
+    assert r.injectable and r.attr == "href"
+
+
+def test_reflection_in_middle_of_url_value_is_normal_attr_not_url():
+    # reflection NOT at the value start (a fixed path prefix) is a normal "-quoted attribute,
+    # injectable only via '"' — NOT a javascript: scheme.
+    ctx = _ctx(f'<a href="/search?q={C}&lt;&gt;&quot;&#39;{C}">x</a>')
+    assert "url" not in ctx
+    assert not ctx["attr_double"].injectable          # quote is encoded → safe
+
+
+def test_equals_inside_quoted_value_is_not_mistaken_for_unquoted():
+    # regression (was a FP): a '=' inside a "-quoted value must not restart attribute parsing
+    # and misclassify a double-quoted attr as unquoted.
+    r = _ctx(f'<input value="a=b&amp;c={C}&lt;&gt;&quot;&#39;{C}">')["attr_double"]
+    assert not r.injectable                            # encoded quote → safe, and context is attr_double
+
+
+def test_odd_canary_count_does_not_mispair_into_page_markup():
+    # regression (was a FP): a fully-escaping app whose canary reflects an ODD number of times
+    # (one reflection truncated) must not pair distant canaries and count the page's OWN markup
+    # (</p><a href=...>) as surviving specials.
+    body = (f'<p>you searched for: {C}&lt;&gt;</p>\n<a href="/home">back</a>\n'
+            f'<span>{C}&lt;&gt;&quot;&#39;{C}</span>')
+    assert all(not r.injectable for r in xss.analyze(body, C))
 
 
 def test_no_reflection_returns_nothing():
