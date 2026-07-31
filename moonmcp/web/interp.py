@@ -23,6 +23,10 @@ than any of those probes' own verdicts.
 
 from __future__ import annotations
 
+import html
+import json
+from urllib.parse import quote
+
 # (name, template ({c} = the control marker), suggested next tools, what
 # "interpreted" means for this marker).
 MARKERS: list[tuple[str, str, tuple[str, ...], str]] = [
@@ -53,33 +57,52 @@ def build_probe(control: str, template: str) -> str:
 _DUPLICABLE_TRAILERS = "\\'\"{}"
 
 
+def _reencodings(sent: str) -> list[str]:
+    """The ways a correctly-behaving endpoint might *re-serialize* ``sent`` on echo
+    without interpreting its special characters: percent-encoded (a raw still-encoded
+    query reflected into a canonical `<link>`/`og:url`/form action), JSON-string-
+    escaped (`\\`->`\\\\`, NUL->`\\u0000`), or HTML-entity-escaped (`'`->`&#x27;`).
+    Only forms that actually changed something are returned (a no-op re-encoding is
+    just the decoded echo, handled separately)."""
+
+    forms = [quote(sent, safe=""), json.dumps(sent)[1:-1], html.escape(sent, quote=True)]
+    return [f for f in forms if f != sent]
+
+
 def assess_marker(control: str, template: str, body: str, *, window: int = 40) -> dict:
-    """Does *body* show evidence the marker's special character(s) were consumed
-    or transformed, rather than passed through literally? (pure)
+    """Does *body* show evidence the marker's special character(s) were consumed or
+    transformed by a *sink* (interpreted), rather than merely echoed — possibly
+    re-serialized by the response format? (pure)
 
-    Locates the first occurrence of *control* in *body* and checks whether the
-    text starting there matches the exact literal payload that was sent. If
-    *control* isn't found at all, the marker's fate is unobservable (not a
-    signal either way).
+    Locates the first occurrence of *control*; if absent, the marker's fate is
+    unobservable. Then classifies the echo:
 
-    A plain `startswith` can't see a special trailing character that gets
-    DUPLICATED right after the sent value (e.g. `'` -> `''`, common quote-
-    escaping) — the original prefix stays intact regardless of what follows,
-    so a mismatch-only check would miss it. When the sent payload's last
-    character is one of the common escape/structural characters, also flag a
-    literal repeat of that character immediately after as interpreted."""
+    * A faithful **re-encoding** of the whole value (percent / JSON / HTML) is NOT
+      interpretation — the special chars were reproduced, just serialized. This is
+      the fix for a benign reflecting/JSON-echo endpoint (which reflects `%5C`, or
+      JSON-doubles `\\`->`\\\\`, or turns `'`->`&#x27;`) otherwise reaching the top
+      "corroborated" verdict on a non-injectable target.
+    * A faithful **decoded** echo is not interpretation either — UNLESS the trailing
+      special char is DOUBLED in a way no response format produces (SQL `'`->`''`;
+      JSON's `\\`->`\\\\` was already absorbed as a re-encoding above).
+    * Anything else (the char stripped, a `/./` collapsed, a NUL truncation, a
+      sink-level escape) means the value was interpreted."""
 
     sent = build_probe(control, template)
     idx = body.find(control)
     if idx < 0:
         return {"observed": False, "interpreted": False}
-    slice_ = body[idx: idx + len(sent) + window]
-    if not slice_.startswith(sent):
-        return {"observed": True, "interpreted": True}
-    trailing = sent[-1]
-    if trailing in _DUPLICABLE_TRAILERS and slice_[len(sent): len(sent) + 1] == trailing:
-        return {"observed": True, "interpreted": True}
-    return {"observed": True, "interpreted": False}
+    reencs = _reencodings(sent)
+    maxlen = max([len(sent), *(len(f) for f in reencs)]) + window
+    slice_ = body[idx: idx + maxlen]
+    if any(slice_.startswith(f) for f in reencs):
+        return {"observed": True, "interpreted": False}   # response-format re-encoding, benign
+    if slice_.startswith(sent):
+        trailing = sent[-1]
+        if trailing in _DUPLICABLE_TRAILERS and slice_[len(sent): len(sent) + 1] == trailing:
+            return {"observed": True, "interpreted": True}   # sink-level doubling (e.g. SQL '')
+        return {"observed": True, "interpreted": False}
+    return {"observed": True, "interpreted": True}           # stripped / normalized / escaped
 
 
 def suggest_next(hits: list[dict]) -> list[str]:

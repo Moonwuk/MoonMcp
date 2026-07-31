@@ -623,6 +623,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/interp-jsonecho"):
+            # SAFE but re-serializing: a JSON API that reflects the decoded value
+            # JSON-STRING-escaped (\ -> \\, NUL -> \u0000). That is response-format
+            # encoding, NOT sink interpretation — the marker prober must NOT read the
+            # doubled backslash / \u0000 as "interpreted" and reach "corroborated".
+            import json as _json
+            from urllib.parse import parse_qs, urlparse
+            v = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            body = _json.dumps({"q": v}).encode("utf-8", "replace")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/sqli-mb"):
             # VULNERABLE charset mismatch: a multibyte lead byte + quote breaks out
             # of the (naive addslashes) escaping, so it errors where plain %27 doesn't.

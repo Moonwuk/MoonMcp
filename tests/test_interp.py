@@ -1,5 +1,7 @@
 """interp_probe — generic differential "interpretation" prober, pure + e2e."""
 
+import json
+
 import pytest
 
 from moonmcp import server as srv
@@ -56,6 +58,29 @@ def test_assess_marker_brace_stripped_is_interpreted():
     assert res["interpreted"] is True
 
 
+def test_assess_marker_json_reencoding_not_interpreted():
+    # A JSON API reflects the value JSON-string-escaped: backslash -> \\ and NUL ->
+    # \u0000. That is response-format serialization, NOT sink interpretation — must
+    # NOT be flagged (regression for the benign-JSON-echo false "corroborated").
+    bs = dict((n, t) for n, t, *_ in interpmod.MARKERS)["backslash"]
+    body = json.dumps({"q": interpmod.build_probe("ctl123", bs)})   # ctl123\ -> "...ctl123\\"
+    assert interpmod.assess_marker("ctl123", bs, body)["interpreted"] is False
+    nb = dict((n, t) for n, t, *_ in interpmod.MARKERS)["null_byte"]
+    body = json.dumps({"q": interpmod.build_probe("ctl123", nb)})   # NUL -> \u0000
+    assert interpmod.assess_marker("ctl123", nb, body)["interpreted"] is False
+
+
+def test_assess_marker_percent_reflection_not_interpreted():
+    # A page reflecting the raw still-percent-encoded query (canonical <link>/og:url):
+    # the backslash comes back as %5C, the quote as %27 — reproduced, not interpreted.
+    from urllib.parse import quote
+    for key in ("backslash", "quote", "brace", "path_dot_segment"):
+        tmpl = dict((n, t) for n, t, *_ in interpmod.MARKERS)[key]
+        sent = interpmod.build_probe("ctl123", tmpl)
+        body = f'<link rel="canonical" href="/s?q={quote(sent, safe="")}">'
+        assert interpmod.assess_marker("ctl123", tmpl, body)["interpreted"] is False, key
+
+
 def test_assess_marker_not_observed_when_control_absent():
     _name, template, _tools, _desc = interpmod.MARKERS[0]
     res = interpmod.assess_marker("ctl123", template, "<html>unrelated content</html>")
@@ -105,3 +130,14 @@ async def test_interp_probe_none_on_safe_endpoint(local_server, fresh_context):
     assert res["verdict"] == "none"
     assert res["corroborating_markers"] == 0
     assert res["suggested_next"] == []
+
+
+@pytest.mark.asyncio
+async def test_interp_probe_not_corroborated_on_json_echo(local_server, fresh_context):
+    # A benign JSON API that reflects the value JSON-string-escaped must NOT reach the
+    # top "corroborated" verdict — the \\ / \u0000 doubling is serialization, not a
+    # sink interpreting the marker. Regression for the false-positive lead.
+    base, _ = local_server
+    res = await srv.interp_probe(target=f"{base}/interp-jsonecho", param="q")
+    assert res["verdict"] != "corroborated", res
+    assert res["corroborating_markers"] < 2, res
