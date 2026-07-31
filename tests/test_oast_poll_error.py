@@ -66,6 +66,18 @@ async def test_collect_oast_clean_no_hit_has_no_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 404, 500, 502])
+async def test_collect_oast_reports_http_error_status(status):
+    # A non-2xx poll response is NOT a clean no-hit: the channel could not be read
+    # (auth expired, token unknown, server down). Parsing its error body would yield
+    # [] and render as "no callback fired" — the exact silent miss to avoid.
+    hits, err = await srv._collect_oast(
+        _ctx(_FakeHttp(lambda: _FakeResp(status, "<html>error</html>"))), "tok")
+    assert hits == []
+    assert err and f"HTTP {status}" in err
+
+
+@pytest.mark.asyncio
 async def test_collect_oast_no_poll_target_is_not_an_error():
     hits, err = await srv._collect_oast(
         _ctx(_FakeHttp(lambda: _FakeResp(200)), poll=None), "tok")

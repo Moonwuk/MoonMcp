@@ -274,6 +274,12 @@ async def _collect_oast(ctx, token: str) -> tuple[list[dict], str | None]:
         return [], f"poll request failed: {type(exc).__name__}: {exc}"
     if r.status is None:
         return [], f"poll request failed: {r.error or 'unreachable'}"
+    if r.status >= 400:
+        # A 401/403/404/5xx poll response is NOT an empty interaction list — the
+        # channel could not be read (auth expired, token unknown, server down). Parsing
+        # the error body would yield [] and render as a clean no-hit, the exact silent
+        # miss this helper exists to prevent. Surface it as a poll failure instead.
+        return [], f"poll request failed: HTTP {r.status}"
     return oastmod.parse_interactions(r.text()), None
 
 
