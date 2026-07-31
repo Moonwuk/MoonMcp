@@ -50,11 +50,12 @@ def test_recover_files_handles_missing_content():
 
 # -- recover via fake client ------------------------------------------------
 class _R:
-    def __init__(self, status, body="", final_url=""):
+    def __init__(self, status, body="", final_url="", truncated=False):
         self.status = status
         self.body = body.encode() if isinstance(body, str) else body
         self.final_url = final_url or ""
         self.error = None
+        self.truncated = truncated
 
     def text(self, limit=None):
         return self.body.decode()
@@ -88,6 +89,37 @@ async def test_recover_reports_missing_map():
 
     res = await sm.recover(_NoMap(), "https://x.test/app.js")
     assert res["recovered"] is False
+
+
+@pytest.mark.asyncio
+async def test_recover_reports_truncated_oversized_map():
+    # A multi-MB map that hit the fetch cap arrives truncated mid-JSON: json.loads
+    # fails, but it must be reported as truncated — not mislabelled "not a source map"
+    # (the silent false negative that hid the disclosure on virtually every real map).
+    class _TruncClient:
+        async def fetch(self, url, **kwargs):
+            return _R(200, '{"version":3,"sources":["a.js"],"sourcesConte',  # cut off
+                      final_url=url, truncated=True)
+
+    res = await sm.recover(_TruncClient(), "https://x.test/app.js.map")
+    assert res["recovered"] is False
+    assert res.get("truncated") is True
+    assert "truncated" in res["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_recover_passes_large_max_body():
+    # regression: the map fetch must NOT inherit the 512 KiB default that truncated
+    # every real map — _fetch_map passes an explicit multi-MB cap.
+    seen = {}
+
+    class _CapClient:
+        async def fetch(self, url, **kwargs):
+            seen["max_body"] = kwargs.get("max_body")
+            return _R(200, json.dumps(_MAP), final_url=url)
+
+    await sm.recover(_CapClient(), "https://x.test/app.min.js.map")
+    assert seen["max_body"] is not None and seen["max_body"] >= 8 * 1024 * 1024
 
 
 # -- registration -----------------------------------------------------------

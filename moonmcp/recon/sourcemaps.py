@@ -82,32 +82,41 @@ def recover_files(sm: dict, *, max_files: int = 300,
     return out, truncated
 
 
-async def _fetch_map(client: HttpClient, url: str, scope_check) -> tuple[str | None, str | None]:
-    """Resolve *url* (a `.js`, a `.js.map`, or a page) to ``(map_url, raw)``."""
+# Real-world .js.map files are routinely multi-MB (1-20 MB). Fetch with an explicit
+# large cap instead of inheriting the HttpClient's 512 KiB default, which truncated
+# every real map mid-JSON so json.loads failed and the tool reported "not a source
+# map" — a silent false negative on the exact disclosure it exists to find. Still
+# bounded (a source map fetch is opt-in recon, not unbounded) so a hostile map can't
+# exhaust memory.
+_MAX_MAP_BYTES = 32 * 1024 * 1024  # 32 MiB
+
+
+async def _fetch_map(client: HttpClient, url: str, scope_check) -> tuple[str | None, str | None, bool]:
+    """Resolve *url* (a `.js`, a `.js.map`, or a page) to ``(map_url, raw, truncated)``."""
 
     r = await client.fetch(url, method="GET", follow_redirects=True, timeout=15.0,
-                           scope_check=scope_check)
+                           max_body=_MAX_MAP_BYTES, scope_check=scope_check)
     if r.status is None or not r.body:
-        return None, None
+        return None, None, False
     body = r.text()
     if '"sources"' in body[:4000] or url.rstrip("/").endswith(".map"):
-        return (r.final_url or url), body
+        return (r.final_url or url), body, r.truncated
     # a .js (or HTML) referencing a map — follow sourceMappingURL, else guess `<url>.map`
     maps = extract_source_maps(body)
     map_url = urljoin(r.final_url or url, maps[0]) if maps else (url.split("?", 1)[0] + ".map")
     if map_url.startswith("data:"):
-        return None, None
+        return None, None, False
     # sourceMappingURL is attacker-controllable (it comes from the remote JS body) and
     # can point cross-origin. fetch() only scope-checks REDIRECT hops, not the initial
     # one, so re-check the derived URL here or we would fetch out-of-scope and leak the
     # engagement auth headers to a third-party host.
     if scope_check is not None and not scope_check(map_url):
-        return None, None
+        return None, None, False
     m = await client.fetch(map_url, method="GET", follow_redirects=True, timeout=15.0,
-                           scope_check=scope_check)
+                           max_body=_MAX_MAP_BYTES, scope_check=scope_check)
     if m.status is None or not m.body:
-        return None, None
-    return (m.final_url or map_url), m.text()
+        return None, None, False
+    return (m.final_url or map_url), m.text(), m.truncated
 
 
 async def recover(client: HttpClient, url: str, *,
@@ -115,11 +124,17 @@ async def recover(client: HttpClient, url: str, *,
     """Fetch and parse the source map for *url*, recover its files, and scan the
     recovered app source for secrets."""
 
-    map_url, raw = await _fetch_map(client, url, scope_check)
+    map_url, raw, truncated_fetch = await _fetch_map(client, url, scope_check)
     if raw is None:
         return {"target": url, "recovered": False, "error": "no reachable source map"}
     sm = parse_source_map(raw)
     if not sm.get("sources"):
+        if truncated_fetch:
+            # An oversized map hit the fetch cap and was truncated before it could be
+            # parsed — report that loudly rather than mislabelling it "not a source map".
+            return {"target": url, "map_url": map_url, "recovered": False, "truncated": True,
+                    "error": f"source map exceeded the {_MAX_MAP_BYTES // (1024 * 1024)} MiB fetch "
+                             "cap and was truncated before parsing — fetch it directly"}
         return {"target": url, "map_url": map_url, "recovered": False,
                 "error": "response is not a valid source map (no sources[])"}
 
