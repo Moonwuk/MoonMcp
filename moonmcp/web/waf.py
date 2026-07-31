@@ -108,6 +108,12 @@ async def detect_waf(client: HttpClient, url: str, *, scope_check=None, active: 
             result.evidence[name] = ev
 
     if active:
+        # Negative control: was the BENIGN baseline itself "blocked"? A site that returns
+        # 403/406/503 (or a block-page body) to EVERY request — down, auth-walled,
+        # rate-limited — must not read as a WAF blocking our ATTACK. Only an attack response
+        # blocked when the benign baseline was not is attack-specific evidence.
+        base_blocked = (r.status in (403, 406, 429, 501, 503, 999)
+                        or any(s in body.lower() for s in _BLOCK_SIGNS))
         sep = "&" if "?" in url else "?"
         for payload in _ATTACK_PAYLOADS:
             probe_url = f"{url}{sep}q={quote(payload)}"
@@ -119,7 +125,7 @@ async def detect_waf(client: HttpClient, url: str, *, scope_check=None, active: 
             if not blocked and pr.status is not None and pr.body:
                 low = pr.text(limit=20_000).lower()
                 blocked = any(s in low for s in _BLOCK_SIGNS)
-            if blocked:
+            if blocked and not base_blocked:
                 result.blocked_probe = True
                 result.block_status = pr.status
                 # A block that we didn't otherwise fingerprint still signals *a* WAF.

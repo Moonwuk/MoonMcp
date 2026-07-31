@@ -75,6 +75,16 @@ markers = [
     "integration: tests that talk to REAL services (see tests/integration/docker-compose.yml). Skipped unless MOONMCP_INTEGRATION=1; never run in the default suite / CI.",
 ]
 
+[tool.coverage.run]
+# Branch coverage, not just line coverage: the if/elif verdict branches where a
+# detector's FP/FN decision lives are exactly what the correctness audit protects,
+# so they must be MEASURED — a line can be "covered" while a false branch never runs.
+branch = true
+source = ["moonmcp"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true

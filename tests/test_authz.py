@@ -98,6 +98,25 @@ async def test_secure_app_no_findings():
     assert res["findings"] == [] and res["verdict"] == "no_obvious_bola"
 
 
+class _SoftApp:
+    """Soft-404 / SPA: every path — existing or not — returns the same 200 shell, so the
+    id is not object-scoped. The old sweep flagged direct_bola + sibling_idor here."""
+
+    async def fetch(self, url, *, method="GET", headers=None, body=None,
+                    suppress_auth=False, **kwargs):
+        return _R(200, "<html><body>App shell — client-side routed, id ignored xxxxxxxx</body></html>")
+
+
+@pytest.mark.asyncio
+async def test_soft_404_app_no_bola_false_positive():
+    # The negative control (a nonexistent id returns the same object-like shell) proves
+    # the endpoint isn't object-scoped, so every BOLA signal is suppressed.
+    res = await az.probe_bola(_SoftApp(), "https://x.test/orders/100", b_headers={"Cookie": "b=1"})
+    assert res["findings"] == []
+    assert res["verdict"] == "no_obvious_bola"
+    assert "not object-scoped" in (res.get("note") or "")
+
+
 @pytest.mark.asyncio
 async def test_no_refs_still_runs_direct_only():
     # a URL with no object id → no sibling/multistep, but direct still evaluated

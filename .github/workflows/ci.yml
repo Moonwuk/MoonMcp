@@ -39,8 +39,12 @@ jobs:
       - name: Test — parallel (non-timing)
         run: pytest -q -m "not timing and not integration" -n auto --cov=moonmcp --cov-report=
 
+      # The gate lives ONLY here — the final step, after --cov-append has accumulated
+      # BOTH lanes. Putting it on the parallel step above would fail spuriously, since
+      # that step's coverage excludes the timing tests. Branch coverage is enforced via
+      # [tool.coverage.run] in pyproject.toml, so if/elif verdict branches count too.
       - name: Test — serial (timing)
-        run: pytest -q -m "timing and not integration" --cov=moonmcp --cov-append --cov-report=term-missing --cov-fail-under=70
+        run: pytest -q -m "timing and not integration" --cov=moonmcp --cov-append --cov-report=term-missing --cov-fail-under=79
 
   smoke:
     runs-on: ubuntu-latest

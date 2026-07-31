@@ -237,9 +237,17 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
         d = (t1.status != f1.status) or (abs(len(t1.body) - len(f1.body)) > tol)
         return stable, bool(stable and d)
 
-    # --- core: error signatures + reproducible boolean (context-aware) ---
+    # --- core: error signatures (baseline-subtracted) + reproducible boolean (context-aware) ---
+    # A benign value first: any SQL-error signature already present when we inject nothing
+    # SQL-ish (a verbose-error endpoint, an SPA bundle carrying SQL keywords, or a page that
+    # reflects the param) is AMBIENT, not proof of injection. Subtract it so the error lane
+    # can't feed a false "confirmed" into evaluate() — mirroring confirm_finding / lfi_probe.
+    base = await _get(f"mcp{secrets.token_hex(3)}")
+    base_sigs = {(h["technology"], h["matched"])
+                 for h in injmod.match_signatures(base.text(200_000), class_id="sqli")}
     er = await _get(probesmod.SQLI_ERROR)
-    hits = injmod.match_signatures(er.text(200_000), class_id="sqli")
+    hits = [h for h in injmod.match_signatures(er.text(200_000), class_id="sqli")
+            if (h["technology"], h["matched"]) not in base_sigs]
     true_p, false_p = probesmod.sqli_context_twins(context)
     t1, t2 = await _get(true_p), await _get(true_p)
     f1, f2 = await _get(false_p), await _get(false_p)

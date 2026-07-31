@@ -26,7 +26,7 @@ jobs:
         run: ruff check .
 
       - name: Test (pytest + coverage gate)
-        run: pytest -q --cov=moonmcp --cov-report=term-missing --cov-fail-under=70
+        run: pytest -q --cov=moonmcp --cov-report=term-missing --cov-fail-under=79
 
       - name: Build sdist + wheel
         run: |

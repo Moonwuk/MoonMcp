@@ -121,6 +121,15 @@ def looks_like_object(status: int | None, body: bytes) -> bool:
     return status is not None and 200 <= status < 300 and len(body) >= 16
 
 
+def absent_id(ref: ObjectRef) -> str:
+    """A syntactically-valid id of *ref*'s kind that is overwhelmingly unlikely to name
+    a real object — the negative control for whether the endpoint is object-scoped."""
+
+    if ref.kind == "uuid":
+        return "ffffffff-ffff-4fff-bfff-ffffffffffff"
+    return "999999999"
+
+
 async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                      max_refs: int = 8, scope_check=None) -> dict:
     """Run the three BOLA signals (direct / sibling sweep / multi-step chain), GET-only."""
@@ -139,8 +148,23 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
     a_ok = looks_like_object(a.status, a.body)
     refs = object_refs(url)[:max_refs]
 
+    # Negative control (needs an id to mutate): fetch a guaranteed-absent id AS THE OWNER.
+    # If the endpoint still returns an object-like body that resembles the real one (or
+    # the owner body isn't even object-like), it is NOT object-scoped — a soft-404 / SPA
+    # shell / public catch-all. Every signal below ("another identity gets the same body",
+    # "a neighbour id returns an object") is then noise, not BOLA, so suppress them.
+    not_object_scoped = False
+    control_note: str | None = None
+    if refs:
+        ctrl = await fetch_as(with_ref(url, refs[0], absent_id(refs[0])))
+        if looks_like_object(ctrl.status, ctrl.body) and (not a_ok or similar(a.body, ctrl.body) >= 0.95):
+            not_object_scoped = True
+            control_note = (f"a nonexistent id returned an object-like body (HTTP {ctrl.status}, "
+                            f"{len(ctrl.body)}B) resembling the real one — endpoint is not "
+                            "object-scoped (soft-404 / SPA / public); BOLA signals suppressed")
+
     # Signal 1 — direct BOLA: another identity gets the SAME object from the SAME URL.
-    if a_ok:
+    if a_ok and not not_object_scoped:
         for name, hdr in others:
             r = await fetch_as(url, headers=hdr, suppress_auth=True)
             if looks_like_object(r.status, r.body) and similar(a.body, r.body) >= 0.95:
@@ -153,7 +177,7 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
 
     # Signal 2 — sibling sweep: walk the id space as the other identity.
     sweeper_name, sweeper_hdr = others[0]
-    for ref in refs:
+    for ref in refs if not not_object_scoped else []:
         for sib in sibling_values(ref):
             swapped = with_ref(url, ref, sib)
             r = await fetch_as(swapped, headers=sweeper_hdr, suppress_auth=True)
@@ -167,7 +191,7 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                 break  # one neighbour hit per ref is enough signal
 
     # Signal 3 — multi-step chain: extract ids the OWNER exposes, access them as another identity.
-    if a_ok and refs:
+    if a_ok and refs and not not_object_scoped:
         url_vals = {r.value for r in refs}
         owned = [v for v in extract_body_refs(a.text(limit=50_000)) if v not in url_vals][:max_refs]
         ref0 = refs[0]
@@ -187,4 +211,5 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
     return {
         "target": url, "refs_found": [{"value": r.value, "where": r.where} for r in refs],
         "findings": findings, "verdict": "review" if findings else "no_obvious_bola",
+        **({"note": control_note} if control_note else {}),
     }

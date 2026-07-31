@@ -70,7 +70,11 @@ async def profile_behavior(client: HttpClient, url: str, *, scope_check=None) ->
             continue
         body = er.text(limit=50_000)
         for sig in _ERROR_SIGNATURES:
-            if sig in body and sig not in result.error_disclosure:
+            # Only count a signature the fuzz input INTRODUCED. One already present on the
+            # normal page (a docs / tutorial / blog / forum site — or MoonMCP's own report —
+            # mentioning "stack trace" / "Warning:" / "django." / " on line ") is ambient
+            # content, not a leaked error, so subtract the baseline to avoid a false positive.
+            if sig in body and sig not in base_body and sig not in result.error_disclosure:
                 result.error_disclosure.append(sig)
     if result.error_disclosure:
         result.notes.append("error/stack-trace signatures leaked in responses")

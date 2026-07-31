@@ -38,6 +38,22 @@ async def test_detect_waf_no_false_block_on_clean_200():
     assert res.blocked_probe is False and res.detected == []
 
 
+class _BlocksEverythingClient:
+    """Auth-walled / down host: 403 to EVERY request, benign or not."""
+
+    async def fetch(self, url, **kwargs):
+        return _res(403, b"403 Forbidden")
+
+
+@pytest.mark.asyncio
+async def test_no_waf_fp_when_baseline_is_also_blocked():
+    # The benign baseline is already 403, so the attack getting 403 is NOT attack-specific
+    # evidence of a WAF — must not fingerprint an "Unknown WAF".
+    res = await waf.detect_waf(_BlocksEverythingClient(), "https://t.example", active=True)
+    assert res.blocked_probe is False
+    assert "Unknown WAF (request blocked)" not in res.detected
+
+
 class _NotAcceptableClient:
     """A benign page whose body merely contains the phrase 'not acceptable'."""
 
