@@ -297,6 +297,15 @@ def _curl_cffi_fetch(
         # once we hit max_body — bounding memory (and any decompression bomb) the same
         # way the urllib transport's resp.read(max_body + 1) does. (stream=False used
         # to download the entire body into r.content and only then slice it.)
+        # Honor MOONMCP_CA_BUNDLE like the urllib transport (_trusted_context) — else a
+        # target fronted by a private/corporate CA fails verification only on the
+        # impersonation path, a silent transport-dependent false negative. curl_cffi
+        # accepts a CA-bundle path as `verify`.
+        verify_opt: bool | str = verify_tls
+        if verify_tls:
+            _bundle = os.environ.get("MOONMCP_CA_BUNDLE", "")
+            if _bundle and os.path.isfile(_bundle):
+                verify_opt = _bundle
         r = _cf_requests.request(
             method=method.upper(),
             url=url,
@@ -304,7 +313,7 @@ def _curl_cffi_fetch(
             data=body,
             timeout=timeout,
             allow_redirects=False,
-            verify=verify_tls,
+            verify=verify_opt,
             impersonate=profile,
             stream=True,
             **pin_kw,
@@ -312,9 +321,14 @@ def _curl_cffi_fetch(
         try:
             try:
                 content, truncated = _read_capped(r.iter_content(chunk_size=65536), max_body)
-            except AttributeError:  # older curl_cffi without iter_content — degrade safely
-                raw = r.content if r.content is not None else b""
-                content, truncated = raw[:max_body], len(raw) > max_body
+            except AttributeError as exc:
+                # No streaming API: reading r.content would buffer the ENTIRE already-
+                # decompressed body (curl_cffi auto-inflates gzip/deflate/br), dropping
+                # the decompression-bomb bound this path documents. Fail loudly rather
+                # than materialising an unbounded body.
+                raise RuntimeError(
+                    "curl_cffi build lacks iter_content; cannot bound the response body "
+                    "(upgrade curl_cffi or unset MOONMCP_IMPERSONATE)") from exc
             # Header pairs preserving order — r.headers is a multidict-like.
             try:
                 resp_headers = list(r.headers.multi_items())
