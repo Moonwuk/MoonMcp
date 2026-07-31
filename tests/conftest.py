@@ -465,6 +465,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/echo-query"):
+            # Echoes the ENTIRE query string into a canonical link (so a param canary
+            # reflects for EVERY probed name) — param discovery must NOT report every
+            # param as "reflected".
+            from urllib.parse import urlparse
+            q = urlparse(self.path).query
+            body = (f'<html><link rel="canonical" href="/p?{q}">ok</html>').encode("utf-8", "replace")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/reflect"):
             # Reflect the value of ?name= into the body (reflected-param signal) and
             # add a chunk of text when ?admin is present (length-change signal).
