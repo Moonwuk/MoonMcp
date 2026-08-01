@@ -52,6 +52,7 @@ from .intel import search as searchmod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
 from .knowledge import techniques as techmod
+from . import strix_adapted as sa
 from .knowledge import vulns as vulnsmod
 from .knowledge import waf_kb as wafkbmod
 from .memory import RELATIONS
@@ -3764,6 +3765,103 @@ async def vuln_search(query: str) -> dict:
     """
 
     return {"query": query, "results": vulnsmod.search(query)}
+
+
+@mcp.tool()
+@safe_tool
+async def playbook_info(playbook: str = "", category: str = "") -> dict:
+    """**Security testing playbooks** from Strix AI — 51 structured methodology
+    files covering vulnerability classes, frameworks, and protocols.
+
+    Pass a `playbook` id for the full methodology (attack surface, detection
+    channels, exploitation techniques, payload examples). Filter by `category`
+    for a list. Omit for the index.
+
+    Categories: vulnerabilities (24), frameworks (4), protocols (2),
+    scan_modes (3), technologies (2), tooling (11), cloud (2), coordination (2).
+
+    Popular playbooks: vulnerabilities_sql_injection, vulnerabilities_xss,
+    vulnerabilities_ssrf, vulnerabilities_rce, vulnerabilities_idor,
+    protocols_oauth, protocols_graphql, frameworks_nextjs, frameworks_django.
+
+    No network — pure reference. Source: Strix AI (Apache 2.0).
+    """
+    from .knowledge import strix_playbooks as sp
+
+    if playbook:
+        pb = sp.PLAYBOOKS.get(playbook)
+        if pb is None:
+            return {"error": "unknown_playbook",
+                    "detail": f"No playbook '{playbook}'",
+                    "categories": sp.PLAYBOOK_INDEX}
+        return pb
+    if category:
+        ids = sp.PLAYBOOK_INDEX.get(category, [])
+        return {"category": category, "count": len(ids), "playbooks": [
+            {"id": i, "name": sp.PLAYBOOKS[i]["name"],
+             "description": sp.PLAYBOOKS[i]["description"],
+             "sections": sp.PLAYBOOKS[i]["sections"]}
+            for i in ids
+        ]}
+    return {"total": len(sp.PLAYBOOKS), "categories": {
+        cat: len(ids) for cat, ids in sp.PLAYBOOK_INDEX.items()
+    }, "playbooks": sorted(sp.PLAYBOOKS.keys())}
+
+
+# ---------------------------------------------------------------------------
+# Strix-adapted enhancement tools
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def deduplicate_findings() -> dict:
+    """**Deduplicate session findings** — pure-logic dedup rules.
+
+    Same type + same target + same endpoint = duplicate.
+    Different parameters, root causes, or severities = NOT duplicate.
+
+    Returns unique findings + duplicate details. No network — reads findings store.
+    """
+    ctx = get_context()
+    findings = [f if isinstance(f, dict) else f.__dict__ for f in ctx.findings.list()]
+    if not findings:
+        return {"total": 0, "unique": 0, "duplicates": 0, "message": "No findings to deduplicate"}
+    result = sa.deduplicate_findings(findings)
+    return result
+
+
+@mcp.tool()
+@safe_tool
+async def render_finding_md(finding_id: int) -> dict:
+    """Render a single finding as structured markdown (Strix-style report).
+
+    Fields: ID, Severity, Target, Endpoint, CVE, CWE, CVSS, Description,
+    Impact, Technical Analysis, PoC, Remediation, Suggested Fix.
+
+    Pass a finding_id from list_findings. No network.
+    """
+    ctx = get_context()
+    for f in ctx.findings.list():
+        fd = f if isinstance(f, dict) else f.__dict__
+        if fd.get("id") == finding_id:
+            md = sa.render_vulnerability_md(fd)
+            return {"finding_id": finding_id, "markdown": md}
+    return {"error": "not_found", "detail": f"Finding #{finding_id} not found"}
+
+
+@mcp.tool()
+@safe_tool
+async def think(thought: str) -> dict:
+    """Record a private chain-of-thought reasoning step — no side effects.
+
+    Use before acting in policy-heavy environments (scope compliance,
+    multi-step exploit planning, risk assessment before destructive ops).
+
+    Structured sections are auto-detected (lines ending with ':').
+
+    Args:
+        thought: The reasoning to record. Must be non-empty.
+    """
+    return sa.think_structure(thought)
 
 
 @mcp.tool()

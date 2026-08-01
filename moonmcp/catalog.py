@@ -111,6 +111,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "technique_info", "technique_search",
             "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
             "vuln_info", "vuln_search", "vuln_tools", "rootcause_info",
+            "playbook_info",
+            "deduplicate_findings", "render_finding_md", "think",
             "waf_info", "identify_waf",
         ],
     )),

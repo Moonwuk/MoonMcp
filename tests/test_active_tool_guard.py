@@ -42,8 +42,12 @@ PASSIVE = {
     "waf_info", "identify_waf",
     # external-tool inventory + nuclei coverage map (no traffic; run_scanner/vuln_scan do the work)
     "external_tools", "scan_coverage",
-    # AI zero-day hunting — query NVD / pure reference mapping, never touch the target
+    # AI zero-day hunting — query NVD / pure reference mapping
     "cve_patch_diff", "variant_search", "version_vuln_check",
+    # Strix-derived playbooks — pure reference
+    "playbook_info",
+    # Strix-adapted enhancement tools — pure logic, no traffic
+    "deduplicate_findings", "render_finding_md", "think",
 }
 
 

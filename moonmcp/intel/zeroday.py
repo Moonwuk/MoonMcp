@@ -571,6 +571,7 @@ def variant_search(pattern: str, *, target: str = "") -> VariantSearchResult:
     questions = [
         f"Where else in the target is there the same {root_cause_name or pattern} pattern?",
         "Are there OTHER endpoints/modules with the same vulnerability class?",
+        f"Check memory_lesson(query='{root_cause_name or pattern}') for past FP patterns on this vuln class",
         "Can the same bug be triggered via a different input vector?",
         "Is there a PUBLIC (no-auth) path to the same vulnerable code?",
         "What does the patch NOT cover? Which paths remain open?",
