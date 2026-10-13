@@ -22,8 +22,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 _PIPELINE_DIRS = [
     Path.home() / "hermes_pipeline",
     Path.home() / "Desktop" / "hermes_pipeline",
@@ -143,14 +141,51 @@ def _read_queue() -> list[dict[str, Any]]:
     return items
 
 
-def _load_targets() -> dict[str, dict[str, Any]]:
+def _targets_fallback_parser(text: str) -> dict[str, Any]:
+    """Minimal stdlib parser for the simple targets.yaml shape (flat dict of
+    dicts with scalar values, one nested `headers` mapping). Only used when
+    PyYAML is unavailable — keeps the zero-dependency contract."""
+    targets: dict[str, Any] = {}
+    current: dict[str, Any] | None = None
+    section: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].rstrip() if not raw_line.lstrip().startswith("#") else ""
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if indent == 0:
+            if not stripped.endswith(":"):
+                continue
+            current = {}
+            targets[stripped[:-1]] = current
+            section = None
+        elif current is not None and stripped.endswith(":") and indent <= 2:
+            section = stripped[:-1]
+            current[section] = {}
+        elif current is not None and ":" in stripped:
+            key, _, value = stripped.partition(":")
+            value = value.strip().strip("'\"")
+            if section and indent >= 4:
+                current.setdefault(section, {})[key.strip()] = value
+            else:
+                current[key.strip()] = value
+    return targets
+
+
+def _load_targets() -> dict[str, Any]:
     t = _first("targets.yaml")
     if t is None:
         return {}
+    text = t.read_text(encoding="utf-8")
     try:
-        data = yaml.safe_load(t.read_text(encoding="utf-8")) or {}
+        import yaml  # optional dependency, like recon/openapi.py
+    except ImportError:
+        return _targets_fallback_parser(text)
+    try:
+        data = yaml.safe_load(text) or {}
         return data if isinstance(data, dict) else {}
-    except yaml.YAMLError:
+    except Exception:  # noqa: BLE001 — malformed YAML is data, not a crash
         return {}
 
 
