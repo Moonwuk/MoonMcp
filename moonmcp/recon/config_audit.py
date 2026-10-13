@@ -411,7 +411,13 @@ def classify_managed_db(value: str) -> tuple[str, str, str] | None:
     if not v or _looks_placeholder(v) or _placeholder_cred(v):
         return None
     for service, rx, severity, note in _MANAGED_DB:
-        if rx.search(v):
+        # The host/DSN patterns use backtracking-prone `(?:\.[…]+)*` runs; a giant
+        # flattened config value (hundreds of KB) is never a real DSN/endpoint, so cap
+        # the text they see to keep a hostile config from wedging the scan (ReDoS). No
+        # real DSN approaches 512 chars. The BigQuery pattern is bounded+lazy and may
+        # legitimately span a whole service-account JSON blob, so it is exempt.
+        target = v if service == "BigQuery service account" else v[:512]
+        if rx.search(target):
             return (service, note, severity)
     return None
 

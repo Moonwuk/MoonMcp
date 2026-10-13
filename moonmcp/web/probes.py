@@ -10,6 +10,7 @@ signals into :func:`moonmcp.confirm.evaluate`.
 from __future__ import annotations
 
 import re
+import statistics
 
 # --- SSTI: arithmetic that only renders if the input hits a template engine ---
 # 7331*7 = 51317 — a value unlikely to appear on a page by chance. If the result
@@ -101,17 +102,72 @@ def cmdi_oob_payloads(http_url: str) -> list[tuple[str, str]]:
 
 
 def assess_timing(zero_s: float, delay_s: float, requested: float) -> dict | None:
-    """Time-blind confirmation: the delayed request must be slower than the 0s
-    control by a margin proportional to the requested delay. This rejects a
-    uniformly-slow endpoint (both requests would be slow) and random jitter."""
+    """Single-sample proportional-delay check — the *primitive*, not a confirmation.
+
+    Returns a candidate when the delayed request is slower than the 0s control by a
+    margin proportional to the requested delay. Note this subtracts the 0s control,
+    so a *uniformly*-slow endpoint (control equally slow) already yields ~0 delta and
+    is rejected here — but a single sample is still jitter-prone, so a real time-based
+    lane must corroborate with repeated samples and a scaling re-probe via
+    :func:`assess_timing_samples` (what the sqli/cmdi tools do). A lone slow response
+    is a lead, never a confirmation.
+
+    (The old ``zero_s < requested`` absolute guard was removed: it discarded a
+    genuine ``SLEEP(n)`` whenever the backend's own baseline happened to exceed the
+    requested delay — a real false-negative. Control subtraction is the correct
+    uniformly-slow guard.)
+    """
 
     if requested <= 0:
         return None
     delta = delay_s - zero_s
-    if delta >= max(0.6 * requested, 0.5) and zero_s < requested:
+    if delta >= max(0.6 * requested, 0.5):
         return {"zero_s": round(zero_s, 3), "delay_s": round(delay_s, 3),
                 "delta_s": round(delta, 3), "requested_s": requested}
     return None
+
+
+def assess_timing_samples(control: list[float], delayed: list[float], requested: float,
+                          *, confirm: list[float] | None = None,
+                          requested_confirm: float = 0.0) -> dict | None:
+    """Rigorous time-blind confirmation from repeated samples + a scaling re-probe.
+
+    ``control`` are elapsed times for the 0s payload (the jitter floor + any uniform
+    backend slowness), ``delayed`` for the ``requested``-second payload, and
+    ``confirm`` for a SMALLER ``requested_confirm``-second payload used as a scaling
+    control. A hit requires the induced delay (median(delayed) − median(control)) to
+    (1) clear a proportional threshold, (2) stand clear of control jitter, and
+    (3) SCALE — a bigger sleep must induce proportionally more delay. A uniformly
+    slow endpoint gives a flat offset (no scaling) and random jitter isn't
+    reproducible across samples, so both are rejected. Smaller confirm value keeps
+    the re-probe under the request timeout rather than doubling the sleep.
+    """
+
+    if requested <= 0 or not control or not delayed:
+        return None
+    c = statistics.median(control)
+    d = statistics.median(delayed)
+    delta = d - c
+    spread = (max(control) - min(control)) if len(control) > 1 else 0.0
+    if delta < max(0.6 * requested, 0.5):
+        return None
+    if delta <= spread * 2 + 0.1:
+        return None  # not separable from control jitter
+    out: dict = {"control_s": round(c, 3), "delay_s": round(d, 3),
+                 "delta_s": round(delta, 3), "requested_s": requested,
+                 "samples": len(delayed)}
+    if confirm and requested_confirm > 0:
+        dc = statistics.median(confirm)
+        delta_c = dc - c
+        ratio_req = requested / requested_confirm            # ideal scaling factor
+        scaled = (delta / delta_c) if delta_c > 0.05 else float("inf")
+        # require at least half of the ideal scaling; a constant offset gives ~1.0.
+        if scaled < 1.0 + (ratio_req - 1.0) * 0.5:
+            return None
+        out.update({"delta_confirm_s": round(delta_c, 3),
+                    "requested_confirm_s": round(requested_confirm, 3),
+                    "scaled": round(scaled, 2) if scaled != float("inf") else None})
+    return out
 
 
 # JSON-operator WAF-bypass twins (C.2): the boolean wrapped in JSON syntax the WAF

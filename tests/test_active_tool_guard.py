@@ -33,6 +33,10 @@ PASSIVE = {
     # shared memory hub (local store; no traffic)
     "memory_add", "memory_search", "memory_get", "memory_stats",
     "memory_link", "memory_graph", "memory_brief", "memory_lesson",
+    # local persistent run/task coordinator (run_start validates scope but sends no traffic)
+    "run_start", "run_status", "run_list", "run_control", "run_task_add",
+    "run_task_update", "run_next", "run_coverage_update", "run_usage", "run_finish",
+    "run_artifact_add", "run_artifacts",
     # findings / reporting / monitoring
     "add_finding", "promote_lead", "label_finding", "metrics",
     "list_findings", "clear_findings", "triage_findings", "cvss_score",

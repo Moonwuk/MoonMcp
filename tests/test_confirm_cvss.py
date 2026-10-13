@@ -43,6 +43,11 @@ def test_evaluate_verdicts():
     assert confirm.evaluate(injection_hits=["sqli/MySQL"])["verdict"] == "likely"
     assert confirm.evaluate(reflected=True)["verdict"] == "inconclusive"
     assert confirm.evaluate()["verdict"] == "unconfirmed"
+    # A reproducible boolean/differential oracle is a real blind-injection signal —
+    # it must clear "likely", not be buried at "inconclusive" as two loose +1s were.
+    assert confirm.evaluate(differential_confirmed=True)["verdict"] == "likely"
+    assert confirm.evaluate(differential_confirmed=True, status_changed=True,
+                            length_delta=120)["verdict"] == "likely"
 
 
 # -- confirm_finding tool ---------------------------------------------------

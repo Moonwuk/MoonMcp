@@ -86,8 +86,15 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
     )),
     ("orchestration", (
         "Orchestration",
-        "Chain the safe tools: batch liveness, a one-shot recon sweep, a report.",
-        ["probe_batch", "recon_target", "report"],
+        "Create resumable assessment runs, coordinate role-based tasks, enforce "
+        "budgets and coverage gates, then chain the safe recon/report tools.",
+        [
+            "run_start", "run_status", "run_list", "run_control",
+            "run_task_add", "run_task_update", "run_next",
+            "run_coverage_update", "run_usage", "run_artifact_add", "run_artifacts",
+            "run_finish",
+            "probe_batch", "recon_target", "report",
+        ],
     )),
     ("infra", (
         "Behavioural infrastructure",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Assessment Planning"
+  short_description: "Plan bounded, scope-safe security assessments"
+  default_prompt: "Use $assessment-planning to turn this authorised target into a bounded MoonMCP run plan."

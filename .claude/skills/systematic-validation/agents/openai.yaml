@@ -1,0 +1,4 @@
+interface:
+  display_name: "Systematic Validation"
+  short_description: "Validate security leads with reproducible evidence"
+  default_prompt: "Use $systematic-validation to verify this MoonMCP lead before reporting it."

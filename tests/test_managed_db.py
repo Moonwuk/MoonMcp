@@ -51,6 +51,18 @@ def test_secrets_redacts_dsn_password():
     assert "npg_fakePw123" not in hit.redacted
 
 
+def test_classify_managed_db_bounds_giant_value_no_redos():
+    import time
+    # a giant dotted string that prefixes the backtracking-prone host patterns must
+    # not wedge the classifier (ReDoS) — the value is capped, so it returns quickly.
+    giant = ("a." * 200_000) + "z"
+    start = time.perf_counter()
+    assert ca.classify_managed_db(giant) is None
+    assert time.perf_counter() - start < 1.5
+    # a real (short) DSN still classifies correctly
+    assert ca.classify_managed_db(NEON)[0] == "Neon Postgres DSN"
+
+
 def test_secrets_no_false_positive_on_plain_dsns():
     for benign in [
         "postgresql://user:pass@localhost:5432/db",

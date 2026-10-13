@@ -24,6 +24,42 @@ def test_reject_dangerous_scanner_args():
     assert r(["-w", "wordlist.txt"]) is not None               # file-read flag
 
 
+def test_env_bool_empty_string_falls_back_to_default(monkeypatch):
+    from moonmcp import config as cfgmod
+    # a blank value (what MCP env blocks / shell wrappers emit for an "unset" var)
+    # must NOT disable a safety flag — only explicit 0/false/off/… do.
+    monkeypatch.setenv("MOONMCP_TESTFLAG", "")
+    assert cfgmod._env_bool("MOONMCP_TESTFLAG", True) is True
+    assert cfgmod._env_bool("MOONMCP_TESTFLAG", False) is False
+    monkeypatch.setenv("MOONMCP_TESTFLAG", "   ")           # whitespace-only == blank
+    assert cfgmod._env_bool("MOONMCP_TESTFLAG", True) is True
+    monkeypatch.setenv("MOONMCP_TESTFLAG", "0")             # explicit disable still works
+    assert cfgmod._env_bool("MOONMCP_TESTFLAG", True) is False
+
+
+def test_host_like_tokens_catches_obfuscated_ips_not_status_codes():
+    tk = srv._host_like_tokens
+    got = tk(["scanme.example.com", "2852039166", "0x7f000001", "127.1", "::1"])
+    for t in ("2852039166", "0x7f000001", "127.1", "::1"):
+        assert t in got, t
+    # benign scanner values (status codes / ports / counts) must NOT look like targets
+    assert tk(["-mc", "200,301,404", "-rl", "150"]) == []
+
+
+@pytest.mark.asyncio
+async def test_run_scanner_refuses_smuggled_obfuscated_ip(monkeypatch):
+    # The smuggling exploit: one in-scope token satisfies the no_target guard while an
+    # obfuscated internal IP (2852039166 == 169.254.169.254) rides along in args. It
+    # must be scope-checked and refused, not passed to the scanner unchecked.
+    import dataclasses as _dc
+    ctx = srv.build_context()
+    ctx.scope.add("example.com")
+    ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
+    monkeypatch.setattr(srv, "_CTX", ctx)
+    out = await srv.run_scanner(tool="nmap", args=["scanme.example.com", "2852039166"])
+    assert out.get("error") == "out_of_scope", out
+
+
 @pytest.mark.asyncio
 async def test_run_scanner_blocks_file_io(monkeypatch):
     import dataclasses as _dc

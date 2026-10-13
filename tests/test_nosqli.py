@@ -80,6 +80,29 @@ def test_assess_where_boolean_oracle():
     assert nq.assess_where((_r(200, 300), _r(200, 500)), (_r(401, 30), _r(401, 30))) is None
 
 
+def test_stable_tolerates_small_jitter():
+    # a few-byte nonce/counter delta between two identical sends is NOT instability
+    assert nq._stable(_r(200, 1000), _r(200, 1012)) is True     # 12 < ~50 (5%) tolerance
+    assert nq._stable(_r(200, 1000), _r(200, 1400)) is False    # 400 >> tolerance
+    # and a true/false differential must EXCEED the jitter floor, not differ by a byte
+    assert nq.assess_where((_r(200, 1000), _r(200, 1008)),
+                           (_r(200, 1000), _r(200, 1006))) is None
+
+
+def test_assess_operator_bracket_flip_rejected_when_benign_nested_flips_too():
+    # non-Mongo: param[$ne] and the benign param[zz] both make the framework error
+    # the same way (object where a string was expected) — param parsing, not NoSQLi.
+    control = (_r(401, 30), _r(401, 30))
+    twin = (_r(500, 60), _r(500, 60))            # operator bracket flips to 500
+    nested = (_r(500, 60), _r(500, 60))          # benign nested key ALSO flips to 500
+    assert nq.assess_operator(control, twin, nested=nested) is None
+    # but a Mongo app where the benign nested key does NOT flip (stays like control)
+    # keeps the operator flip as a real hit
+    nested_benign = (_r(401, 30), _r(401, 30))
+    hit = nq.assess_operator(control, twin, nested=nested_benign)
+    assert hit and hit["strong"] is True
+
+
 # -- end-to-end against the deliberately-vulnerable /nosqli login ------------
 @pytest.mark.asyncio
 async def test_nosqli_probe_detects_operator_bypass(local_server, fresh_context):
@@ -99,6 +122,16 @@ async def test_nosqli_probe_no_false_positive(local_server, fresh_context):
     res = await srv.nosqli_probe(target=f"{base}/nosqli-safe", param="user")
     assert res["operator_hits"] == [] and res["where_oracle"] is None
     assert res["verdict"] == "unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_nosqli_probe_no_fp_on_non_mongo_bracket_parsing(local_server, fresh_context):
+    # A framework that turns any bracketed param into an object errors identically for
+    # param[$ne] and the benign param[zz]; that is param parsing, not Mongo injection.
+    base, _ = local_server
+    res = await srv.nosqli_probe(target=f"{base}/nosqli-bracketparse", param="user")
+    assert not any(h["variant"].startswith("bracket:") for h in res["operator_hits"]), res
+    assert res["verdict"] == "unconfirmed", res
 
 
 @pytest.mark.asyncio

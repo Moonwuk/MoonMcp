@@ -60,3 +60,26 @@ async def test_lfi_probe_no_hit_on_safe_endpoint(local_server, fresh_context):
     assert res["findings"] == []
     assert res["verdict"] == "unconfirmed"
     assert res["tested"] == len(probesmod.LFI_PAYLOADS)
+
+
+@pytest.mark.asyncio
+async def test_lfi_probe_does_not_false_confirm_on_js_bundle(local_server, fresh_context):
+    # A JS body full of `require(` matches the error-based path-traversal signature
+    # but is present in the baseline too — baseline subtraction must keep it clean.
+    base, _ = local_server
+    res = await srv.lfi_probe(target=f"{base}/lfi-jsbundle", param="q")
+    assert res["findings"] == []
+    assert res["leads"] == []
+    assert res["verdict"] == "unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_lfi_probe_error_leak_is_lead_not_confirmed(local_server, fresh_context):
+    # An endpoint that reflects a filesystem error (but no file content) for
+    # traversal input is a weak "reaches a file API" lead — never a confirmed hit.
+    base, _ = local_server
+    res = await srv.lfi_probe(target=f"{base}/lfi-errorleak", param="q")
+    assert res["findings"] == []           # no file content recovered
+    assert res["verdict"] != "confirmed"
+    assert res["leads"]                     # but the file-API reach is surfaced
+    assert "note" in res
