@@ -172,12 +172,19 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
 ])
 
 # The recommended order of operations for a fresh engagement.
+# Run-aware (AGENT_NAVIGATION_PLAN.md): the run_* coordinator frames the work;
+# steps 1-4 stay the same for ad-hoc sessions without a run.
 WORKFLOW: list[str] = [
     "server_status — see config, the active program and which external CLIs are present.",
     "RECALL — memory_brief(target) / memory_search(target=…) first: build on prior/other-agents' "
     "work, skip recon already done (recon_target/report also surface a prior_memory block); "
     "memory_lesson(action=recall) to apply past tradecraft.",
-    "program_add / scope_add — authorise the target and set the program's bug-bounty header.",
+    "Run or ad-hoc — for a structured assessment: run_start(target, budget=…) seeds the "
+    "coordinator→mapper→hypothesis→validator→reporter task graph; run_next hands out one "
+    "dependency-ordered task at a time; run_usage records actual spend; run_finish refuses "
+    "unfinished work (force=true to override). Without a run, continue ad-hoc.",
+    "program_add / scope_add — authorise the target and set the program's bug-bounty header. "
+    "The profile/family is NOT permission: scope, auth and intrusive gates apply to every tool.",
     "Passive OSINT — web_search (multi-engine) then web_read a promising result, "
     "enumerate_subdomains, wayback_urls, cve_search, host_intel.",
     "Light active — recon_target for a one-shot sweep, then http_probe / fingerprint / "
@@ -187,10 +194,26 @@ WORKFLOW: list[str] = [
     "Intrusive (only with explicit consent + MOONMCP_ALLOW_INTRUSIVE) — port_scan, "
     "content_discovery, vuln_scan (then also_run_native), logic_probe / workflow_probe / value_probe.",
     "Confirm — turn a probe's review lead into a proof: promote_lead(kind=…) routes it to "
-    "confirm_finding / side-effect re-observation / a Strix PoC brief.",
+    "confirm_finding / side-effect re-observation / a Strix PoC brief. Verify each lead "
+    "independently before believing it (validator session or oracle), not by re-reading the finder.",
     "Record & report — add_finding / promote_lead as you go (both mirror to shared memory), "
-    "triage_findings to dedupe, then report / export_findings / export_obsidian.",
+    "triage_findings to dedupe, then report / export_findings / export_obsidian. For run-based "
+    "sessions: run_coverage_update, export saved via run_artifact_add, then run_finish.",
 ]
+
+# Observation → minimal next step (AGENT_NAVIGATION_PLAN.md navigation table).
+# The map from what you SEE to the smallest useful action — not a linear checklist.
+NAVIGATION: dict[str, str] = {
+    "unknown surface": "http_probe / fingerprint first; then only the recon slices you still miss",
+    "openapi or JS endpoints": "parse_openapi / analyze_js; then refine parameters",
+    "auth and roles": "auth_set, then access_control_check / authz_probe when context allows",
+    "graphql signs": "graphql_check; deepen by the specific observation",
+    "JS app, data not in HTML": "browser_open; then act on DOM/network observations",
+    "ambiguous param behaviour": "class reference (injection_info) → the matching detector; confirm separately",
+    "a lead": "specialised probe, baseline + control → confirm_finding / promote_lead as applicable",
+    "results ready": "triage_findings → export → artifact (run_artifact_add) → run_finish",
+    "budget refused": "stop; do not start new work — record the blocked task with the reason",
+}
 
 # Which family a tool name belongs to (inverted from FAMILIES).
 TOOL_FAMILY: dict[str, str] = {
@@ -304,6 +327,7 @@ def build_catalog(meta: dict[str, dict], *, family: str | None = None) -> dict:
         "total_tools": len(meta),
         "families": families_out,
         "workflow": WORKFLOW,
+        "navigation": NAVIGATION,
         "safety": (
             "Authorised testing only. Every 'scope_gated' tool refuses out-of-scope "
             "targets and blocked private IPs; 'intrusive' tools also need "

@@ -76,3 +76,25 @@ async def test_tool_catalog_tool_runs():
     setup = next(f for f in res["families"] if f["family"] == "setup")
     tc = next(t for t in setup["tools"] if t["name"] == "tool_catalog")
     assert tc["scope_gated"] is False
+
+
+def test_workflow_is_run_aware():
+    # AGENT_NAVIGATION_PLAN.md: the workflow must teach the run coordinator
+    joined = " ".join(cat.WORKFLOW)
+    for tool in ("run_start", "run_next", "run_usage", "run_finish"):
+        assert tool in joined, f"workflow lost {tool}"
+    # profile/family is not permission — the caveat must stay:
+    assert "NOT permission" in joined
+
+
+def test_navigation_contract():
+    # Every NAVIGATION value may only reference REAL tools when it looks like
+    # one (snake_case identifier). Plain English words are left alone.
+    import re
+    known = set(cat.TOOL_FAMILY) | {"run_coverage_update", "run_artifact_add", "run_finish"}
+    for obs, step in cat.NAVIGATION.items():
+        for m in re.findall(r"\b[a-z][a-z_]*_[a-z_]*\b", step):  # snake_case only
+            assert m in known, f"NAVIGATION['{obs}'] references unknown tool {m!r}"
+    # build_catalog surfaces navigation
+    res = cat.build_catalog({"tool_catalog": {"description": "map", "gated": False, "intrusive": False}})
+    assert res["navigation"] is cat.NAVIGATION
