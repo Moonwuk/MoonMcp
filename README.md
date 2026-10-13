@@ -115,6 +115,7 @@ The repository contains detailed reference material for areas that would make th
 
 - [Research and design notes](docs/RESEARCH.md)
 - [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
+- [Agent navigation and optimization plan](docs/AGENT_NAVIGATION_PLAN.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
 - [System prompts](docs/SYSTEM_PROMPTS.md)
 - [Injection reference](docs/INJECTIONS.md)
