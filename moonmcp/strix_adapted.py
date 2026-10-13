@@ -594,11 +594,18 @@ class HttpProxy:
         replay = proxy.replay(0, modifications={"headers": {"X-Test": "1"}})
     """
 
-    def __init__(self) -> None:
+    def __init__(self, history_store: Any | None = None) -> None:
+        """Optionally accept a MoonMCP HistoryStore to share entries with the
+        built-in intercept.py HTTP history. When a HistoryStore is passed,
+        ``capture()`` writes to both the internal list and the HistoryStore,
+        and ``list_requests()`` reads from both. This avoids two disconnected
+        HTTP-history stores. (Audit 2026-07-27, #6.)
+        """
         self._entries: list[dict[str, Any]] = []
         self._counter: int = 0
         self._scope: ProxyScope = ProxyScope()
         self._match_replace: list[dict] = []
+        self._history = history_store
 
     def capture(self, *, method: str, host: str, path: str,
                 status: int | None = None,
@@ -626,6 +633,12 @@ class HttpProxy:
             "timestamp": datetime.now(UTC).isoformat(),
         }
         self._entries.append(entry)
+        # Mirror into the shared HistoryStore if one was provided (#6).
+        if self._history is not None:
+            try:
+                self._history.add(entry)
+            except Exception:
+                pass  # HistoryStore is best-effort; never block capture
         if self._scope.is_in_scope(host, path, method):
             self._scope.record_request(host, path)
         return entry_id
@@ -718,6 +731,9 @@ class HttpProxy:
 
         Returns the modified raw request for use with http_repeater.
         Recognized modification keys: url, params, headers, body, cookies.
+
+        **Body replacement** handles Content-Length auto-adjustment so the
+        server doesn't hang waiting for bytes that never arrive.
         """
         entry = None
         for e in self._entries:
@@ -739,8 +755,14 @@ class HttpProxy:
                 else:
                     raw = raw.replace("\r\n\r\n", f"\r\n{k}: {v}\r\n\r\n", 1)
         if mods.get("body"):
+            # Replace body and auto-adjust Content-Length if present
+            new_body = mods["body"]
+            if re.search(r'^Content-Length:', raw, re.I | re.M):
+                raw = re.sub(r'^Content-Length:.*$',
+                             f'Content-Length: {len(new_body)}',
+                             raw, flags=re.I | re.M)
             parts = raw.split("\r\n\r\n", 1)
-            raw = parts[0] + "\r\n\r\n" + mods["body"]
+            raw = parts[0] + "\r\n\r\n" + new_body
         if mods.get("params"):
             for k, v in mods["params"].items():
                 if f"{k}=" in raw:
@@ -817,10 +839,15 @@ class DockerSandbox:
     - Resource limits (CPU, memory, network)
     - Host-gateway access for reaching host-served apps
 
+    Default image is ``alpine:latest`` (~7 MB pull). For full Kali tooling
+    (nmap, sqlmap, nuclei, gobuster) pass ``image="kali-linux:latest"`` (~3 GB)
+    — but for simple RCE proof (hostname/whoami/id/ifconfig) alpine is enough
+    and pulls in seconds.
+
     Requires Docker to be installed and running.
     """
 
-    def __init__(self, image: str = "kali-linux:latest",
+    def __init__(self, image: str = "alpine:latest",
                  cap_add: list[str] | None = None,
                  network: str = "bridge") -> None:
         self.image = image
@@ -876,10 +903,27 @@ class DockerSandbox:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
-    def exec(self, command: str, *, timeout: int = 30) -> dict:
-        """Execute a command in the sandbox container."""
+    def exec(self, command: str, *, timeout: int = 30,
+             scope_check=None) -> dict:
+        """Execute a command in the sandbox container.
+
+        If ``scope_check`` is provided (a callable that takes a host and
+        returns bool), URLs in the command are extracted and checked —
+        an out-of-scope URL in the command aborts execution. This prevents
+        a sandboxed PoC from accidentally reaching an out-of-scope host.
+        """
         if not self._container_id:
             return {"success": False, "error": "Sandbox not started. Call start() first."}
+        if scope_check is not None:
+            # Extract hostnames from URLs in the command
+            urls = re.findall(r'https?://([^\s/\'"<>]+)', command)
+            for host in urls:
+                host = host.split(":")[0]  # strip port
+                if not scope_check(host):
+                    return {"success": False,
+                            "error": f"out of scope: {host}",
+                            "detail": "Command contains a URL to an out-of-scope host; "
+                                      "sandbox execution refused."}
         import subprocess
         try:
             result = subprocess.run(

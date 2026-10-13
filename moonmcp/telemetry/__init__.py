@@ -1,0 +1,1 @@
+"""Telemetry package — real-time scan-progress monitoring for MoonMCP."""

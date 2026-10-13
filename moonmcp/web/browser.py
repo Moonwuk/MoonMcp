@@ -144,7 +144,7 @@ async def browse(
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(**launch_kwargs)
             try:
-                context = await browser.new_context()
+                context = await browser.new_context(ignore_https_errors=True)
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
                 if scope_ok is not None:
@@ -262,7 +262,7 @@ async def interact(
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(**launch_kwargs)
             try:
-                context = await browser.new_context()
+                context = await browser.new_context(ignore_https_errors=True)
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
                 if cookies:

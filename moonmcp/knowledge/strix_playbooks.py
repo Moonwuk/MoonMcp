@@ -28,4 +28,9 @@ from __future__ import annotations
 
 from .strix_playbooks_data import PLAYBOOKS, PLAYBOOK_INDEX
 
-__all__ = ["PLAYBOOKS", "PLAYBOOK_INDEX"]
+# Versioning — track which Strix commit these playbooks were extracted from.
+# When Strix updates, bump this and re-extract. (Audit 2026-07-27, #10.)
+PLAYBOOKS_VERSION = "2026-07-24"
+PLAYBOOKS_SOURCE = "https://github.com/usestrix/strix"
+
+__all__ = ["PLAYBOOKS", "PLAYBOOK_INDEX", "PLAYBOOKS_VERSION", "PLAYBOOKS_SOURCE"]

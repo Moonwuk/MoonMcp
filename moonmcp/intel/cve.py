@@ -14,6 +14,8 @@ import json
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
+from ..strix_adapted import retry_async
+
 from ..net.http import HttpClient
 
 _BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -84,17 +86,27 @@ def _parse_vuln(vuln: dict) -> CveRecord:
 async def lookup_cve(client: HttpClient, cve_id: str, api_key: str | None = None) -> CveRecord | None:
     cve_id = cve_id.strip().upper()
     url = f"{_BASE}?cveId={quote(cve_id)}"
-    r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True)
-    if r.error or r.status != 200:
-        return None
+
+    async def _fetch():
+        r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True)
+        if r.error or r.status != 200:
+            return None
+        try:
+            data = json.loads(r.text())
+        except json.JSONDecodeError:
+            return None
+        vulns = data.get("vulnerabilities", [])
+        if not vulns:
+            return None
+        return _parse_vuln(vulns[0])
+
+    # Retry with backoff — NVD frequently rate-limits (429) or times out.
+    # Without retry, a 429 looks like "CVE not found" (silently returns None).
+    # (Audit 2026-07-27, IN6.)
     try:
-        data = json.loads(r.text())
-    except json.JSONDecodeError:
+        return await retry_async(_fetch, max_retries=3, initial_delay=1.0, max_delay=30.0)
+    except Exception:
         return None
-    vulns = data.get("vulnerabilities", [])
-    if not vulns:
-        return None
-    return _parse_vuln(vulns[0])
 
 
 async def search_cves(

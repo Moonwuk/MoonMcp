@@ -19,10 +19,14 @@ PASSIVE = {
     "program_add", "program_use", "program_list", "program_remove",
     "auth_set", "auth_clear",
     "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
+    "oast_payload_gen", "oast_techniques",
+    "proxy_rules", "telemetry", "view_dashboard",
+    "sast_scan", "generate_remediation",
+    "opsec_config", "extract_api_schemas",
     # keyless OSINT (queries a third party, never the target)
     "web_search", "web_read", "search_dorks", "cve_lookup", "cve_search",
     "dependency_confusion",
-    "host_intel", "ip_intel", "reverse_ip", "cloud_buckets", "jwt_analyze", "jwt_crack",
+    "host_intel", "ip_intel", "reverse_ip", "cloud_audit", "cloud_buckets", "jwt_analyze", "jwt_crack",
     "jwt_alg_confusion", "deserialize_fingerprint", "js_library_scan",
     # interception history (reads the in-memory log; no traffic)
     "http_history",
@@ -47,7 +51,15 @@ PASSIVE = {
     # Strix-derived playbooks — pure reference
     "playbook_info",
     # Strix-adapted enhancement tools — pure logic, no traffic
-    "deduplicate_findings", "render_finding_md", "think",
+    "deduplicate_findings", "render_finding_md",
+    "proxy_manage", "sandbox_exec", "agent_tree", "export_csv",
+    # hermes-pipeline absorbed tools — local KB/SQLite/queue only
+    "queue_task", "list_queue", "get_target", "list_targets",
+    "search_bugbounty_reports", "list_report_categories",
+    "search_knowledge_base", "search_datasets",
+    "match_signature_to_cve", "get_nuclei_template",
+    "search_web_security_resources", "list_web_security_categories",
+    "check_subdomain_takeover",
 }
 
 

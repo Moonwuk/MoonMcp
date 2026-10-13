@@ -1,0 +1,1 @@
+"""MoonMCP interface package — local web viewer and future UI components."""

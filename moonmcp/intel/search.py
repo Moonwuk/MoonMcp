@@ -3,23 +3,35 @@
 `web_search` queries **keyless** engines through the shared HTTP client and
 returns structured results (title, url, snippet) — passive OSINT that never
 touches the target. It's **resilient by design**: it tries several engines
-(DuckDuckGo HTML → DuckDuckGo Lite → Bing) in order and returns the first that
-answers, so a single engine rate-limiting or changing its markup doesn't blind
-the agent. Results are de-duplicated by URL and an optional ``site`` filter
-scopes the query to one domain. `generate_dorks` builds categorised
-search-engine dork queries for a target domain (exposed files, login panels,
-config/secrets, directory listings, code leaks, …) — pure and offline.
+(SearXNG → DuckDuckGo HTML → DuckDuckGo Lite → Bing) in order and returns the
+first that answers, so a single engine rate-limiting or changing its markup
+doesn't blind the agent. Results are de-duplicated by URL and an optional
+``site`` filter scopes the query to one domain. `generate_dorks` builds
+categorised search-engine dork queries for a target domain (exposed files,
+login panels, config/secrets, directory listings, code leaks, …) — pure
+and offline.
+
+**SearXNG** (default primary engine) is a privacy-respecting metasearch
+aggregator that queries 70+ engines (Google, Bing, Brave, Yandex, etc.) via
+a single JSON API call. Set ``MOONMCP_SEARXNG_URL`` to a self-hosted instance,
+or use the default public instance. When SearXNG is unavailable, the fallback
+chain (DDG → DDG Lite → Bing) kicks in automatically.
 """
 
 from __future__ import annotations
 
 import html
+import json
+import os
 import re
+import time
 import urllib.parse
 
 _DDG_HTML = "https://html.duckduckgo.com/html/?q="
 _DDG_LITE = "https://lite.duckduckgo.com/lite/?q="
 _BING = "https://www.bing.com/search?q="
+# SearXNG: env-configurable, with a known-good public instance as default.
+_SEARXNG_DEFAULT = "https://searx.be"
 _RESULT_A = re.compile(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
                        re.IGNORECASE | re.DOTALL)
 _SNIPPET = re.compile(r'class="result__snippet"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
@@ -34,6 +46,27 @@ _BING_LI = re.compile(r'<li class="b_algo".*?</li>', re.IGNORECASE | re.DOTALL)
 _BING_A = re.compile(r'<h2>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
 _BING_P = re.compile(r"<p[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
+
+# ─── Local result cache (in-process, TTL 30 min) ──────────────────────────
+_CACHE: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL = 1800  # 30 minutes
+
+
+def _cache_get(key: str) -> dict | None:
+    entry = _CACHE.get(key)
+    if entry and (time.time() - entry[0]) < _CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _cache_set(key: str, val: dict) -> None:
+    _CACHE[key] = (time.time(), val)
+    # Evict stale entries (keep cache bounded)
+    if len(_CACHE) > 200:
+        cutoff = time.time() - _CACHE_TTL
+        stale = [k for k, (t, _) in _CACHE.items() if t < cutoff]
+        for k in stale:
+            del _CACHE[k]
 
 
 def _clean(text: str) -> str:
@@ -111,8 +144,41 @@ def parse_bing(body: str, max_results: int = 10) -> list[dict]:
     return out
 
 
-# Engine registry: (name, url_prefix, parser). Tried in order until one answers.
+# ─── SearXNG parser ───────────────────────────────────────────────────────
+
+def parse_searxng(body: str, max_results: int = 10) -> list[dict]:
+    """Parse SearXNG JSON API response into ``[{title, url, snippet}]`` (pure)."""
+
+    try:
+        data = json.loads(body or "")
+    except (ValueError, TypeError):
+        return []
+    results_raw = data.get("results", []) if isinstance(data, dict) else []
+    out: list[dict] = []
+    for r in results_raw[:max_results]:
+        if not isinstance(r, dict):
+            continue
+        url = r.get("url", "")
+        if not url:
+            continue
+        out.append({
+            "title": r.get("title", "")[:200],
+            "url": url,
+            "snippet": r.get("content", "")[:300],
+        })
+    return out
+
+
+def _searxng_url() -> str:
+    """Get the SearXNG instance URL from env or default."""
+    return os.environ.get("MOONMCP_SEARXNG_URL", _SEARXNG_DEFAULT).strip().rstrip("/")
+
+
+# Engine registry: (name, url_prefix, parser, is_json). Tried in order.
+# SearXNG is primary (70+ engines via one API), DDG/Bing are fallbacks.
+_SEARXNG_URL = _searxng_url()
 _ENGINES = (
+    ("searxng", f"{_SEARXNG_URL}/search?q=", parse_searxng),
     ("duckduckgo", _DDG_HTML, parse_ddg_html),
     ("duckduckgo-lite", _DDG_LITE, parse_ddg_lite),
     ("bing", _BING, parse_bing),
@@ -135,12 +201,14 @@ def _dedup(results: list[dict]) -> list[dict]:
 
 async def web_search(http_client, query: str, max_results: int = 10,
                      site: str | None = None) -> dict:
-    """Search the web (keyless) with **multi-engine fallback**.
+    """Search the web (keyless) with **multi-engine fallback + caching**.
 
-    Tries DuckDuckGo HTML → DuckDuckGo Lite → Bing, returning the first engine
-    that yields results (so one engine failing/rate-limiting doesn't blind the
-    search). ``site`` scopes the query to a single domain. Degrades gracefully to
-    an empty result set (never raises) when outbound network is blocked."""
+    Tries SearXNG → DuckDuckGo HTML → DuckDuckGo Lite → Bing, returning the
+    first engine that yields results (so one engine failing/rate-limiting
+    doesn't blind the search). ``site`` scopes the query to a single domain.
+    Results are cached for 30 minutes to avoid redundant API calls.
+    Degrades gracefully to an empty result set (never raises) when outbound
+    network is blocked."""
 
     q = query.strip()
     if site and site.strip():
@@ -149,12 +217,25 @@ async def web_search(http_client, query: str, max_results: int = 10,
             q = f"site:{dom} {q}".strip()
     if not q:
         return {"query": query, "results": [], "error": "empty query"}
+
+    # Check cache
+    cache_key = f"{q}|{max_results}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        cached["cached"] = True
+        return cached
+
     encoded = urllib.parse.quote(q)
     errors: list[str] = []
     for name, prefix, parser in _ENGINES:
+        # SearXNG needs format=json in the query params
+        if name == "searxng":
+            url = f"{prefix}{encoded}&format=json"
+        else:
+            url = prefix + encoded
         try:
             r = await http_client.fetch(
-                prefix + encoded, method="GET", follow_redirects=True, suppress_auth=True,
+                url, method="GET", follow_redirects=True, suppress_auth=True,
                 headers={"Accept-Language": "en-US,en;q=0.9",
                          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                                        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
@@ -167,8 +248,10 @@ async def web_search(http_client, query: str, max_results: int = 10,
             continue
         results = _dedup(parser(r.text(), max_results=max_results))
         if results:
-            return {"query": q, "engine": name, "count": len(results),
+            out = {"query": q, "engine": name, "count": len(results),
                     "results": results[:max_results]}
+            _cache_set(cache_key, out)
+            return out
         errors.append(f"{name}: no results (status {r.status})")
     return {"query": q, "results": [], "engines_tried": [e[0] for e in _ENGINES],
             "error": "; ".join(errors) or "no engine returned results"}
