@@ -42,6 +42,7 @@ from . import metrics as metricsmod
 from . import obsidian as obsidianmod
 from . import pipeline as pipe
 from . import prompts as promptmod
+from . import strix_adapted as sa
 from .context import AppContext, build_context, to_dict
 from .external import cli
 from .external import nuclei as nucleimod
@@ -52,11 +53,10 @@ from .intel import oast as oastmod
 from .intel import oast_server as oastsrvmod
 from .intel import reader as readermod
 from .intel import search as searchmod
+from .interface import viewer as viewermod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
 from .knowledge import techniques as techmod
-from . import strix_adapted as sa
-from .interface import viewer as viewermod
 from .knowledge import vulns as vulnsmod
 from .knowledge import waf_kb as wafkbmod
 from .memory import RELATIONS
@@ -67,6 +67,7 @@ from .net import tls as tlsmod
 from .programs import Program, parse_header
 from .recon import binary as binarymod
 from .recon import buckets as bucketsmod
+from .recon import cloud_audit as cloudauditmod
 from .recon import config_audit as configmod
 from .recon import content as contentmod
 from .recon import crawl as crawlmod
@@ -88,13 +89,11 @@ from .recon import secrets as secretsmod
 from .recon import sourcemaps as sourcemapsmod
 from .recon import subdomains as submod
 from .recon import supabase as supabasemod
-from .recon import cloud_audit as cloudauditmod
 from .recon import wayback as waybackmod
 from .report import autofix as autofixmod
 from .reporting import TOOL_NAME, format_markdown, format_sarif
 from .runs import RunBudget, seed_assessment
 from .scope import ScopeError, canonical_ip, normalize_target
-from .telemetry.collector import TelemetryCollector
 from .web import authflow as authflowmod
 from .web import authz as authzmod
 from .web import behavior as behaviormod
@@ -122,6 +121,7 @@ from .web import params as paramsmod
 from .web import parserdiff as parserdiffmod
 from .web import pathnorm as pathnormmod
 from .web import probes as probesmod
+from .web import proxy_rules as proxyrulesmod
 from .web import redirect as redirectmod
 from .web import saml as samlmod
 from .web import screenshot as screenshotmod
@@ -137,7 +137,6 @@ from .web import waf_bypass as wafbypassmod
 from .web import websocket as wsmod
 from .web import workflow as workflowmod
 from .web import xxe as xxemod
-from .web import proxy_rules as proxyrulesmod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware, stdlib-first bug-bounty & reconnaissance server.
@@ -507,7 +506,7 @@ async def opsec_config(action: str = "status",
     Actions: status, configure, risks (show OPSEC knowledge base).
     """
 
-    from .opsec import OpsecConfig, OpsecEngine, OPSEC_RISKS
+    from .opsec import OPSEC_RISKS, OpsecConfig, OpsecEngine
 
     ctx = get_context()
 
@@ -1192,7 +1191,7 @@ async def oast_techniques(attack_class: str = "", creative: bool = False) -> dic
     XXE parameter entities, WAF bypass for OAST payloads.
     """
 
-    from .intel.oast_payloads import OAST_TECHNIQUES, OAST_CREATIVE
+    from .intel.oast_payloads import OAST_CREATIVE, OAST_TECHNIQUES
 
     if creative:
         if attack_class and attack_class in OAST_CREATIVE:
@@ -4337,25 +4336,6 @@ async def generate_remediation(finding_id: int, code_context: str | None = None)
         patch = gen.generate_patch(finding, code_context)
         result["suggested_patch"] = patch
 
-    return result
-    """Record a private chain-of-thought reasoning step — no side effects.
-
-    Use before acting in policy-heavy environments (scope compliance,
-    multi-step exploit planning, risk assessment before destructive ops).
-
-    Structured sections are auto-detected (lines ending with ':').
-    The thought is persisted to the shared memory hub (trust=curated) so
-    reasoning carries forward across sessions and agents.
-
-    Args:
-        thought: The reasoning to record. Must be non-empty.
-    """
-    result = sa.think_structure(thought)
-    if result.get("success"):
-        ctx = get_context()
-        ctx.memory.add(kind="reasoning", title="think",
-                       body=thought, trust="curated", source="think",
-                       tags="reasoning")
     return result
 
 

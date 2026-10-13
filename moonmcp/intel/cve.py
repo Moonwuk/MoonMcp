@@ -14,9 +14,8 @@ import json
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
-from ..strix_adapted import retry_async
-
 from ..net.http import HttpClient
+from ..strix_adapted import retry_async
 
 _BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 

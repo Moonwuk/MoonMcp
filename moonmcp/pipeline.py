@@ -14,7 +14,6 @@ keep working regardless of which tree is current.
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -262,8 +261,8 @@ def search_bugbounty_reports(vuln_type: str, limit: int = 10) -> str:
     except OSError:
         return f"Ошибка чтения {fname}."
     # The TOP*.md files are markdown numbered lists — keep report lines only.
-    numbered = [l.strip() for l in raw.split("\n")
-                if re.match(r"^\d+\.", l.strip())]
+    numbered = [line.strip() for line in raw.split("\n")
+                if re.match(r"^\d+\.", line.strip())]
     selected = numbered[:limit]
     if selected:
         return "\n".join(selected)

@@ -3,8 +3,7 @@
 import os
 import tempfile
 
-from moonmcp.recon.sast import SASTScanner, scan
-
+from moonmcp.recon.sast import scan
 
 # Test fixture: Python file with SQLi + hardcoded password
 _VULN_PY = '''\

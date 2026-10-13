@@ -11,7 +11,7 @@ fed into a cloud audit pipeline or used as a checklist for manual review.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 

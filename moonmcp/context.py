@@ -7,7 +7,6 @@ and HTTP client so every tool draws on the same rate limit and scope state.
 from __future__ import annotations
 
 import dataclasses
-import os
 from dataclasses import dataclass
 
 from .audit import AuditLog, setup_logging
@@ -99,7 +98,6 @@ def build_context(settings: Settings | None = None) -> AppContext:
         opsec=opsec_engine,
         proxy_rules=proxy_engine,
     )
-    state_dir = os.environ.get("MOONMCP_STATE_DIR")
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
                       findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
                       snapshots=SnapshotStore(state_dir=settings.state_dir or None),

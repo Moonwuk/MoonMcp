@@ -1,7 +1,7 @@
 """Test TelemetryCollector — record 5 requests + 2 findings, verify get_stats."""
 
-import sys
 import os
+import sys
 
 # Ensure the moonmcp package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "MoonMcp"))

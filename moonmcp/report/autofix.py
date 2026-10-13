@@ -113,7 +113,7 @@ def _extract_remediation_section(md_text: str) -> str:
     level = len(matches[0].group(1))
     rest = md_text[start:]
     next_header = re.compile(rf"^#{{1,{level}}}\s", re.MULTILINE)
-    next_match = next_header.search(rest, endPos := matches[0].end())
+    next_match = next_header.search(rest, matches[0].end())
     if next_match:
         return rest[:next_match.start()].strip()
     return rest.strip()
@@ -998,7 +998,7 @@ def _generate_code_patch(
     ]
 
     if comment:
-        diff_lines.append(f"@@ suggested fix @@")
+        diff_lines.append("@@ suggested fix @@")
         diff_lines.append(f"+ {comment}")
 
     # Simple line-by-line diff

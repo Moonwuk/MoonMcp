@@ -30,14 +30,11 @@ architecture:
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 import os
 import re
 import tempfile
 import time
-from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
