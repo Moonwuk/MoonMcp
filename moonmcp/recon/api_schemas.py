@@ -37,7 +37,7 @@ class FieldSchema:
     enum: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        out = {"name": self.name, "type": self.type}
+        out: dict = {"name": self.name, "type": self.type}
         if self.pattern:
             out["pattern"] = self.pattern[:120]
         if self.format:
@@ -61,7 +61,7 @@ class EndpointSchema:
     notes: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        out = {"method": self.method, "path": self.path}
+        out: dict = {"method": self.method, "path": self.path}
         if self.security:
             out["security"] = self.security
         if self.request_fields:
@@ -76,8 +76,8 @@ class EndpointSchema:
 # ─── bundle fetching ──────────────────────────────────────────────────────
 
 def _fetch(url: str) -> str:
-    import urllib.request
     import ssl
+    import urllib.request
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE

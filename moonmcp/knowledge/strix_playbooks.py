@@ -26,7 +26,7 @@ Source: https://github.com/usestrix/strix (Apache 2.0)
 
 from __future__ import annotations
 
-from .strix_playbooks_data import PLAYBOOKS, PLAYBOOK_INDEX
+from .strix_playbooks_data import PLAYBOOK_INDEX, PLAYBOOKS
 
 # Versioning — track which Strix commit these playbooks were extracted from.
 # When Strix updates, bump this and re-extract. (Audit 2026-07-27, #10.)

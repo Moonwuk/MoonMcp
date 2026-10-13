@@ -24,10 +24,11 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
+from typing import Any
 
 __all__ = ["ViewerServer", "get_viewer"]
 
@@ -159,7 +160,7 @@ def _make_handler(token: str, providers: dict[str, DataProvider]) -> type[BaseHT
         else:
             supplied = ""
         # Also accept ?token= query param for browser convenience.
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
         qs = parse_qs(urlparse(self.path).query)
         if not supplied and "token" in qs:
             supplied = qs["token"][0]

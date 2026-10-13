@@ -30,15 +30,12 @@ architecture:
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 import os
 import re
 import tempfile
 import time
-from collections import Counter
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -422,7 +419,7 @@ class AgentGraph:
             "names": dict(self.names),
             "metadata": {k: dict(v) for k, v in self.metadata.items()},
             "budget_stopped": self._budget_stopped,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -458,7 +455,7 @@ def think_structure(thought: str) -> dict:
     return {
         "success": True,
         "sections": {k: v.strip() for k, v in sections.items() if v.strip()},
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": "Thought recorded — use this to plan before acting",
     }
 
@@ -630,7 +627,7 @@ class HttpProxy:
             "response_headers": response_headers or {},
             "elapsed_ms": elapsed_ms,
             "is_tls": is_tls,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._entries.append(entry)
         # Mirror into the shared HistoryStore if one was provided (#6).

@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Tests for proxy_rules module — ProxyRule + ProxyRuleEngine."""
-import sys
 import os
+import sys
 
 # Ensure the moonmcp package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "moonmcp"))
 
 from moonmcp.web.proxy_rules import (
-    ProxyRule, ProxyRuleEngine,
-    bugbounty_header_rule, ua_spoof_rule, token_rotation_rule,
-    url_rewrite_rule, body_rewrite_rule, header_rewrite_rule,
+    ProxyRule,
+    ProxyRuleEngine,
+    body_rewrite_rule,
+    bugbounty_header_rule,
+    header_rewrite_rule,
     redirect_intercept_rule,
+    token_rotation_rule,
+    ua_spoof_rule,
+    url_rewrite_rule,
 )
 
 
@@ -72,7 +77,7 @@ def test_redirect_intercept():
 
     req = {"url": "https://example.com/login", "method": "GET", "headers": {}, "body": ""}
     resp = {"headers": {"Location": "https://example.com/dashboard"}}
-    modified = eng.apply_rules(req, response=resp)
+    eng.apply_rules(req, response=resp)
     assert resp["headers"]["Location"] == "https://evil.com/dashboard"
     print("✓ test_redirect_intercept passed")
 

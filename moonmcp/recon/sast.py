@@ -34,8 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Reuse the curated secret patterns from the secrets module for consistency.
-from .secrets import scan_text as _scan_secrets, SecretHit
-
+from .secrets import scan_text as _scan_secrets
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -513,7 +512,7 @@ class SASTScanner:
     def _scan_file(self, filepath: str, lang_hint: str, result: SASTScanResult) -> None:
         """Scan a single file for all rule groups."""
         try:
-            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            with open(filepath, encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except OSError as exc:
             result.errors[filepath] = str(exc)

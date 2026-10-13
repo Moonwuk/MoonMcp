@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..memory import MemoryStore
@@ -394,7 +394,7 @@ class ExploitAgent(BaseAgent):
             "url": target_url,
             "result": result,
             "confirmed": confirmed,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.probes_run.append(entry)
 
@@ -477,7 +477,7 @@ class PostExAgent(BaseAgent):
         lines = [
             f"# Post-Exploitation Report: {self.target}",
             "",
-            f"Generated: {datetime.now(UTC).isoformat()}",
+            f"Generated: {datetime.now(timezone.utc).isoformat()}",
             f"Agent: {self.agent_id}",
             f"Total findings: {len(findings)}",
             "",
@@ -513,7 +513,7 @@ class PostExAgent(BaseAgent):
             "description": description,
             "steps": steps,
             "severity": severity,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.chains.append(chain)
         self.share(

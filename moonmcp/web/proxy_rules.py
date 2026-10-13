@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import re
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
-from urllib.parse import urlsplit, urlunsplit
-
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlsplit
 
 # ─── data model ──────────────────────────────────────────────────────
 
