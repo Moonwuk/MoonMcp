@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Coordination"
+  short_description: "Coordinate resumable MoonMCP assessment runs"
+  default_prompt: "Use $run-coordination to drive this assessment through tasks, budgets, coverage, and evidence."

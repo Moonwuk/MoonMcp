@@ -40,7 +40,8 @@ stood out:
 
 MoonMCP's design principles:
 
-* **🔋 Works out of the box** — zero required dependencies beyond the MCP SDK.
+* **🔋 Works out of the box** — only the MCP SDK and the lightweight
+  `defusedxml` safety parser are required; security CLIs remain optional.
 * **🧩 Augments, never depends** — detects and wraps `nuclei`/`httpx`/`subfinder`/`nmap`/… when installed, degrades gracefully when not.
 * **🛡️ Scope-first & safe by default** — an authorization guardrail on every active tool, rate limiting, and an intrusive-tools switch.
 * **📦 Structured output** — everything returns clean JSON, not scraped console text.
@@ -49,7 +50,7 @@ MoonMCP's design principles:
 
 ## Tool surface
 
-MoonMCP exposes **166 tools**, **11 resources** and **9 operator prompts**, grouped by how much they touch the target:
+MoonMCP exposes **181 tools**, **12 resources** and **9 operator prompts**, grouped by how much they touch the target:
 
 ### 🟢 Meta / scope
 | Tool | Purpose |
@@ -201,6 +202,10 @@ delegated to **sqlmap** / **Strix** under human confirmation.
 ### 🔗 Orchestration & reporting
 | Tool | Purpose |
 | --- | --- |
+| `run_start` / `run_status` / `run_list` / `run_control` | Start, inspect, pause, resume or cancel a **persistent assessment run**. A new run receives a dependency-ordered coordinator→mapper→hypothesis→validator→reporter task graph and resumes from `MOONMCP_STATE_DIR/runs.db`. |
+| `run_task_add` / `run_task_update` / `run_next` | Build and drive the run's role-based task graph. Dependencies prevent downstream validation/reporting work from running before its prerequisites complete. |
+| `run_coverage_update` / `run_usage` / `run_finish` | Maintain an explicit coverage matrix, enforce request/tool/intrusive-call budgets, and refuse to finish while tasks or coverage remain open (unless the operator explicitly forces completion). |
+| `run_artifact_add` / `run_artifacts` | Preserve bounded evidence with an immutable SHA-256 reference; artifact bodies are omitted from listings unless explicitly requested. |
 | `probe_batch` | Probe a **list** of hosts/URLs in parallel (liveness, status, title, tech) — the enum→probe step; feed it `enumerate_subdomains`. Scope-gated + rate-limited. |
 | `recon_target` | One-shot passive+light sweep (subdomains → DNS → TLS → HTTP → headers → fingerprint → email security). |
 | `report` | Full safe sweep → a severity-ranked **Markdown** report (surface, posture grades, findings). |
@@ -248,7 +253,9 @@ Referenced catalogs built into the server (offline, searchable as tools + MCP re
 | `rootcause_info` | The root-cause taxonomy — the ~13 fundamental causes underneath all these bugs, each with why it recurs, the systemic fix, and the catalog vulns that derive from it. |
 | `waf_info` / `identify_waf` | WAF KB (how they work · fingerprints · bypass concepts); `identify_waf` names the vendor from a raw HTTP response (CF-RAY, `__cfduid`, `x-akamai`, `incap_ses`, BigIP, …). |
 
-**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`, `injections://all`, `techniques://all`, `privesc://all`, `vulns://all`, `rootcauses://all`, `waf://all`, `audit://recent`
+**Resources:** `moonmcp://scope`, `moonmcp://capabilities`, `findings://current`,
+`runs://recent`, `memory://recent`, `injections://all`, `techniques://all`,
+`privesc://all`, `vulns://all`, `rootcauses://all`, `waf://all`, `audit://recent`
 
 **Operator prompts** ([`docs/SYSTEM_PROMPTS.md`](docs/SYSTEM_PROMPTS.md)) — system prompts that make an agent using MoonMCP plan, pick the right tool, verify before it reports, minimise false positives and stay strictly in scope. Synthesised from real pentest-agent prompts (CAI, PentestGPT, XBOW, HexStrike), agent prompt-engineering (ReAct, Plan-and-Execute, Chain-of-Verification, Reflexion) and bug-bounty methodology (TBHM, OWASP WSTG, PortSwigger, HackerOne/Bugcrowd):
 - `bug_bounty_operator` — master engagement prompt (rules of engagement + OODA-style loop + tool map).
@@ -316,7 +323,7 @@ recon + findings; hides the heavy scanners/proxy), or `passive` / `knowledge` /
 MoonMCP plugs into a tool like **Strix** as a shared brain/memory/guard
 (see [`docs/STRIX_INTEGRATION.md`](docs/STRIX_INTEGRATION.md)).
 
-### Claude Code skill
+### Operator skills
 
 A packaged **skill** ships in [`.claude/skills/moonmcp/`](.claude/skills/moonmcp/SKILL.md)
 that teaches an agent the MoonMCP workflow, the rules of engagement, and the tool
@@ -325,7 +332,15 @@ and the agent will orient itself with `server_status` + `tool_catalog` and drive
 the tools in the right order — scope/program first, passive → light → intrusive
 (with consent) → report.
 
-A second skill, `strix-orchestration`, teaches an agent to drive MoonMCP
+Three focused run-lifecycle skills adapt the useful parts of
+[obra/superpowers](https://github.com/obra/superpowers) to authorised security
+work: `assessment-planning` creates bounded plans and coverage,
+`systematic-validation` applies baseline/control/evidence discipline before a
+finding is reported, and `run-coordination` drives resumable tasks, budgets and
+the finish gate. See [`docs/AUTONOMY_ROADMAP.md`](docs/AUTONOMY_ROADMAP.md) for
+the adaptation rationale and the remaining autonomy stages.
+
+The `strix-orchestration` skill teaches an agent to drive MoonMCP
 (fast, scope-first **detection**) together with [Strix](https://github.com/usestrix/strix)
 (autonomous **validation** with working PoCs) as two MCP tools of the *same* agent
 — MoonMCP finds, Strix confirms. See [`docs/STRIX_INTEGRATION.md`](docs/STRIX_INTEGRATION.md)
@@ -343,8 +358,8 @@ All configuration is via environment variables (set them in your MCP client's `e
 | `MOONMCP_SCOPE_EXCLUDE` | *(empty)* | Out-of-scope entries that always override the allowlist. |
 | `MOONMCP_ENFORCE_SCOPE` | `1` | When on, active tools refuse targets not in scope. |
 | `MOONMCP_BLOCK_PRIVATE` | `1` | SSRF guard: hard-block private/loopback/link-local/reserved IPs (incl. cloud metadata). Set `0` for authorised internal-network testing. |
-| `MOONMCP_ALLOW_INTRUSIVE` | `1` | Gate for `port_scan`, `content_discovery`, `vuln_scan`. |
-| `MOONMCP_RATE_LIMIT` | `20` | Max outbound requests/sec (token bucket; `0` = unlimited). |
+| `MOONMCP_ALLOW_INTRUSIVE` | `0` | Gate for intrusive probes and scanners. Enable it explicitly for an authorised engagement. |
+| `MOONMCP_RATE_LIMIT` | `10` | Max outbound requests/sec (token bucket; `0` = unlimited). |
 | `MOONMCP_MAX_CONCURRENCY` | `20` | Max concurrent outbound connections. |
 | `MOONMCP_TIMEOUT` | `10` | Default request timeout (seconds). |
 | `MOONMCP_USER_AGENT` | `Mozilla/5.0 … Chrome/131 …` | User-Agent for HTTP probing (browser-like by default so the probe traffic does not fingerprint the tool). |
@@ -477,7 +492,7 @@ inventory (installed + install hints).
 
 ```
 moonmcp/
-├── server.py        # FastMCP server: 158 tools, 11 resources, 9 prompts (@active_tool = the one scope gate)
+├── server.py        # FastMCP server: 181 tools, 12 resources, 9 prompts (@active_tool = the one scope gate)
 ├── catalog.py       # self-describing tool map (tool_catalog): families + gate flags + workflow
 ├── confirm.py       # finding-confirmation scoring (differential + OAST + signatures)
 ├── cvss.py          # CVSS 3.1 base-score calculator

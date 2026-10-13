@@ -44,7 +44,11 @@ jobs:
         with:
           python-version: "3.11"
       - uses: astral-sh/setup-uv@v5
-      - name: Install project
-        run: uv pip install --system -e .
+      - name: Build distribution
+        run: uv build
+      - name: Install built wheel with runtime dependencies
+        run: uv pip install --system dist/*.whl
+      - name: Verify dependency resolution
+        run: uv pip check --system
       - name: Server capability check
         run: moonmcp --check

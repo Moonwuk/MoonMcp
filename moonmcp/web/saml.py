@@ -41,6 +41,9 @@ import base64
 import binascii
 import copy
 from dataclasses import dataclass
+from xml.etree import ElementTree as ET
+
+from defusedxml.ElementTree import ParseError as _SafeParseError
 
 # Use defusedxml for parsing — stdlib xml.etree.ElementTree resolves internal
 # entities and has no depth/count cap, so a SAMLResponse (attacker-supplied
@@ -49,8 +52,7 @@ from dataclasses import dataclass
 # default. ET.tostring / ET.register_namespace / ET.Element are still safe to
 # use from the stdlib (they don't parse untrusted input).
 # (Audit 2026-07-27, WA4.)
-from defusedxml.ElementTree import fromstring as _safe_fromstring, ParseError as _SafeParseError
-from xml.etree import ElementTree as ET
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 # Size caps: a real SAMLResponse is a few KB. A multi-MB blob is either an
 # attack (amplifies the entity-expansion DoS, enables memory exhaustion

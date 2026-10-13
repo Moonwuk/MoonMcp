@@ -32,9 +32,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The whole point of MoonMCP is to work with (almost) zero dependencies.
-# The only hard requirement is the MCP SDK itself.
+# MCP 2.x renamed FastMCP and changed other APIs; keep the supported 1.x line
+# explicit until the server is migrated.  defusedxml is required by the SAML
+# parser to reject entity-expansion attacks safely.
 dependencies = [
-    "mcp>=1.2.0",
+    "mcp>=1.2.0,<2",
+    "defusedxml>=0.7.1,<1",
 ]
 
 [project.optional-dependencies]

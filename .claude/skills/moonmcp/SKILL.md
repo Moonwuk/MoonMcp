@@ -13,7 +13,7 @@ description: >-
 
 # MoonMCP operator skill
 
-MoonMCP is a **scope-aware, stdlib-first** recon/bug-bounty MCP server (~158 tools).
+MoonMCP is a **scope-aware, stdlib-first** recon/bug-bounty MCP server (181 tools).
 Its whole design is that every packet-sending tool passes **one** authorization
 choke point. Use it **only against assets the user is authorised to test**, pick the
 lightest tool that answers the question, and escalate noise only with consent.
@@ -38,7 +38,7 @@ lightest tool that answers the question, and escalate noise only with consent.
 
 ## Operating loop (the spine)
 
-`RECALL → AUTHORISE → PASSIVE → LIGHT → MAP → CONFIRM → RECORD → LEARN`, breadth-first
+`RECALL → AUTHORISE → START/RESUME → PASSIVE → LIGHT → MAP → CONFIRM → RECORD → LEARN`, breadth-first
 (cover every in-scope asset before deep-diving one):
 
 0. **RECALL** — `memory_brief(target)` + `memory_lesson(action=recall)` before you
@@ -47,10 +47,13 @@ lightest tool that answers the question, and escalate noise only with consent.
    intrusive on/off) and `tool_catalog` (grouped map of all tools with `scope_gated` /
    `intrusive` flags; pass a `family` to drill in). Use the cheatsheet to choose.
 2. **AUTHORISE** — `scope_add` or a `program_*` profile (below).
-3. Work down the cheatsheet: **PASSIVE → LIGHT → MAP** (light first, intrusive on consent).
-4. **CONFIRM** — `promote_lead` → `confirm_finding` → `cvss_score`; a lead that won't
+3. **START / RESUME** — use `run_start` for a new assessment or `run_status` +
+   `run_next` for an existing one. Track budgets, tasks, coverage and artifacts with
+   the `assessment-planning`, `run-coordination`, and `systematic-validation` skills.
+4. Work down the cheatsheet: **PASSIVE → LIGHT → MAP** (light first, intrusive on consent).
+5. **CONFIRM** — `promote_lead` → `confirm_finding` → `cvss_score`; a lead that won't
    confirm cheaply → delegate to Strix, don't report it.
-5. **RECORD / LEARN** — `add_finding` as you go (auto-mirrors to memory + graph),
+6. **RECORD / LEARN** — `add_finding` as you go (auto-mirrors to memory + graph),
    `memory_lesson(action=add)` for reusable tradecraft, then `report` / `export_*`.
 
 ## Tool cheatsheet — symptom → tool
@@ -77,6 +80,7 @@ lightest tool that answers the question, and escalate noise only with consent.
 | **Hand-craft / iterate a request** | `http_repeater` (one full request + passive scan), `intruder` *(intrusive)*, `passive_scan`, `http_history` |
 | **Intrusive scanning** *(consent + `MOONMCP_ALLOW_INTRUSIVE`)* | `port_scan`, `content_discovery`, `http_methods`, `waf_efficacy`, `desync_probe` / `desync_modern_probe`, `vuln_scan` (needs nuclei) |
 | **Batch liveness** | feed `enumerate_subdomains` → `probe_batch` |
+| **Run or resume an assessment** | `run_start` / `run_status` → `run_next`; maintain `run_task_*`, `run_coverage_update`, `run_usage`, `run_artifact_*`; close with `run_finish` |
 | **Reason about a bug class** (offline, no traffic) | `injection_info` / `match_injection_signatures`, `technique_info`, `privesc_info` / `match_privesc`, `vuln_info` + `rootcause_info`, `waf_info` / `identify_waf` |
 | **Confirm a lead** | `promote_lead(kind=…)` routes it → `confirm_finding` (baseline-vs-test + injection sigs + OAST) → `cvss_score`; won't confirm → Strix |
 | **Record / report** | `add_finding` (auto-graphs + mirrors to memory), `triage_findings` (dedupe + systemic issues), `report`, `export_findings` (SARIF/JSON), `export_obsidian` (linked vault) |
