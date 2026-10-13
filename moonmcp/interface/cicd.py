@@ -55,7 +55,7 @@ def generate_github_actions_workflow(
         YAML string for .github/workflows/moonmcp-security.yml
     """
 
-    triggers = ["pull_request"]
+    triggers: list[str | dict[str, list[dict[str, str]]]] = ["pull_request"]
     if schedule:
         triggers.insert(0, {"schedule": [{"cron": schedule}]})
     triggers.append("workflow_dispatch")
