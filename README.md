@@ -13,6 +13,7 @@ The project is **stdlib-first**: its core reconnaissance features work without a
 - **Web security checks** — structured checks for common access-control, configuration, injection, WebSocket, GraphQL, OAuth, cache and server-side issues.
 - **Finding workflow** — confirmation helpers, CVSS scoring, deduplication, reporting, SARIF/JSON export and surface snapshots.
 - **Persistent research context** — optional SQLite-backed memory and a small knowledge graph for findings, assets and research notes.
+- **Resumable assessments** — persistent runs, role-based tasks, dependency ordering, coverage tracking, usage budgets and immutable evidence artifacts.
 - **Optional CLI integration** — can detect and use tools such as `nuclei`, `httpx`, `subfinder`, `nmap` and others when they are available.
 - **Safety controls** — scope enforcement, request rate/concurrency limits, private-address protection, audit logging and a separate gate for intrusive tools.
 
@@ -61,6 +62,18 @@ moonmcp call injection_info --json '{"injection_class":"ssti"}'
 
 Scope checks still apply to shell calls.
 
+### Resumable assessment runs
+
+Set `MOONMCP_STATE_DIR` to retain runs in `runs.db` across restarts. Use `run_start`
+with an authorised target, `run_status` to resume context, and `run_next` to select
+an unblocked task. Record measured usage through `run_usage`; automatic accounting
+of network/tool calls is a planned extension. `run_finish` checks unfinished tasks
+and open coverage before completion.
+
+Operator skills in `.claude/skills/assessment-planning`,
+`.claude/skills/systematic-validation`, and `.claude/skills/run-coordination`
+describe planning, evidence validation and coordination through these MCP tools.
+
 ## Scope and safety
 
 Scope is the main authorization boundary for active testing.
@@ -101,6 +114,7 @@ See the source and documentation for specialised integrations and provider-speci
 The repository contains detailed reference material for areas that would make this README unnecessarily large:
 
 - [Research and design notes](docs/RESEARCH.md)
+- [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
 - [System prompts](docs/SYSTEM_PROMPTS.md)
 - [Injection reference](docs/INJECTIONS.md)

@@ -6,6 +6,24 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Scope-first assessment methodology skills.** Added `assessment-planning`,
+  `systematic-validation`, and `run-coordination`: concise security-specific
+  adaptations of the useful planning, debugging/TDD/verification, and execution
+  patterns from the MIT-licensed `obra/superpowers` project. The skills operate
+  MoonMCP's persistent run/task/coverage/budget/artifact APIs instead of copying
+  generic software-development ceremony. `docs/AUTONOMY_ROADMAP.md` records what
+  remains before MoonMCP owns a complete Strix-class autonomous runtime.
+- **Resumable assessment runtime.** A new SQLite-backed run store persists
+  engagement state, dependency-ordered specialist tasks, coverage, hard request/
+  tool/intrusive-call budgets, immutable SHA-256-addressed evidence artifacts,
+  and an append-only event stream. Twelve MCP tools
+  (`run_start`, `run_status`, `run_list`, `run_control`, `run_task_add`,
+  `run_task_update`, `run_next`, `run_coverage_update`, `run_usage`,
+  `run_artifact_add`, `run_artifacts`, `run_finish`)
+  provide a model-independent coordinator with pause/resume/cancel controls and a
+  finish gate that refuses incomplete assessments. New runs are seeded with a
+  coordinator→mapper→hypothesis→validator→reporter graph; state survives process
+  restarts through `MOONMCP_STATE_DIR/runs.db`. `moonmcp/runs.py`.
 - **SAML XML Signature Wrapping probe (`saml_xsw_probe`).** Detection-only,
   gap #8/8 (the last) from the Burp technique research pass. SAML responses
   carry a *detached* signature — a `<ds:Signature>` whose `Reference` points
@@ -193,6 +211,12 @@ All notable changes to MoonMCP are documented here. The format loosely follows
   `moonmcp/intel/oast_server.py`.
 
 ### Fixed
+- **Clean-install compatibility.** Runtime dependencies now pin the supported
+  MCP SDK 1.x API (`mcp<2`) and declare the `defusedxml` parser imported by the
+  SAML module, so a fresh wheel installation starts successfully instead of
+  failing during server import. CI now builds and smoke-tests the wheel rather
+  than the editable source tree, and the documented intrusive/rate-limit
+  defaults match the safe runtime defaults.
 - **Security & correctness hardening — 21 verified bugs from a whole-project audit**
   (partitioned multi-agent finders → independent per-finding verification; each fix
   pinned by a regression test in `tests/test_bugfixes.py`). Scope/SSRF guard: an

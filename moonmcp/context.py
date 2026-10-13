@@ -22,6 +22,7 @@ from .monitor import SnapshotStore
 from .net.http import HttpClient
 from .net.ratelimit import Governor
 from .programs import ProgramStore
+from .runs import RunStore
 from .scope import ScopeManager
 
 
@@ -39,6 +40,7 @@ class AppContext:
     programs: ProgramStore
     history: HistoryStore
     memory: MemoryStore
+    runs: RunStore
     oast_server: CallbackServer | None = None
 
 
@@ -77,11 +79,12 @@ def build_context(settings: Settings | None = None) -> AppContext:
         connect_pin=scope.resolve_pin,
         auth_provider=_request_headers,
     )
+    state_dir = os.environ.get("MOONMCP_STATE_DIR")
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
                       findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
-                      snapshots=SnapshotStore(state_dir=os.environ.get("MOONMCP_STATE_DIR")),
+                      snapshots=SnapshotStore(state_dir=state_dir),
                       audit=AuditLog.from_env(), programs=programs, history=HistoryStore(),
-                      memory=MemoryStore.from_env())
+                      memory=MemoryStore.from_env(), runs=RunStore.from_env(state_dir))
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

@@ -1039,4 +1039,8 @@ def fresh_context(monkeypatch):
     ctx.scope.add("127.0.0.1")
     ctx.settings = _dc.replace(ctx.settings, allow_intrusive=True)
     monkeypatch.setattr(srv, "_CTX", ctx)
-    return ctx
+    try:
+        yield ctx
+    finally:
+        ctx.memory.close()
+        ctx.runs.close()

@@ -49,6 +49,11 @@ for the right tool.
   active → intrusive-with-consent → report), the rules of engagement, and when to
   use which tool, so the capabilities are self-describing rather than tribal
   knowledge.
+- ✅ **Assessment process skills.** `assessment-planning`,
+  `systematic-validation`, and `run-coordination` adapt the planning,
+  evidence-before-claims, and resumable execution patterns from the
+  MIT-licensed obra/superpowers project to MoonMCP's scope/budget/coverage model.
+  The remaining agent-runtime work is tracked in `docs/AUTONOMY_ROADMAP.md`.
 
 ## Phase 3 — Deep Kali / external-tool integration ✅ (core)
 
