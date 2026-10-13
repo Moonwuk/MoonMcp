@@ -7477,6 +7477,27 @@ async def check_subdomain_takeover(service: str) -> dict:
     return pipe.check_subdomain_takeover(service)
 
 
+@mcp.tool()
+@safe_tool
+async def tool_search(query: str, phase: str = "", available_only: bool = True,
+                      limit: int = 5) -> dict:
+    """Find the RIGHT tool for the task at hand — short candidate cards with
+    the reason each matched, instead of reading the full 200-tool catalog.
+
+    Phase (optional) biases the ranking: recon, injection, auth, logic, infra,
+    ssrf, report, knowledge, oast, run. Every card keeps the scope_gated /
+    intrusive flags: rank is never permission — gates apply per tool.
+
+    Returns at most `limit` (default 5) candidates; each card has name, family,
+    one-line purpose, and why it matched. This fixes the CHOICE problem; the
+    client still loads each tool's schema on call (per the navigation plan,
+    search cannot shrink what the client loads by itself).
+    """
+    from . import toolsearch
+    return toolsearch.search(query, phase=phase, available_only=available_only,
+                             limit=limit)
+
+
 _apply_tool_profile()
 
 

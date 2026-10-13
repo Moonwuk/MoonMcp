@@ -22,7 +22,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Authorise and identify before touching anything: scope, per-program "
         "header, engagement auth, out-of-band callbacks, audit trail.",
         [
-            "server_status", "tool_catalog",
+            "server_status", "tool_catalog", "tool_search",
             "scope_list", "scope_add", "scope_exclude", "scope_remove",
             "program_add", "program_use", "program_list", "program_remove",
             "auth_set", "auth_clear",
@@ -239,7 +239,7 @@ PROFILES: dict[str, set[str] | None] = {
 }
 
 # Always reachable so an agent can orient itself and check scope, whatever the profile.
-_ALWAYS_ON = {"server_status", "tool_catalog", "scope_list"}
+_ALWAYS_ON = {"server_status", "tool_catalog", "tool_search", "scope_list"}
 
 
 def profile_names() -> list[str]:
