@@ -6873,13 +6873,16 @@ def _apply_tool_profile() -> None:
     if profile and profile.strip().lower() not in catalogmod.PROFILES:
         import sys
         print(f"[moonmcp] unknown MOONMCP_PROFILE={profile!r}; known: "
-              f"{catalogmod.profile_names()} — exposing all", file=sys.stderr)
+              f"{catalogmod.profile_names()} — FAILING CLOSED: only orientation "
+              f"tools (server_status, tool_catalog, scope_list) are exposed. "
+              f"Fix the profile name and restart.", file=sys.stderr)
     allowed = catalogmod.select_profile(all_names, profile=profile, expose=expose, hide=hide)
     for name in all_names - allowed:
         tools.pop(name, None)
 
 
-_apply_tool_profile()
+# NOTE: _apply_tool_profile() is invoked at the END of this module (after every
+# @mcp.tool registration below) so late-registered tools cannot bypass profiles.
 
 
 # ---------------------------------------------------------------------------
@@ -7472,6 +7475,9 @@ async def check_subdomain_takeover(service: str) -> dict:
     """Проверяет CNAME-цель или сервис по базе can-i-take-over-xyz (76 сервисов)
     — возвращает fingerprint и статус (Vulnerable/Not vulnerable/Edge case)."""
     return pipe.check_subdomain_takeover(service)
+
+
+_apply_tool_profile()
 
 
 def run() -> None:

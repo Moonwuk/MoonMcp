@@ -239,9 +239,16 @@ def select_profile(all_names, *, profile: str | None = None,
     fam_set = PROFILES.get(prof)
     if prof in PROFILES and fam_set is not None:
         allowed = {n for n in names if TOOL_FAMILY.get(n) in fam_set}
-    elif expose:  # an explicit expose-list with no (or 'full') profile → whitelist
+    elif prof == "full":
+        allowed = set(names)
+    elif prof:
+        # Fail closed (AGENT_NAVIGATION_PLAN.md stage 1): an unknown profile is a
+        # configuration error, not license to expose everything. Only the
+        # orientation tools stay reachable so a client can diagnose and fix.
         allowed = set()
-    else:  # 'full', unknown profile, or hide-only → start from everything
+    elif expose:  # an explicit expose-list with no profile → whitelist
+        allowed = set()
+    else:  # hide-only → start from everything
         allowed = set(names)
 
     if expose:
