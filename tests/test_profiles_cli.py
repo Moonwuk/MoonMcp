@@ -45,8 +45,14 @@ def test_hide_removes_a_family():
     assert "http_probe" in allowed  # everything else stays
 
 
-def test_unknown_profile_falls_back_to_all():
-    assert cat.select_profile(ALL, profile="does-not-exist") == ALL
+def test_unknown_profile_fails_closed():
+    # AGENT_NAVIGATION_PLAN.md stage 1: an unknown profile is a config error,
+    # not license to expose everything. Only orientation tools stay reachable.
+    allowed = cat.select_profile(ALL, profile="does-not-exist")
+    assert allowed == {n for n in ALL if n in cat._ALWAYS_ON}, (
+        f"unknown profile must expose only _ALWAYS_ON, got {len(allowed)} tools")
+    # and a *known* profile still works untouched:
+    assert "http_probe" in cat.select_profile(ALL, profile="recon")
 
 
 def test_cli_tools_json(capsys):
