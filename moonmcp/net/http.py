@@ -446,6 +446,8 @@ class HttpClient:
         max_body: int = DEFAULT_MAX_BODY,
         connect_pin: Callable[[str], tuple[str | None, str | None]] | None = None,
         auth_provider: Callable[[], dict[str, str]] | None = None,
+        opsec: object | None = None,
+        proxy_rules: object | None = None,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
@@ -459,6 +461,13 @@ class HttpClient:
         # auth_provider() -> engagement headers merged into every request unless
         # suppress_auth is set (e.g. the anonymous leg of an access-control diff).
         self._auth_provider = auth_provider
+        # opsec: OpsecEngine for browser-like headers, jitter, anti-bruteforce, anti-DoS.
+        # When set, build_headers() supplies Sec-Fetch-*, Accept-Language, etc. and
+        # get_delay() adds timing jitter between requests.
+        self._opsec = opsec
+        # proxy_rules: ProxyRuleEngine for match & replace on outbound requests.
+        # When set, apply_rules() runs before each request is sent.
+        self._proxy_rules = proxy_rules
 
     async def fetch(
         self,
@@ -483,6 +492,10 @@ class HttpClient:
             # urllib's 3-header skeleton, or we lose the fingerprint. Engagement
             # auth + per-call headers still layer on top.
             merged = {}
+        elif self._opsec is not None:
+            # OPSEC engine supplies browser-like headers (Sec-Fetch-*, Accept-Language,
+            # randomized order) to avoid tool fingerprinting.
+            merged = self._opsec.build_headers(method)
         else:
             merged = {"User-Agent": self._ua, "Accept-Encoding": "gzip, deflate", "Accept": "*/*"}
         # Scope-check the INITIAL url before the first hop. The redirect-loop
@@ -501,6 +514,23 @@ class HttpClient:
             merged.update(self._auth_provider())
         if headers:
             merged.update(headers)  # per-call headers win over engagement auth
+        # Proxy rules: apply match & replace transformations to the request.
+        # The engine's API is apply_rules(request_dict) -> new request_dict.
+        if self._proxy_rules is not None and hasattr(self._proxy_rules, 'apply_rules'):
+            req_dict = {"url": url, "method": method, "headers": dict(merged),
+                        "body": body.decode("utf-8", errors="replace") if body else ""}
+            try:
+                new_req = self._proxy_rules.apply_rules(req_dict)
+                if new_req and isinstance(new_req, dict):
+                    merged = dict(new_req.get("headers", merged))
+                    nb = new_req.get("body")
+                    if isinstance(nb, str) and nb:
+                        body = nb.encode("utf-8")
+                    nm = new_req.get("method")
+                    if isinstance(nm, str) and nm:
+                        method = nm
+            except Exception:
+                pass  # rule engine must never break the request path
         origin0 = _origin(url)
         chain: list[str] = []
         current = url
@@ -539,6 +569,22 @@ class HttpClient:
                     result.blocked_reason = reason
                     break
             async with self._gov:
+                # OPSEC jitter: small random delay to break uniform timing pattern.
+                if self._opsec is not None:
+                    delay = self._opsec.get_delay()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                # OPSEC anti-DoS: track request count per target.
+                if self._opsec is not None and hasattr(self._opsec, 'check_dos'):
+                    dos_ok, dos_msg = self._opsec.check_dos(current)
+                    if not dos_ok:
+                        return HttpResult(
+                            url=url, final_url=current, status=None, reason="",
+                            headers=[], body=b"", elapsed_ms=0.0,
+                            error=dos_msg, blocked_reason=dos_msg,
+                        )
+                    if self._opsec and hasattr(self._opsec, 'record_request'):
+                        self._opsec.record_request(urlsplit(current).hostname or current)
                 if _USE_CURL_CFFI:
                     result = await asyncio.to_thread(
                         _curl_cffi_fetch,

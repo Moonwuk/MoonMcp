@@ -24,6 +24,7 @@ from .net.ratelimit import Governor
 from .programs import ProgramStore
 from .runs import RunStore
 from .scope import ScopeManager
+from .telemetry.collector import TelemetryCollector
 
 
 @dataclass
@@ -40,6 +41,7 @@ class AppContext:
     programs: ProgramStore
     history: HistoryStore
     memory: MemoryStore
+    telemetry: TelemetryCollector
     runs: RunStore
     oast_server: CallbackServer | None = None
 
@@ -72,19 +74,38 @@ def build_context(settings: Settings | None = None) -> AppContext:
         merged.update(auth.merged_headers())
         return merged
 
+    # OPSEC engine: always on — browser-like headers + jitter for every request,
+    # even without an active program (stealth is not optional). The BB header
+    # itself arrives via auth_provider from the active program; OpsecEngine only
+    # adds it too when one was active at build time (dict merge = no duplicate).
+    from .opsec import OpsecConfig, OpsecEngine
+    opsec_engine = OpsecEngine(OpsecConfig(
+        bb_header_name=(active.header_name or "") if active else "",
+        bb_header_value=(active.header_value or "") if active else "",
+    ))
+
+    # Proxy rule engine: the same singleton the proxy_rules MCP tool drives,
+    # so rules registered via proxy_rules(action='add') apply to every request
+    # sent through the unified egress (HttpClient).
+    from .web.proxy_rules import get_engine as _get_proxy_engine
+    proxy_engine = _get_proxy_engine()
+
     http = HttpClient(
         governor,
         user_agent=settings.user_agent,
         default_timeout=settings.timeout,
         connect_pin=scope.resolve_pin,
         auth_provider=_request_headers,
+        opsec=opsec_engine,
+        proxy_rules=proxy_engine,
     )
     state_dir = os.environ.get("MOONMCP_STATE_DIR")
     return AppContext(settings=settings, scope=scope, governor=governor, http=http,
                       findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
-                      snapshots=SnapshotStore(state_dir=state_dir),
+                      snapshots=SnapshotStore(state_dir=settings.state_dir or None),
                       audit=AuditLog.from_env(), programs=programs, history=HistoryStore(),
-                      memory=MemoryStore.from_env(), runs=RunStore.from_env(state_dir))
+                      memory=MemoryStore.from_env(), telemetry=TelemetryCollector(),
+                      runs=RunStore.from_env(settings.state_dir or None))
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

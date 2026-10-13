@@ -53,6 +53,31 @@ def _env_list(name: str) -> list[str]:
     return [item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()]
 
 
+def _default_state_dir() -> str:
+    """Return the persistent state directory, creating it if needed.
+
+    Priority: MOONMCP_STATE_DIR env var → ~/.hermes/moonmcp_state (auto-created).
+    Returns "" only if both home and env are unavailable. When a default is
+    chosen, also sets MOONMCP_STATE_DIR in os.environ so downstream modules
+    (MemoryStore.from_env, ProgramStore.from_env) pick it up automatically.
+    """
+    env = os.environ.get("MOONMCP_STATE_DIR", "").strip()
+    if env:
+        os.makedirs(env, exist_ok=True)
+        return env
+    home = os.path.expanduser("~")
+    if home and home != "~":
+        d = os.path.join(home, ".hermes", "moonmcp_state")
+        try:
+            os.makedirs(d, exist_ok=True)
+            # Set env so MemoryStore.from_env / ProgramStore.from_env see it
+            os.environ["MOONMCP_STATE_DIR"] = d
+            return d
+        except OSError:
+            pass
+    return ""
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable snapshot of MoonMCP configuration."""
@@ -112,6 +137,12 @@ class Settings:
     # Directory for saved page screenshots (Playwright, optional).
     screenshot_dir: str = ""
 
+    # Directory for persistent state (memory.db, programs.json, snapshots).
+    # When None, all state is in-memory (lost on restart). When set, the
+    # server creates it on startup and memory/programs/snapshots survive
+    # restarts. Default: ~/.hermes/moonmcp_state (auto-created).
+    state_dir: str = ""
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` snapshot from the current environment."""
@@ -137,4 +168,5 @@ def load_settings() -> Settings:
         allow_external_tools=_env_bool("MOONMCP_ALLOW_EXTERNAL_TOOLS", True),
         external_timeout=_env_float("MOONMCP_EXTERNAL_TIMEOUT", 300.0),
         screenshot_dir=os.environ.get("MOONMCP_SCREENSHOT_DIR", ""),
+        state_dir=_default_state_dir(),
     )

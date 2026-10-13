@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import json
 import os
 import platform
 import re
@@ -39,6 +40,7 @@ from . import intercept as interceptmod
 from . import leadpipe as leadpipemod
 from . import metrics as metricsmod
 from . import obsidian as obsidianmod
+from . import pipeline as pipe
 from . import prompts as promptmod
 from .context import AppContext, build_context, to_dict
 from .external import cli
@@ -53,6 +55,8 @@ from .intel import search as searchmod
 from .knowledge import injections as injmod
 from .knowledge import privesc as privescmod
 from .knowledge import techniques as techmod
+from . import strix_adapted as sa
+from .interface import viewer as viewermod
 from .knowledge import vulns as vulnsmod
 from .knowledge import waf_kb as wafkbmod
 from .memory import RELATIONS
@@ -79,14 +83,18 @@ from .recon import jsendpoints as jsmod
 from .recon import jslibs as jslibsmod
 from .recon import openapi as openapimod
 from .recon import origin as originmod
+from .recon import sast as sastmod
 from .recon import secrets as secretsmod
 from .recon import sourcemaps as sourcemapsmod
 from .recon import subdomains as submod
 from .recon import supabase as supabasemod
+from .recon import cloud_audit as cloudauditmod
 from .recon import wayback as waybackmod
+from .report import autofix as autofixmod
 from .reporting import TOOL_NAME, format_markdown, format_sarif
 from .runs import RunBudget, seed_assessment
 from .scope import ScopeError, canonical_ip, normalize_target
+from .telemetry.collector import TelemetryCollector
 from .web import authflow as authflowmod
 from .web import authz as authzmod
 from .web import behavior as behaviormod
@@ -129,6 +137,7 @@ from .web import waf_bypass as wafbypassmod
 from .web import websocket as wsmod
 from .web import workflow as workflowmod
 from .web import xxe as xxemod
+from .web import proxy_rules as proxyrulesmod
 
 _INSTRUCTIONS = """\
 MoonMCP is a scope-aware, stdlib-first bug-bounty & reconnaissance server.
@@ -371,6 +380,41 @@ def _reject_dangerous_scanner_args(args: list[str]) -> str | None:
     return None
 
 
+# Tools that accept custom HTTP headers and the flag syntax they use.
+# When a bug-bounty program header is active, run_scanner auto-injects it.
+_BB_HEADER_FLAGS: dict[str, list[str]] = {
+    "nuclei": ["-H"],       # nuclei: -H "X-BugBounty: value"
+    "httpx": ["-H"],        # httpx: -H "X-BugBounty: value"
+    "ffuf": ["-H"],         # ffuf: -H "X-BugBounty: value"
+    "feroxbuster": ["-H"],  # feroxbuster: -H "X-BugBounty: value"
+    "gobuster": [],         # gobuster: no custom header support
+    "sqlmap": ["--header"], # sqlmap: --header="X-BugBounty: value"
+    "nikto": ["-header"],   # nikto: -header "X-BugBounty: value"
+    "wpscan": ["--headers"], # wpscan: --headers "X-BugBounty: value"
+    "nmap": [],             # nmap: no HTTP header support (NSE scripts have their own)
+    "katana": ["-H"],       # katana: -H "X-BugBounty: value"
+    "whatweb": [],          # whatweb: no custom header support
+    "dalfox": ["-H"],       # dalfox: -H "X-BugBounty: value"
+    "commix": ["--header"], # commix: --header="X-BugBounty: value"
+}
+
+
+def _inject_bb_header(tool: str, ctx) -> list[str]:
+    """Return extra args to inject the active bug-bounty header into an external tool.
+
+    Returns [] if the tool doesn't support custom headers or no BB header is set.
+    """
+    flags = _BB_HEADER_FLAGS.get(tool)
+    if not flags:
+        return []
+    prog = ctx.programs.active if hasattr(ctx, 'programs') else None
+    if not prog or not prog.header_name or not prog.header_value:
+        return []
+    flag = flags[0]
+    header_str = f"{prog.header_name}: {prog.header_value}"
+    return [flag, header_str]
+
+
 def _host_like_tokens(args: list[str]) -> list[str]:
     """Extract host/URL/IP-looking tokens from a CLI arg list (for scope checks).
 
@@ -433,6 +477,189 @@ def _host_like_tokens(args: list[str]) -> list[str]:
 
 # ---------------------------------------------------------------------------
 # meta / scope
+# ---------------------------------------------------------------------------
+# OPSEC / stealth / compliance
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def opsec_config(action: str = "status",
+                       browser_profile: str = "chrome",
+                       jitter_min_ms: int = 10, jitter_max_ms: int = 100,
+                       rotate_ua: bool = False,
+                       bb_header_name: str = "", bb_header_value: str = "") -> dict:
+    """**OPSEC configuration** — stealth headers and scope enforcement.
+
+    Speed-first: no artificial limits on volume, concurrency, or brute-force.
+    Scanners are legitimate tools — bug bounty rules reject scanner REPORTS,
+    not scanning itself. The goal is to move FAST without getting blocked.
+
+    **Stealth:**
+    - Browser-like header set (Chrome 131 / Firefox 133 with Sec-Fetch-*)
+    - Randomized header order (defeats header-order fingerprinting)
+    - Timing jitter (10-100ms — minimal, just breaks uniform pattern)
+    - UA rotation (optional: alternate Chrome/Firefox)
+    - Strip identifying headers (X-Powered-By, Via, X-Requested-With)
+
+    **Hard enforcement (fail-closed):**
+    - Mandatory bug-bounty header (block request if missing)
+    - Scope guard (existing — blocks out-of-scope hosts)
+
+    Actions: status, configure, risks (show OPSEC knowledge base).
+    """
+
+    from .opsec import OpsecConfig, OpsecEngine, OPSEC_RISKS
+
+    ctx = get_context()
+
+    if action == "risks":
+        return {"risks": OPSEC_RISKS}
+
+    if action == "configure":
+        config = OpsecConfig(
+            browser_profile=browser_profile,
+            jitter_ms=(jitter_min_ms, jitter_max_ms),
+            rotate_ua=rotate_ua,
+            bb_header_name=bb_header_name,
+            bb_header_value=bb_header_value,
+        )
+        # Store on context for other tools to use
+        if not hasattr(ctx, '_opsec'):
+            ctx._opsec = OpsecEngine(config)
+        else:
+            ctx._opsec.config = config
+        # Re-wire the unified egress so the live HttpClient picks up the new
+        # config immediately (no restart needed). The client keeps its own
+        # reference, so updating ctx._opsec alone is not enough.
+        if getattr(ctx.http, '_opsec', None) is not None:
+            ctx.http._opsec = ctx._opsec
+        elif hasattr(ctx.http, '_opsec'):
+            ctx.http._opsec = ctx._opsec
+        return {"status": "configured", "browser_profile": config.browser_profile,
+                "jitter_ms": config.jitter_ms,
+                "rotate_ua": config.rotate_ua, "bb_header": bool(config.bb_header_name)}
+
+    # status (default)
+    engine = getattr(ctx, '_opsec', None)
+    if engine:
+        c = engine.config
+        return {"configured": True, "browser_profile": c.browser_profile,
+                "jitter_ms": c.jitter_ms,
+                "rotate_ua": c.rotate_ua, "bb_header": bool(c.bb_header_name)}
+    return {"configured": False,
+            "hint": "Run opsec_config(action='configure', bb_header_name='X-BugBounty', "
+                    "bb_header_value='<your-uuid>') to enable OPSEC enforcement"}
+
+
+# ---------------------------------------------------------------------------
+# API schema extraction (deep bundle parsing)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def extract_api_schemas(target: str, max_scripts: int = 3) -> dict:
+    """**Deep API schema extraction from JS bundles** (Angular/React/webpack).
+
+    Fetches the page + its scripts and reconstructs the backend API surface
+    from minified code: REST base config (``backend:{rest,version}``), every
+    endpoint definition (path + method + security permissions), request body
+    field schemas (types, regex patterns, required, examples), oneOf response
+    variants, and interesting constants (UUIDs, emails, version strings).
+
+    Use when: a SPA hides its backend, analyze_js found endpoints but you need
+    the full schemas (login body fields, permission names, validation regexes),
+    or you want the API map BEFORE getting credentials. Passive fetch only —
+    same scope rules as any page fetch.
+    """
+    from .recon.api_schemas import extract_api_schemas as _extract
+    await _require_scope(target, tool="extract_api_schemas")
+    try:
+        return await _extract(target, max_scripts=max_scripts)
+    except Exception as exc:
+        return {"error": "fetch_failed", "detail": str(exc)[:200]}
+
+
+# ---------------------------------------------------------------------------
+# Timing differential (standalone timing-oracle probe)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@active_tool(self_scoped=True)
+async def timing_diff(targets: list[str], method: str = "GET",
+                      body: str | dict | list | None = None,
+                      headers: dict[str, str] | None = None,
+                      samples: int = 5, param: str | None = None,
+                      param_values: list[str] | None = None) -> dict:
+    """**Timing differential** — detect timing oracles by measuring response
+    times across 2+ targets (or across 2+ parameter values on one target)
+    and diffing the distributions.
+
+    Two modes:
+    - **Cross-target**: same request to every URL in ``targets`` — catches
+      backend differences (e.g. one node runs bcrypt, another does not).
+    - **Cross-value**: one URL, ``param`` + ``param_values`` (2..6 values) —
+      catches user-enumeration oracles (existing vs missing user, correct vs
+      wrong password prefix) without brute force: 1-2 values per hypothesis.
+
+    Reports per-target/per-value mean, stddev, min/max and a verdict:
+    ``divergent`` (>3-sigma separation), ``uniform``, or ``inconclusive``
+    (needs more samples). Intrusive: in scope only, honors the rate limiter.
+    """
+    import statistics
+    import time as _time
+    if isinstance(body, (dict, list)):
+        body = json.dumps(body, ensure_ascii=False)
+    ctx = get_context()
+    urls = list(targets) if targets else []
+    if param and param_values:
+        if not urls:
+            return {"error": "invalid_input", "detail": "pass targets (a URL) too"}
+        if len(param_values) > 6:
+            return {"error": "invalid_input", "detail": "max 6 param values (no brute force)"}
+        probe_urls = []
+        for v in param_values:
+            sep = "&" if "?" in urls[0] else "?"
+            probe_urls.append(f"{urls[0]}{sep}{param}={v}")
+    else:
+        probe_urls = urls
+
+    results = []
+    for u in probe_urls:
+        await _require_scope(u, tool="timing_diff")
+        times: list[float] = []
+        status = None
+        for _ in range(samples):
+            t0 = _time.perf_counter()
+            r = await ctx.http.fetch(
+                u, method=method, headers=headers or None,
+                body=body.encode() if body else None,
+                follow_redirects=False, scope_check=_scope_check(),
+            )
+            times.append(_time.perf_counter() - t0)
+            status = r.status
+        mean = statistics.mean(times)
+        results.append({
+            "url": u, "status": status, "samples": len(times),
+            "mean_ms": round(mean * 1000, 1),
+            "stdev_ms": round(statistics.stdev(times) * 1000, 1) if len(times) > 1 else 0.0,
+            "min_ms": round(min(times) * 1000, 1),
+            "max_ms": round(max(times) * 1000, 1),
+        })
+
+    # Verdict: compare pairwise means against combined stddev
+    verdict = "uniform"
+    if len(results) >= 2:
+        means = [r["mean_ms"] for r in results]
+        spreads = [max(r["stdev_ms"], 1.0) for r in results]
+        gap = max(means) - min(means)
+        noise = max(spreads) * 3
+        if gap > noise and gap > 50:  # >3σ and >50ms absolute
+            verdict = "divergent"
+        elif gap > noise:
+            verdict = "possibly_divergent"
+    return {"verdict": verdict, "method": method, "results": results,
+            "hint": "divergent = timing oracle candidate; confirm with more samples"}
+
+
+# ---------------------------------------------------------------------------
+# server status
 # ---------------------------------------------------------------------------
 @mcp.tool()
 @safe_tool
@@ -875,6 +1102,110 @@ async def oast_list() -> dict:
             "canaries": [to_dict(c) for c in ctx.oast.list()]}
 
 
+@mcp.tool()
+@safe_tool
+async def oast_payload_gen(attack_class: str = "", dbms: str = "postgresql",
+                           engine: str = "jinja2", platform: str = "linux",
+                           query: str = "SELECT version()", file_path: str = "/etc/hostname",
+                           command: str = "whoami", provider: str = "aws",
+                           protocol: str = "gopher", lang: str = "java",
+                           all_classes: bool = False) -> dict:
+    """**OAST payload generator** — generate ready-to-use canaries and injection
+    templates for blind detection of: XXE, SSRF, SQLi (per-DBMS), command injection,
+    SSTI, Log4Shell, deserialization, Fastjson/Jackson, header injection, open
+    redirect, prototype pollution.
+
+    Each payload carries a unique token so callbacks are correlated to the exact
+    probe via `oast_poll`. Uses the configured OAST domain (oast_configure) or
+    self-host catcher (oast_selfhost).
+
+    Set `all_classes=True` to generate payloads for ALL attack classes at once.
+    Otherwise specify `attack_class` (xxe, ssrf, sqli, cmdi, ssti, log4shell,
+    deserialize, fastjson, header_injection, open_redirect, proto_pollution).
+
+    Key insight: OAST SQLi finds injections in async/multi-threaded code paths
+    where time-based blind SQLi DOESN'T work (CN-SEC/DNSlog research).
+    """
+
+    from .intel.oast_payloads import OastPayloadGen
+
+    ctx = get_context()
+    domain = ctx.oast.interaction_domain
+    http_base = ctx.oast.self_host_base
+
+    gen = OastPayloadGen(canary_domain=domain, canary_http_base=http_base)
+
+    if all_classes:
+        all_p = gen.generate_all()
+        result = {}
+        for cls, payloads in all_p.items():
+            result[cls] = [{"token": p.token, "canary": p.canary_host,
+                           "payload": p.payload, "notes": p.notes} for p in payloads]
+        return {"mode": "all_classes", "configured": bool(domain or http_base),
+                "domain": domain or http_base, "payloads": result}
+
+    if not attack_class:
+        from .intel.oast_payloads import OAST_TECHNIQUES
+        return {"available_classes": sorted(OAST_TECHNIQUES.keys()),
+                "hint": "Set attack_class=<class> or all_classes=True"}
+
+    kwargs = {}
+    if attack_class in ("sqli", "sqli_exfil"):
+        kwargs["dbms"] = dbms
+        kwargs["query"] = query
+    elif attack_class == "ssti":
+        kwargs["engine"] = engine
+    elif attack_class in ("cmdi", "cmdi_exfil", "cmdi_curl"):
+        kwargs["platform"] = platform
+        kwargs["command"] = command
+    elif attack_class == "ssrf_metadata":
+        kwargs["provider"] = provider
+    elif attack_class == "ssrf_protocol":
+        kwargs["protocol"] = protocol
+    elif attack_class == "deserialize":
+        kwargs["lang"] = lang
+    elif attack_class == "xxe_exfil":
+        kwargs["file_path"] = file_path
+
+    try:
+        p = gen.generate_for_class(attack_class, **kwargs)
+        if isinstance(p, list):
+            return {"attack_class": attack_class,
+                    "payloads": [{"token": pp.token, "canary": pp.canary_host,
+                                 "payload": pp.payload, "notes": pp.notes} for pp in p]}
+        return {"attack_class": attack_class, "token": p.token,
+                "canary": p.canary_host, "http_url": p.canary_url_http,
+                "payload": p.payload, "notes": p.notes}
+    except ValueError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+@safe_tool
+async def oast_techniques(attack_class: str = "", creative: bool = False) -> dict:
+    """Look up **OAST techniques and creative insights** — the knowledge base of
+    out-of-band detection methods per attack class, including prerequisites,
+    data exfiltration methods, WAF bypass, and common mistakes.
+
+    Set `creative=True` for unexpected/advanced techniques: async SQLi detection,
+    SMTP channel, multi-channel fallback, DNS subdomain data exfil, JNDI DNS bypass,
+    XXE parameter entities, WAF bypass for OAST payloads.
+    """
+
+    from .intel.oast_payloads import OAST_TECHNIQUES, OAST_CREATIVE
+
+    if creative:
+        if attack_class and attack_class in OAST_CREATIVE:
+            entry = OAST_CREATIVE[attack_class]
+            return {"key": attack_class, **entry}
+        return {"count": len(OAST_CREATIVE), "techniques": OAST_CREATIVE}
+
+    if attack_class and attack_class in OAST_TECHNIQUES:
+        return {"attack_class": attack_class, **OAST_TECHNIQUES[attack_class]}
+    return {"available": sorted(OAST_TECHNIQUES.keys()),
+            "hint": "Pass attack_class=<class> for detailed technique info"}
+
+
 # ---------------------------------------------------------------------------
 # passive OSINT
 # ---------------------------------------------------------------------------
@@ -1145,6 +1476,29 @@ async def cloud_buckets(keyword: str, max_candidates: int = 80) -> dict:
     found = await bucketsmod.check_buckets(get_context().http, names)
     return {"keyword": keyword, "candidates_tested": len(names),
             "providers": sorted(bucketsmod.PROVIDERS), "found_count": len(found), "found": found}
+
+
+@mcp.tool()
+@safe_tool
+async def cloud_audit(provider: str = "all", check_type: str = "all") -> dict:
+    """Cloud security audit — return 60+ misconfiguration checks for AWS / Azure
+    / GCP. Each check includes: service, check_name, severity, description, and
+    remediation.
+
+    ``provider``: ``aws``, ``azure``, ``gcp``, or ``all``.
+    ``check_type``: ``all``, a severity (``critical``/``high``/``medium``/``low``),
+    or a service name (e.g. ``S3``, ``IAM``, ``Storage``, ``GCS``) to filter.
+
+    The output is a reference checklist — it does not execute cloud API calls.
+    Passive (no network traffic); no scope required.
+    """
+
+    checks = cloudauditmod.get_checks(provider=provider, check_type=check_type)
+    counts = cloudauditmod.count_checks(provider=provider)
+    return {"provider": provider, "check_type": check_type,
+            "total_checks": len(checks), "counts": counts,
+            "providers_available": cloudauditmod.providers(),
+            "checks": checks}
 
 
 # ---------------------------------------------------------------------------
@@ -3609,12 +3963,18 @@ async def surface_snapshots(clear: str | None = None) -> dict:
 @mcp.tool()
 @safe_tool
 async def export_findings(format: str = "sarif", target: str | None = None,
-                          severity: str | None = None) -> dict:
+                          severity: str | None = None,
+                          enhanced: bool = True) -> dict:
     """Export the recorded findings in a machine-readable format for CI / triage.
 
     `format`: `sarif` (SARIF 2.1.0 — GitHub code-scanning / most DAST pipelines)
     or `json` (the raw findings + summary). Optionally filter by `target` /
     `severity`. Returns the document inline; no network.
+
+    `enhanced=True` (default) uses the Strix-derived SARIF format with DAST
+    support (CWE-based rules, logicalLocations for endpoints, fixes array,
+    security-severity for GitHub code-scanning ranking). Set `enhanced=False`
+    for the basic SARIF format.
     """
 
     ctx = get_context()
@@ -3628,7 +3988,11 @@ async def export_findings(format: str = "sarif", target: str | None = None,
     if fmt == "json":
         return {"format": "json", "summary": ctx.findings.summary(), "findings": findings}
     if fmt == "sarif":
-        return {"format": "sarif", "sarif": format_sarif(findings, version=__version__)}
+        if enhanced:
+            sarif_doc = sa.format_sarif_enhanced(findings, version=__version__)
+        else:
+            sarif_doc = format_sarif(findings, version=__version__)
+        return {"format": "sarif", "enhanced": enhanced, "sarif": sarif_doc}
     return {"error": "invalid_input", "detail": f"unknown format '{format}' (use sarif or json)"}
 
 
@@ -3822,6 +4186,177 @@ async def vuln_search(query: str) -> dict:
     """
 
     return {"query": query, "results": vulnsmod.search(query)}
+
+
+@mcp.tool()
+@safe_tool
+async def playbook_info(playbook: str = "", category: str = "",
+                        query: str = "") -> dict:
+    """**Security testing playbooks** from Strix AI — 51 structured methodology
+    files covering vulnerability classes, frameworks, and protocols.
+
+    Pass a `playbook` id for the full methodology (attack surface, detection
+    channels, exploitation techniques, payload examples). Filter by `category`
+    for a list. Pass `query` for full-text search across all playbook bodies.
+    Omit for the index.
+
+    Categories: vulnerabilities (24), frameworks (4), protocols (2),
+    scan_modes (3), technologies (2), tooling (11), cloud (2), coordination (2).
+
+    Popular playbooks: vulnerabilities_sql_injection, vulnerabilities_xss,
+    vulnerabilities_ssrf, vulnerabilities_rce, vulnerabilities_idor,
+    protocols_oauth, protocols_graphql, frameworks_nextjs, frameworks_django.
+
+    No network — pure reference. Source: Strix AI (Apache 2.0).
+    """
+    from .knowledge import strix_playbooks as sp
+
+    if playbook:
+        pb = sp.PLAYBOOKS.get(playbook)
+        if pb is None:
+            return {"error": "unknown_playbook",
+                    "detail": f"No playbook '{playbook}'",
+                    "categories": sp.PLAYBOOK_INDEX}
+        return {**pb, "version": sp.PLAYBOOKS_VERSION, "source": sp.PLAYBOOKS_SOURCE}
+    if query:
+        # Full-text search across all playbook bodies + descriptions.
+        q = query.lower()
+        results = []
+        for pid, pb in sp.PLAYBOOKS.items():
+            haystack = (pb.get("body", "") + " " + pb.get("description", "")).lower()
+            if q in haystack:
+                results.append({"id": pid, "name": pb["name"],
+                                "category": pb["category"],
+                                "description": pb["description"][:120]})
+        return {"query": query, "matches": len(results), "results": results,
+                "version": sp.PLAYBOOKS_VERSION}
+    if category:
+        ids = sp.PLAYBOOK_INDEX.get(category, [])
+        return {"category": category, "count": len(ids), "playbooks": [
+            {"id": i, "name": sp.PLAYBOOKS[i]["name"],
+             "description": sp.PLAYBOOKS[i]["description"],
+             "sections": sp.PLAYBOOKS[i]["sections"]}
+            for i in ids
+        ]}
+    return {"total": len(sp.PLAYBOOKS), "categories": {
+        cat: len(ids) for cat, ids in sp.PLAYBOOK_INDEX.items()
+    }, "playbooks": sorted(sp.PLAYBOOKS.keys()),
+        "version": sp.PLAYBOOKS_VERSION, "source": sp.PLAYBOOKS_SOURCE}
+
+
+# ---------------------------------------------------------------------------
+# Strix-adapted enhancement tools
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def deduplicate_findings() -> dict:
+    """**Deduplicate session findings** — pure-logic dedup rules.
+
+    Same type + same target + same endpoint = duplicate.
+    Different parameters, root causes, or severities = NOT duplicate.
+
+    Returns unique findings + duplicate details. No network — reads findings store.
+    """
+    ctx = get_context()
+    findings = [f if isinstance(f, dict) else f.__dict__ for f in ctx.findings.list()]
+    if not findings:
+        return {"total": 0, "unique": 0, "duplicates": 0, "message": "No findings to deduplicate"}
+    result = sa.deduplicate_findings(findings)
+    return result
+
+
+@mcp.tool()
+@safe_tool
+async def render_finding_md(finding_id: int) -> dict:
+    """Render a single finding as structured markdown (Strix-style report).
+
+    Fields: ID, Severity, Target, Endpoint, CVE, CWE, CVSS, Description,
+    Impact, Technical Analysis, PoC, Remediation, Suggested Fix.
+
+    Pass a finding_id from list_findings. No network.
+    """
+    ctx = get_context()
+    for f in ctx.findings.list():
+        fd = f if isinstance(f, dict) else f.__dict__
+        if fd.get("id") == finding_id:
+            md = sa.render_vulnerability_md(fd)
+            return {"finding_id": finding_id, "markdown": md}
+    return {"error": "not_found", "detail": f"Finding #{finding_id} not found"}
+
+
+@mcp.tool()
+@safe_tool
+async def generate_remediation(finding_id: int, code_context: str | None = None) -> dict:
+    """**Auto-fix & Remediation** — generate concrete, vulnerability-class-
+    specific remediation text (and optionally a suggested code patch) for a
+    recorded finding.
+
+    Uses the OWASP Cheat Sheets (120 sheets) as the authoritative reference,
+    supplemented by built-in templates for each vulnerability class:
+
+    - **SQLi** → parameterized queries / prepared statements
+    - **XSS** → context-aware output encoding + CSP
+    - **SSRF** → URL allowlist + metadata IP blocking
+    - **IDOR/BOLA** → object-level authorization checks
+    - **CSRF** → synchronizer tokens + SameSite cookies
+    - **XXE** → disable external entity resolution
+    - **SSTI** → logic-less templates / sandboxing
+    - **Command Injection** → safe APIs (no shell)
+    - ...and 20+ more classes.
+
+    Pass a ``finding_id`` from ``list_findings``. Optionally pass
+    ``code_context`` (the vulnerable source code snippet) to also receive a
+    suggested unified-diff code patch.
+
+    No network — reads the findings store and the local OWASP cheat sheet
+    knowledge base.
+    """
+
+    ctx = get_context()
+    finding = None
+    for f in ctx.findings.list():
+        fd = f if isinstance(f, dict) else f.__dict__
+        if fd.get("id") == finding_id:
+            finding = fd
+            break
+    if finding is None:
+        return {"error": "not_found", "detail": f"Finding #{finding_id} not found"}
+
+    gen = autofixmod.RemediationGenerator()
+    remediation = gen.generate_remediation(finding)
+
+    result: dict[str, Any] = {
+        "finding_id": finding_id,
+        "vulnerability_type": finding.get("type", ""),
+        "severity": finding.get("severity", ""),
+        "target": finding.get("target", ""),
+        "remediation": remediation,
+    }
+
+    if code_context:
+        patch = gen.generate_patch(finding, code_context)
+        result["suggested_patch"] = patch
+
+    return result
+    """Record a private chain-of-thought reasoning step — no side effects.
+
+    Use before acting in policy-heavy environments (scope compliance,
+    multi-step exploit planning, risk assessment before destructive ops).
+
+    Structured sections are auto-detected (lines ending with ':').
+    The thought is persisted to the shared memory hub (trust=curated) so
+    reasoning carries forward across sessions and agents.
+
+    Args:
+        thought: The reasoning to record. Must be non-empty.
+    """
+    result = sa.think_structure(thought)
+    if result.get("success"):
+        ctx = get_context()
+        ctx.memory.add(kind="reasoning", title="think",
+                       body=thought, trust="curated", source="think",
+                       tags="reasoning")
+    return result
 
 
 @mcp.tool()
@@ -4273,7 +4808,7 @@ def _record_exchange(source: str, method: str, url: str, req_headers: dict,
 @mcp.tool()
 @active_tool(self_scoped=True)
 async def http_repeater(url: str | None = None, method: str = "GET",
-                        headers: dict[str, str] | None = None, body: str | None = None,
+                        headers: dict[str, str] | None = None, body: str | dict | list | None = None,
                         raw: str | None = None, follow_redirects: bool = False,
                         passive: bool = True, label: str = "") -> dict:
     """**Repeater** — send one fully-controlled HTTP request to an in-scope target
@@ -4281,11 +4816,22 @@ async def http_repeater(url: str | None = None, method: str = "GET",
 
     Provide either a `raw` HTTP/1.1 request (Burp-style: request line + headers +
     blank line + body; absolute URL or a `Host:` header) OR the structured form
-    (`url` + `method` + `headers` + `body`). Returns status, response headers, the
-    body (preview) and timing; by default also a quick `passive` scan (header
-    grade, tech fingerprint, secret hits). Each call is recorded to `http_history`
-    for replay. In scope only.
+    (`url` + `method` + `headers` + `body`). `body` accepts a JSON **string** OR
+    a **dict/list** (auto-serialized to JSON) — both work. Returns status,
+    response headers, the body (preview) and timing; by default also a quick
+    `passive` scan (header grade, tech fingerprint, secret hits). Each call is
+    recorded to `http_history` for replay. In scope only.
     """
+
+    # Body coercion: a dict/list passed by the caller (natural for JSON APIs)
+    # is serialized to a JSON string transparently. This was the #1 field bug:
+    # Pydantic used to hard-reject dicts and 3 consecutive rejections opened
+    # the client-side circuit breaker, twice in one PT Cloud AF session
+    # (2026-09-04). Coerce instead of rejecting.
+    if isinstance(body, (dict, list)):
+        body = json.dumps(body, ensure_ascii=False)
+    if body is not None and not isinstance(body, str):
+        body = str(body)  # last-resort: never let a non-str reach .encode()
 
     if raw:
         method, url, parsed_headers, body_bytes = interceptmod.parse_raw_request(raw)
@@ -5955,8 +6501,9 @@ async def http_behavior(target: str) -> dict:
 async def external_tools(category: str | None = None) -> dict:
     """List the external security CLIs MoonMCP knows about — **grouped by
     category** (subdomain, dns, http, crawl, content, port, vuln, cms, tls, url,
-    decompile) — with, for each: whether it is installed on PATH, its native
-    MoonMCP fallback, whether it is `intrusive` (gated), and an install hint.
+    decompile, password, binary, forensics, network, post-ex) — with, for each:
+    whether it is installed on PATH, its native MoonMCP fallback, whether it is
+    `intrusive` (gated), and an install hint.
 
     On Kali most of these are already present. Call this before `run_scanner` /
     `vuln_scan` to see what is available and what to install. Pass a `category` to
@@ -5986,7 +6533,9 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
     ``tool`` must be one of the known tools — see `external_tools` for the full,
     categorised list (subfinder, amass, httpx, whatweb, wafw00f, katana,
     gau/waybackurls, ffuf/feroxbuster/gobuster, naabu/nmap/masscan,
-    nuclei/nikto/wpscan/sqlmap/dalfox, sslscan/tlsx, …). ``args`` are passed
+    nuclei/nikto/wpscan/sqlmap/dalfox, sslscan/tlsx, hydra/john/hashcat/patator,
+    radare2/gdb/checksec/ghidra, binwalk/volatility3/foremost/steghide/exiftool,
+    metasploit/responder/netexec/enum4linux/evil-winrm, …). ``args`` are passed
     through verbatim. If ``target`` is given it is scope-checked first; every
     host/URL in ``args`` is scope-checked too. **Intrusive** scanners (fuzzers,
     port scanners, active vuln scanners) also require MOONMCP_ALLOW_INTRUSIVE. If
@@ -6023,8 +6572,13 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
         await _require_scope(t, tool="run_scanner")
     ctx.audit.record("external_tool", tool=tool, target=(target or ",".join(to_check)),
                      decision="run", args=args[:20])
+    # Auto-inject bug-bounty header for tools that support custom headers.
+    # nuclei: -H "X-BugBounty: value", httpx: -H, ffuf: -H, sqlmap: --header,
+    # nikto: -header, wpscan: --headers "X-BugBounty: value"
+    bb_args = _inject_bb_header(tool, ctx)
+    final_args = list(args) + bb_args if bb_args else args
     result = await cli.run_tool(
-        tool, args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
+        tool, final_args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
     )
     data = to_dict(result)
     if result.available and result.stdout:
@@ -6346,6 +6900,598 @@ def _apply_tool_profile() -> None:
 
 
 _apply_tool_profile()
+
+
+# ---------------------------------------------------------------------------
+# Strix-adapted enhancement tools (from strix_adapted.py)
+# Audit 2026-07-27: 4 new MCP tools — proxy, sandbox, agent tree, CSV export.
+# ---------------------------------------------------------------------------
+
+# Module-level singletons for the Strix-adapted tools (persist across calls).
+_proxy: sa.HttpProxy | None = None
+_sandbox: sa.DockerSandbox | None = None
+_agent_graph: sa.AgentGraph | None = None
+
+
+def _get_proxy() -> sa.HttpProxy:
+    global _proxy
+    if _proxy is None:
+        _proxy = sa.HttpProxy()
+    return _proxy
+
+
+def _get_agent_graph() -> sa.AgentGraph:
+    global _agent_graph
+    if _agent_graph is None:
+        _agent_graph = sa.AgentGraph()
+    return _agent_graph
+
+
+@mcp.tool()
+@safe_tool
+async def proxy_manage(action: str = "list",
+                       method: str = "", host: str = "", path: str = "",
+                       status: int | None = None,
+                       request_raw: str = "", response_raw: str = "",
+                       search: str = "", request_id: str = "",
+                       modifications: dict | None = None,
+                       scope_host: str = "", scope_path: str = "/",
+                       scope_action: str = "") -> dict:
+    """**HTTP proxy** — capture, list, view, replay, and scope-manage HTTP
+    requests. Adapted from Strix's Caido proxy integration.
+
+    `action`:
+    - `capture` — record an HTTP exchange (method, host, path, status, raw
+      request/response). Returns the entry ID.
+    - `list` — list captured requests with optional filters (host, path_contains,
+      method, search, status_gte/lte). Paginated.
+    - `view` — view a single request/response by ID, optionally regex-searched.
+    - `replay` — prepare a modified replay (does not send). Pass `modifications`
+      as ``{"url": "...", "headers": {...}, "body": "...", "params": {...}}``.
+      Returns `modified_raw` for use with `http_repeater`.
+    - `sitemap` — return the hierarchical sitemap (host → sorted paths).
+    - `scope` — manage scope rules: `scope_action` = `create`/`exclude`/`list`.
+    - `summary` — total requests, sitemap stats, match&replace rules.
+
+    No network — this is a structured capture/replay manager, not a live proxy.
+    """
+
+    p = _get_proxy()
+    act = action.strip().lower()
+
+    if act == "capture":
+        eid = p.capture(method=method, host=host, path=path, status=status,
+                        request_raw=request_raw, response_raw=response_raw)
+        return {"captured": True, "id": eid}
+
+    if act == "list":
+        return p.list_requests(host=host, path_contains=path, method=method,
+                               search=search, first=50)
+
+    if act == "view":
+        return p.view_request(request_id, part="request", search_pattern=search)
+
+    if act == "replay":
+        return p.replay(request_id, modifications)
+
+    if act == "sitemap":
+        return {"sitemap": p.sitemap()}
+
+    if act == "scope":
+        if scope_action == "create":
+            p.scope_rules("create", host=scope_host, path_prefix=scope_path)
+        elif scope_action == "exclude":
+            p.scope_rules("exclude", host=scope_host, path_prefix=scope_path)
+        return p.scope_rules("list")
+
+    if act == "summary":
+        return p.summary()
+
+    return {"error": "unknown_action", "detail": f"action '{action}' not recognised"}
+
+
+@mcp.tool()
+@safe_tool
+async def sandbox_exec(action: str = "status",
+                       command: str = "",
+                       image: str = "",
+                       timeout: int = 30) -> dict:
+    """**Docker sandbox** — isolated execution environment for RCE PoC testing.
+
+    Adapted from Strix's DockerSandboxClient. Default image is ``alpine:latest``
+    (~7 MB). For full Kali tooling pass ``image="kali-linux:latest"`` (~3 GB).
+
+    `action`:
+    - `start` — launch a sandbox container. Pass `image` to override the default.
+    - `exec` — run a command in the sandbox. Pass `command` and `timeout`.
+    - `stop` — stop and remove the container.
+    - `status` — check container status.
+
+    The sandbox is isolated (CPU/memory limited, host-gateway access). Commands
+    that contain URLs to out-of-scope hosts are refused if a scope_check is
+    available. No network leaves the sandbox except via the command you run.
+    """
+
+    global _sandbox
+    act = action.strip().lower()
+
+    if act == "start":
+        img = image or "alpine:latest"
+        _sandbox = sa.DockerSandbox(image=img)
+        return _sandbox.start()
+
+    if act == "exec":
+        if _sandbox is None:
+            return {"success": False, "error": "Sandbox not started. Call action='start' first."}
+        # Scope-check: extract URLs from command, verify in-scope
+        sc = _scope_check()
+        return _sandbox.exec(command, timeout=timeout, scope_check=sc)
+
+    if act == "stop":
+        if _sandbox is None:
+            return {"success": False, "error": "No sandbox to stop"}
+        result = _sandbox.stop()
+        _sandbox = None
+        return result
+
+    if act == "status":
+        if _sandbox is None:
+            return {"running": False, "container_id": None}
+        return _sandbox.status()
+
+    return {"error": "unknown_action", "detail": f"action '{action}' not recognised"}
+
+
+@mcp.tool()
+@safe_tool
+async def agent_tree(action: str = "list",
+                     agent_id: str = "", name: str = "",
+                     parent: str | None = None,
+                     status: str = "") -> dict:
+    """**Multi-agent tree** — track parent/child agent relationships, statuses,
+    and budget stops. Adapted from Strix's AgentCoordinator.
+
+    `action`:
+    - `register` — register a new agent (agent_id, name, parent).
+    - `status` — update an agent's status (running/waiting/completed/crashed).
+    - `list` — render the agent tree as an indented bullet list.
+    - `snapshot` — serializable snapshot for resume.
+    - `budget_stop` — trigger a budget stop (all agents should wind down).
+
+    No network — pure state tracking for multi-agent orchestration.
+    """
+
+    g = _get_agent_graph()
+    act = action.strip().lower()
+
+    if act == "register":
+        if not agent_id or not name:
+            return {"error": "agent_id and name are required for register"}
+        g.register(agent_id, name, parent=parent)
+        return {"registered": True, "agent_id": agent_id, "name": name}
+
+    if act == "status":
+        if not agent_id or not status:
+            return {"error": "agent_id and status are required for status update"}
+        g.update_status(agent_id, status)
+        return {"updated": True, "agent_id": agent_id, "status": status}
+
+    if act == "list":
+        return {"tree": g.render_tree(), "active": g.active_count()}
+
+    if act == "snapshot":
+        return {"snapshot": g.snapshot()}
+
+    if act == "budget_stop":
+        g.trigger_budget_stop()
+        return {"budget_stopped": True}
+
+    return {"error": "unknown_action", "detail": f"action '{action}' not recognised"}
+
+
+@mcp.tool()
+@safe_tool
+async def proxy_rules(action: str = "list",
+                      match_type: str = "add_header",
+                      match_pattern: str = "",
+                      replace_pattern: str = "",
+                      header_name: str = "",
+                      scope_filter: str = "",
+                      enabled: bool = True,
+                      priority: int = 0,
+                      rule_id: str = "",
+                      token_provider_expr: str = "",
+                      request_url: str = "",
+                      request_method: str = "GET",
+                      request_headers: dict | None = None,
+                      request_body: str = "",
+                      response_headers: dict | None = None,
+                      ) -> dict:
+    """**Proxy rule engine** — match & replace rules applied to HTTP requests
+    before ``http_repeater`` / ``intruder`` send them.  NOT a live proxy server;
+    this is a pure rule engine.
+
+    `action`:
+    - `add` — register a new rule.  Returns the rule id.  Parameters:
+      - `match_type`: one of ``add_header``, ``url``, ``body``, ``header``,
+        ``method``, ``redirect``, ``token``, ``ua``.
+      - `match_pattern`: regex (url/body/header/redirect) or exact string
+        (method).  Ignored for ``add_header`` / ``ua``.
+      - `replace_pattern`: replacement string (supports ``\\1`` backrefs) or
+        the header value for ``add_header`` / ``ua``.
+      - `header_name`: header to set (for ``add_header`` / ``ua`` / ``token``
+        when no Authorization/Cookie is present).
+      - `scope_filter`: optional host or URL-prefix to limit the rule.
+      - `priority`: lower fires first (default 0).
+      - `token_provider_expr`: for ``token`` rules — a Python expression
+        evaluated per-apply to get a fresh token (e.g. ``"secrets.token_hex(8)"``).
+    - `remove` — delete a rule by `rule_id`.
+    - `list` — list all rules (optionally filter by `match_type`).
+    - `apply` — apply all enabled rules to a request and return the modified
+      request.  Pass `request_url`, `request_method`, `request_headers`,
+      `request_body` (and optionally `response_headers` for redirect rules).
+    - `clear` — remove all rules.
+
+    Rule types:
+    1. **add_header** — auto-inject a header (e.g. X-BugBounty) on every
+       in-scope request.
+    2. **url** / **body** — regex match & replace in the URL or body.
+    3. **header** — match a header name (regex) and replace its value.
+    4. **redirect** — rewrite a 3xx ``Location`` header.
+    5. **token** — rotate Bearer / Cookie / custom-header credentials.
+    6. **ua** — User-Agent spoofing.
+    """
+
+    eng = proxyrulesmod.get_engine()
+    act = action.strip().lower()
+
+    if act == "add":
+        token_provider = None
+        if token_provider_expr:
+            import secrets as _secrets  # noqa: F401 — available in eval scope
+            import time as _time  # noqa: F401
+            try:
+                # Build a callable that evaluates the expression on each call
+                token_provider = eval(  # noqa: S307 — caller-controlled, not remote input
+                    f"lambda: {token_provider_expr}",
+                    {"__builtins__": {"secrets": _secrets, "time": _time}},
+                )
+            except Exception as exc:
+                return {"error": "invalid_token_expr", "detail": str(exc)}
+
+        rule = proxyrulesmod.ProxyRule(
+            id=rule_id or "",
+            match_type=match_type,
+            match_pattern=match_pattern,
+            replace_pattern=replace_pattern,
+            header_name=header_name,
+            scope_filter=scope_filter,
+            enabled=enabled,
+            priority=priority,
+            token_provider=token_provider,
+        )
+        eng.add_rule(rule)
+        return {"added": True, "rule": rule.to_dict()}
+
+    if act == "remove":
+        removed = eng.remove_rule(rule_id)
+        return {"removed": removed, "rule_id": rule_id}
+
+    if act == "list":
+        rules = eng.list_rules(match_type=match_type if match_type != "add_header" else None)
+        return {"rules": [r.to_dict() for r in rules], "count": len(rules)}
+
+    if act == "clear":
+        eng.clear()
+        return {"cleared": True}
+
+    if act == "apply":
+        request = {
+            "url": request_url,
+            "method": request_method,
+            "headers": request_headers or {},
+            "body": request_body,
+        }
+        response = None
+        if response_headers is not None:
+            response = {"headers": response_headers}
+
+        modified = eng.apply_rules(request, response=response)
+        applied_ids = modified.pop("_applied_rules", [])
+        return {
+            "modified_request": {
+                "url": modified["url"],
+                "method": modified["method"],
+                "headers": modified["headers"],
+                "body": modified["body"],
+            },
+            "applied_rules": applied_ids,
+            "response": response,
+        }
+
+    return {"error": "unknown_action", "detail": f"action '{action}' not recognised"}
+
+
+@mcp.tool()
+@safe_tool
+async def export_csv(target: str | None = None,
+                     severity: str | None = None) -> dict:
+    """Export findings as CSV (id, title, severity, timestamp, target, endpoint).
+    Optionally filter by `target` / `severity`. No network."""
+
+    ctx = get_context()
+    findings = [
+        {"id": f.id, "title": f.title, "severity": f.severity,
+         "timestamp": f.created_at, "target": f.target,
+         "endpoint": f.detail[:100] if f.detail else ""}
+        for f in ctx.findings.list(target=target, severity=severity)
+    ]
+    csv_text = sa.render_findings_csv(findings)
+    return {"format": "csv", "count": len(findings), "csv": csv_text}
+
+
+@mcp.tool()
+@safe_tool
+async def telemetry(action: str = "stats",
+                     minutes: int = 10) -> dict:
+    """**Real-time telemetry** — live scan-progress monitoring for the session.
+
+    Tracks HTTP request volume, error rate, finding counts by severity,
+    agent status changes, and endpoint coverage. All data is kept in a bounded
+    ring buffer (1000 entries); cumulative counters survive ring eviction.
+
+    `action`:
+    - `stats` — aggregate snapshot: ``requests_total``, ``requests_per_min``,
+      ``findings_by_severity``, ``error_rate``, ``avg_response_time``,
+      ``endpoints_tested``, ``coverage_pct``.
+    - `timeline` — chronological event list (request / finding /
+      agent_status_change) from the last ``minutes`` minutes.
+
+    No network — reads the in-memory collector. Offline.
+    """
+
+    ctx = get_context()
+    act = action.strip().lower()
+
+    if act == "stats":
+        return ctx.telemetry.get_stats()
+
+    if act == "timeline":
+        return {"events": ctx.telemetry.get_timeline(minutes=minutes),
+                "minutes": minutes}
+
+    return {"error": "unknown_action", "detail": f"action '{action}' not recognised"}
+
+
+# ---------------------------------------------------------------------------
+# Local Web Viewer — lightweight dashboard (stdlib http.server)
+# ---------------------------------------------------------------------------
+
+def _viewer_providers() -> dict[str, viewermod.DataProvider]:
+    """Build the data-provider callbacks that the viewer calls on each request."""
+
+    ctx = get_context()
+
+    def overview() -> dict[str, Any]:
+        sm = ctx.findings.summary()
+        return {
+            "run_status": "active",
+            "severity_breakdown": sm.get("by_severity", {}),
+            "total_findings": sm.get("total", 0),
+            "scope": ctx.scope.entries(),
+        }
+
+    def findings() -> dict[str, Any]:
+        return ctx.findings.as_dict()
+
+    def agents() -> dict[str, Any]:
+        g = _get_agent_graph()
+        return {"tree": g.render_tree(), "active": g.active_count()}
+
+    def history() -> dict[str, Any]:
+        items = ctx.history.list(limit=50)
+        return {
+            "count": ctx.history.count,
+            "shown": len(items),
+            "exchanges": [
+                {"id": e.id, "source": e.source, "method": e.method, "url": e.url,
+                 "status": e.status, "resp_bytes": e.resp_len, "elapsed_ms": e.elapsed_ms,
+                 "label": e.label}
+                for e in items
+            ],
+        }
+
+    return {"/": overview, "/findings": findings, "/agents": agents, "/history": history}
+
+
+@mcp.tool()
+@safe_tool
+async def view_dashboard(action: str = "start", port: int = 0) -> dict:
+    """**Local web viewer** — a lightweight dashboard served on 127.0.0.1.
+
+    Starts/stops a minimal HTTP server (stdlib only, no external deps) that
+    exposes the session's in-memory state as JSON + minimal HTML pages.
+    Bind address is always loopback; a random port is chosen unless ``port``
+    is given.  Token-based auth — the token is returned on ``start``.
+
+    `action`:
+    - `start` — launch the server.  Returns URL + token.
+    - `stop`  — shut it down.
+    - `status` — check whether it's running.
+
+    Pages: ``/`` (overview + severity breakdown), ``/findings``, ``/agents``,
+    ``/history``.  Send ``Accept: application/json`` or append ``.json`` for
+    raw JSON; otherwise a minimal HTML page is served.
+    """
+
+    v = viewermod.get_viewer()
+    act = action.strip().lower()
+
+    if act == "start":
+        # Register data providers so the viewer reads live data from the stores.
+        for route, fn in _viewer_providers().items():
+            v.set_provider(route, fn)
+        return v.start()
+
+    if act == "stop":
+        return v.stop()
+
+    if act == "status":
+        return v.status()
+
+    return {"error": "unknown_action", "detail": f"action '{action}' not recognised"}
+
+
+# ---------------------------------------------------------------------------
+# SAST — static code analysis (local files, no network)
+# ---------------------------------------------------------------------------
+@mcp.tool()
+@safe_tool
+async def sast_scan(target_path: str, language: str = "auto") -> dict:
+    """Static Application Security Testing — scan local source code files for
+    vulnerability patterns: SQL injection (string concat + execute/query),
+    XSS (innerHTML, document.write, dangerouslySetInnerHTML), hardcoded secrets
+    (AWS/GCP/GitHub/DB connection strings via gitleaks-derived patterns), SSRF
+    (HTTP fetch with user-controlled input), path traversal (open/read with
+    ../), and insecure deserialization (pickle.loads, unserialize, readObject).
+
+    Purely local analysis — no network access needed. Supports Python, PHP,
+    Java, JavaScript/TypeScript, C#, Go, Ruby. Pass a file path or a directory
+    to scan recursively.
+
+    Returns findings with file, line, rule, severity, and code snippet.
+    """
+    import os
+
+    path = target_path.strip()
+    if not path:
+        return {"error": "invalid_input", "detail": "target_path is required"}
+    if not os.path.exists(path):
+        return {"error": "not_found", "detail": f"path not found: {path}"}
+
+    result = sastmod.SASTScanner().scan(path, language=language)
+    return result.to_dict()
+
+
+# ─── hermes-pipeline absorbed tools (pipeline.py) ──────────────────────
+# Ported from the retired Node MCP server; all passive (local KB/SQLite).
+
+
+@mcp.tool()
+@safe_tool
+async def queue_task(text: str, target: str = "") -> dict:
+    """Поставить задачу в очередь для Hermes-агента (обработает processor.py).
+    Опционально: target — имя таргета из targets.yaml для авто-подстановки headers."""
+    return pipe.queue_task(text, target=target or None)
+
+
+@mcp.tool()
+@safe_tool
+async def list_queue() -> dict:
+    """Показать текущие задачи в очереди Hermes (ожидающие обработки)."""
+    return pipe.list_queue()
+
+
+@mcp.tool()
+@safe_tool
+async def search_bugbounty_reports(vuln_type: str, limit: int = 10) -> dict:
+    """Поиск по локальной базе реальных публичных bug bounty отчётов (HackerOne,
+    28 категорий уязвимостей). Используй для калибровки: как выглядят реальные
+    принятые репорты данного типа, какие формулировки impact работают."""
+    return pipe.search_bugbounty_reports(vuln_type, limit=limit)
+
+
+@mcp.tool()
+@safe_tool
+async def list_report_categories() -> dict:
+    """Список всех доступных категорий уязвимостей в базе репортов."""
+    return pipe.list_report_categories()
+
+
+@mcp.tool()
+@safe_tool
+async def search_knowledge_base(source: str, keyword: str, limit: int = 20) -> dict:
+    """Полнотекстовый поиск по локальной базе знаний: waf_bypass, payloads
+    (PayloadsAllTheThings), business_logic, writeups, chained_writeups,
+    creative_writeups, enumeration_methodology, src_hunter_cn, hacktricks,
+    ssrf_cloud_metadata, graphql_security, owasp_cheatsheets, secret_patterns,
+    zero_trust, kernel_exploitation. Возвращает file:line: text-совпадения."""
+    return pipe.search_knowledge_base(source, keyword, limit=limit)
+
+
+@mcp.tool()
+@safe_tool
+async def search_datasets(dataset: str, query: str, limit: int = 5,
+                          full_answer: bool = False) -> dict:
+    """FTS5-поиск по датасетам airecon: bug_bounty_pentest (методология BB:
+    exploitation steps, payload examples, WAF bypass, report templates),
+    web_vuln_patterns (HTTP-индикаторы XSS/SQLi/SSTI/SSRF/LFI/RCE + validation
+    steps), nuclei_templates (canonical CVE records + готовые DAST шаблоны,
+    23k CVE)."""
+    return pipe.search_datasets(dataset, query, limit=limit,
+                                           full_answer=full_answer)
+
+
+@mcp.tool()
+@safe_tool
+async def get_target(name: str) -> dict:
+    """Получить конфигурацию таргета (base_url, headers с подставленными
+    env-переменными, scope) из targets.yaml."""
+    return pipe.get_target(name)
+
+
+@mcp.tool()
+@safe_tool
+async def list_targets() -> dict:
+    """Список всех настроенных таргетов из targets.yaml."""
+    return pipe.list_targets()
+
+
+@mcp.tool()
+@safe_tool
+async def match_signature_to_cve(technology: str, min_severity: str = "",
+                                 limit: int = 15) -> dict:
+    """По названию технологии/стека (nginx, wordpress, bitrix...) находит
+    релевантные CVE и detection-сигнатуры из индекса nuclei-templates (9430+
+    шаблонов, web-relevant категории). Возвращает только совпадения."""
+    return pipe.match_signature_to_cve(
+        technology, min_severity=min_severity or None, limit=limit)
+
+
+@mcp.tool()
+@safe_tool
+async def get_nuclei_template(template_id: str) -> dict:
+    """Получить полное содержимое nuclei-шаблона по его id (например
+    CVE-2021-44228) для детального изучения PoC/matcher-логики."""
+    return pipe.get_nuclei_template(template_id)
+
+
+@mcp.tool()
+@safe_tool
+async def search_web_security_resources(category: str, keyword: str = "",
+                                        difficulty: str = "", language: str = "",
+                                        type: str = "", limit: int = 15) -> dict:
+    """Структурированный поиск по каталогу 524 курируемых web security ресурсов
+    (100 категорий). Фильтры: difficulty (intro/intermediate/advanced), language
+    (en/zh/jp), type. Каждая запись содержит archive_url как fallback."""
+    return pipe.search_web_security_resources(
+        category, keyword=keyword or None, difficulty=difficulty or None,
+        language=language or None, type_=type or None, limit=limit)
+
+
+@mcp.tool()
+@safe_tool
+async def list_web_security_categories() -> dict:
+    """Список всех 100 категорий каталога web security ресурсов."""
+    return pipe.list_web_security_categories()
+
+
+@mcp.tool()
+@safe_tool
+async def check_subdomain_takeover(service: str) -> dict:
+    """Проверяет CNAME-цель или сервис по базе can-i-take-over-xyz (76 сервисов)
+    — возвращает fingerprint и статус (Vulnerable/Not vulnerable/Edge case)."""
+    return pipe.check_subdomain_takeover(service)
 
 
 def run() -> None:

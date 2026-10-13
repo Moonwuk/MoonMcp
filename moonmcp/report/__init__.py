@@ -1,0 +1,1 @@
+"""Report sub-package — remediation generation, patch suggestions."""

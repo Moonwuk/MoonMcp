@@ -45,7 +45,15 @@ def _chromium_executable() -> str | None:
         return explicit
     # A common managed layout: /opt/pw-browsers/chromium
     guess = os.path.join(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""), "chromium")
-    return guess if guess and os.path.exists(guess) else None
+    if guess and os.path.exists(guess):
+        return guess
+    # System Chromium as fallback (Debian/Kali: /usr/bin/chromium). Needed for
+    # Russian-gov CA certs and for Debian python-playwright which ships no driver
+    # browser revision; system Chromium 120+ speaks the same CDP.
+    for sys_exe in ("/usr/bin/chromium", "/usr/bin/google-chrome", "/usr/bin/chromium-browser"):
+        if os.path.exists(sys_exe):
+            return sys_exe
+    return None
 
 
 async def capture(

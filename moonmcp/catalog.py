@@ -27,6 +27,10 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "program_add", "program_use", "program_list", "program_remove",
             "auth_set", "auth_clear",
             "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
+            "oast_payload_gen", "oast_techniques",
+            "proxy_rules", "telemetry", "view_dashboard",
+            "sast_scan", "generate_remediation",
+            "opsec_config", "extract_api_schemas",
             "audit_log",
         ],
     )),
@@ -40,7 +44,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "cve_lookup", "cve_search",
             "cve_patch_diff", "variant_search", "version_vuln_check",
             "host_intel", "ip_intel", "reverse_ip",
-            "cloud_buckets", "email_security", "dependency_confusion",
+            "cloud_audit", "cloud_buckets", "email_security", "dependency_confusion",
         ],
     )),
     ("light_active", (
@@ -98,7 +102,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "drift, DNS/zone behaviour (wildcard, LB, dangling CNAME), Host-header "
         "routing, and rate-limit behaviour.",
         ["backend_probe", "dns_behavior", "vhost_probe", "ratelimit_probe",
-         "tls_behavior", "edge_map", "http_behavior"],
+         "tls_behavior", "edge_map", "http_behavior", "timing_diff"],
     )),
     ("intercept", (
         "Interception & active probes",
@@ -118,6 +122,9 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "technique_info", "technique_search",
             "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
             "vuln_info", "vuln_search", "vuln_tools", "rootcause_info",
+            "playbook_info",
+            "deduplicate_findings", "render_finding_md",
+            "proxy_manage", "sandbox_exec", "agent_tree", "export_csv",
             "waf_info", "identify_waf",
         ],
     )),
@@ -146,6 +153,21 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Detect and safely drive installed security CLIs (scope-checked, "
         "file-I/O flags refused). Gated by MOONMCP_ALLOW_EXTERNAL_TOOLS.",
         ["external_tools", "run_scanner", "scan_coverage"],
+    )),
+    ("pipeline", (
+        "Hermes pipeline (absorbed)",
+        "The retired Node server's local data tools, now served natively: "
+        "engagement queue, targets.yaml scope/config, HackerOne report "
+        "calibration, knowledge-base grep, airecon FTS5 datasets, nuclei "
+        "CVE index, web-security catalog, takeover fingerprints.",
+        [
+            "queue_task", "list_queue", "get_target", "list_targets",
+            "search_bugbounty_reports", "list_report_categories",
+            "search_knowledge_base", "search_datasets",
+            "match_signature_to_cve", "get_nuclei_template",
+            "search_web_security_resources", "list_web_security_categories",
+            "check_subdomain_takeover",
+        ],
     )),
 ])
 

@@ -1033,6 +1033,11 @@ def fresh_context(monkeypatch):
     """
 
     import dataclasses as _dc
+    import tempfile as _tf
+    # Use a temp dir for state so tests don't pollute the persistent store.
+    _tmp = _tf.mkdtemp(prefix="moonmcp-test-")
+    import os as _os
+    _os.environ["MOONMCP_STATE_DIR"] = _tmp
     ctx = build_context()
     # Local-server tests target 127.0.0.1, so disable the private-IP SSRF guard.
     ctx.scope.block_private = False

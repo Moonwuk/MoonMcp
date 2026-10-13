@@ -6,6 +6,19 @@ All notable changes to MoonMCP are documented here. The format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Absorbed hermes-pipeline tools.** The retired Node MCP server's 13 local
+  data tools now ship inside MoonMCP (`moonmcp/pipeline.py`): engagement queue
+  (`queue_task`/`list_queue`), `targets.yaml` scope & header config
+  (`get_target`/`list_targets`), HackerOne report calibration
+  (`search_bugbounty_reports`/`list_report_categories`), knowledge-base grep
+  across 15 sources incl. HackTricks (`search_knowledge_base`), airecon FTS5
+  datasets (`search_datasets`), the nuclei CVE index
+  (`match_signature_to_cve`/`get_nuclei_template`), the web-security catalog
+  (`search_web_security_resources`/`list_web_security_categories`), and
+  takeover fingerprints (`check_subdomain_takeover`). All passive (local
+  KB/SQLite only — no traffic), catalogued under the new `pipeline` family.
+  Output parity with the Node server was verified golden-style on live calls
+  before retirement; the Node process is disabled in the Hermes config.
 - **Scope-first assessment methodology skills.** Added `assessment-planning`,
   `systematic-validation`, and `run-coordination`: concise security-specific
   adaptations of the useful planning, debugging/TDD/verification, and execution
