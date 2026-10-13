@@ -55,6 +55,51 @@ def test_budgets_are_atomic_and_cannot_be_exceeded():
         store.consume(run["id"], requests=-1)
 
 
+def test_budget_rejection_releases_database_for_other_sessions(tmp_path):
+    path = str(tmp_path / "runs.db")
+    first = RunStore(path)
+    second = RunStore(path)
+    second._db.execute("PRAGMA busy_timeout=0")
+    try:
+        run = first.create("example.test", budget=RunBudget(1, 1, 0))
+        first.consume(run["id"], requests=1)
+        with pytest.raises(ValueError, match="budget exceeded: requests"):
+            first.consume(run["id"], requests=1)
+
+        # A rejected increment must not retain SQLite's database-wide write lock.
+        second.consume(run["id"], tool_calls=1)
+        budget = second.get(run["id"])["budget"]
+        assert budget["requests"]["used"] == 1
+        assert budget["tool_calls"]["used"] == 1
+        assert len(second.events(run["id"])) == 3
+    finally:
+        first.close()
+        second.close()
+
+
+def test_usage_event_failure_rolls_back_counters_and_releases_lock(tmp_path, monkeypatch):
+    path = str(tmp_path / "runs.db")
+    first = RunStore(path)
+    second = RunStore(path)
+    second._db.execute("PRAGMA busy_timeout=0")
+    try:
+        run = first.create("example.test", budget=RunBudget(1, 1, 0))
+
+        def fail_event(*args):
+            raise RuntimeError("event write failed")
+
+        monkeypatch.setattr(first, "_event", fail_event)
+        with pytest.raises(RuntimeError, match="event write failed"):
+            first.consume(run["id"], requests=1)
+
+        assert first.get(run["id"])["budget"]["requests"]["used"] == 0
+        second.consume(run["id"], requests=1)
+        assert len(second.events(run["id"])) == 2
+    finally:
+        first.close()
+        second.close()
+
+
 def test_finish_gate_requires_tasks_and_coverage():
     store = RunStore()
     run = store.create("example.test")

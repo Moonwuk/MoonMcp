@@ -304,7 +304,9 @@ class RunStore:
                   "intrusive_calls": intrusive_calls}
         if any(not isinstance(v, int) or isinstance(v, bool) or v < 0 for v in values.values()):
             raise ValueError("usage increments must be non-negative integers")
-        with self._lock:
+        # Commit counters and their event together; roll back on every error,
+        # including a rejected UPDATE that still acquires SQLite's write lock.
+        with self._lock, self._db:
             self.get(run_id)
             cur = self._db.execute(
                 """UPDATE runs SET requests_used=requests_used+?,
@@ -324,7 +326,6 @@ class RunStore:
                 ]
                 raise ValueError("budget exceeded: " + ", ".join(exhausted))
             self._event(run_id, "usage", values)
-            self._db.commit()
         return self.get(run_id)
 
     def finish(self, run_id: str, *, force: bool = False) -> dict:
