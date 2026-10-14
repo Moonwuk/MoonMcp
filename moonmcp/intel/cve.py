@@ -87,7 +87,7 @@ async def lookup_cve(client: HttpClient, cve_id: str, api_key: str | None = None
     url = f"{_BASE}?cveId={quote(cve_id)}"
 
     async def _fetch():
-        r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True)
+        r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True, suppress_auth=True)
         if r.error or r.status != 200:
             return None
         try:
@@ -116,7 +116,7 @@ async def search_cves(
     api_key: str | None = None,
 ) -> CveSearchResult:
     url = f"{_BASE}?keywordSearch={quote(keyword)}&resultsPerPage={min(max(1, limit), 50)}"
-    r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True)
+    r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True, suppress_auth=True)
     out = CveSearchResult(query=keyword)
     if r.error or r.status != 200:
         out.error = r.error or f"HTTP {r.status}"

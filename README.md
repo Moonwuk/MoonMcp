@@ -14,6 +14,7 @@ The project is **stdlib-first**: its core reconnaissance features work without a
 - **Finding workflow** — confirmation helpers, CVSS scoring, deduplication, reporting, SARIF/JSON export and surface snapshots.
 - **Persistent research context** — optional SQLite-backed memory and a small knowledge graph for findings, assets and research notes.
 - **Resumable assessments** — persistent runs, role-based tasks, dependency ordering, coverage tracking, usage budgets and immutable evidence artifacts.
+- **Observations and hypotheses** — persistent flags with evidence, source groups, role/time context, links and counterevidence; reviewed hypotheses remain distinct from confirmed findings.
 - **Optional CLI integration** — can detect and use tools such as `nuclei`, `httpx`, `subfinder`, `nmap` and others when they are available.
 - **Safety controls** — scope enforcement, request rate/concurrency limits, private-address protection, audit logging and a separate gate for intrusive tools.
 
@@ -64,11 +65,24 @@ Scope checks still apply to shell calls.
 
 ### Resumable assessment runs
 
-Set `MOONMCP_STATE_DIR` to retain runs in `runs.db` across restarts. Use `run_start`
-with an authorised target, `run_status` to resume context, and `run_next` to select
-an unblocked task. Record measured usage through `run_usage`; automatic accounting
-of network/tool calls is a planned extension. `run_finish` checks unfinished tasks
-and open coverage before completion.
+Set `MOONMCP_STATE_DIR` to retain runs, findings and evidence across restarts. Use
+`run_start` with an authorised target, `run_brief` to resume context, and `run_claim`
+with a heartbeat for coordinated work. Discover a tool with `tool_search`, inspect
+its schema and request accounting through `tool_describe`, then use `run_execute`
+for supported local/HTTP tools. It records calls and HTTP sends against the run
+budget; direct typed calls do not automatically join that budget.
+
+Large results are preserved in ordered artifact chunks with SHA-256 manifests;
+summary mode shortens the preview. Interrupted outcomes need evidence-backed
+reconciliation through `run_recover`/`run_reconcile` before explicit task retry.
+`run_finish` checks unfinished work and preserves coverage limitations. See the
+[agent workflow guide](docs/AGENT_WORKFLOW.md) for exact recovery rules and the
+flag → hypothesis → verification workflow.
+
+`MOONMCP_COMPACT=1` advertises a smaller facade when the selected profile includes
+both `run_start` and `run_execute`. Profiles without that pair, such as `knowledge`,
+keep their direct tools. Compact does not bypass profile permissions or make
+unmetered browser, CLI or raw-protocol tools executable through the run facade.
 
 Operator skills in `.claude/skills/assessment-planning`,
 `.claude/skills/systematic-validation`, and `.claude/skills/run-coordination`
@@ -100,12 +114,13 @@ Common settings:
 | `MOONMCP_SCOPE_EXCLUDE` | empty | explicit exclusions |
 | `MOONMCP_ENFORCE_SCOPE` | `1` | enforce active-tool scope checks |
 | `MOONMCP_BLOCK_PRIVATE` | `1` | block private/reserved destinations |
-| `MOONMCP_ALLOW_INTRUSIVE` | `1` | enable separately gated intrusive tools |
-| `MOONMCP_RATE_LIMIT` | `20` | outbound requests per second |
+| `MOONMCP_ALLOW_INTRUSIVE` | `0` | enable separately gated intrusive tools |
+| `MOONMCP_RATE_LIMIT` | `10` | outbound requests per second |
 | `MOONMCP_MAX_CONCURRENCY` | `20` | concurrent outbound connections |
 | `MOONMCP_TIMEOUT` | `10` | default request timeout |
 | `MOONMCP_ALLOW_EXTERNAL_TOOLS` | `1` | permit installed CLI integrations |
-| `MOONMCP_STATE_DIR` | optional | persistent program/memory state |
+| `MOONMCP_STATE_DIR` | `~/.hermes/moonmcp_state` | persistent runs, findings, flags and program/memory state |
+| `MOONMCP_COMPACT` | `0` | advertise the run facade when the selected profile supports it |
 
 See the source and documentation for specialised integrations and provider-specific API keys.
 
@@ -116,6 +131,9 @@ The repository contains detailed reference material for areas that would make th
 - [Research and design notes](docs/RESEARCH.md)
 - [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
 - [Agent navigation and optimization plan](docs/AGENT_NAVIGATION_PLAN.md)
+- [Agent workflow: tools, flags, hypotheses and recovery](docs/AGENT_WORKFLOW.md)
+- [Tool registry and registration architecture](docs/TOOL_ARCHITECTURE.md)
+- [Research into comparable flag and hypothesis systems](docs/FLAG_SYSTEM_RESEARCH.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
 - [System prompts](docs/SYSTEM_PROMPTS.md)
 - [Injection reference](docs/INJECTIONS.md)

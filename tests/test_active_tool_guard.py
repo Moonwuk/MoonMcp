@@ -14,7 +14,7 @@ from moonmcp import server as srv
 # an @active_tool. Adding a new tool here is a deliberate, reviewed decision.
 PASSIVE = {
     # meta / management
-    "server_status", "tool_catalog", "tool_search",
+    "server_status", "tool_catalog", "tool_search", "tool_describe",
     "scope_list", "scope_add", "scope_exclude", "scope_remove",
     "program_add", "program_use", "program_list", "program_remove",
     "auth_set", "auth_clear",
@@ -33,6 +33,9 @@ PASSIVE = {
     # shared memory hub (local store; no traffic)
     "memory_add", "memory_search", "memory_get", "memory_stats",
     "memory_link", "memory_graph", "memory_brief", "memory_lesson",
+    "flag_record", "flag_get", "flag_search", "flag_update", "flag_link",
+    "hypothesis_record", "hypothesis_get", "hypothesis_update", "analysis_brief",
+    "run_brief", "run_claim", "run_heartbeat", "run_task_retry", "run_artifact_read", "run_recover", "run_reconcile",
     # local persistent run/task coordinator (run_start validates scope but sends no traffic)
     "run_start", "run_status", "run_list", "run_control", "run_task_add",
     "run_task_update", "run_next", "run_coverage_update", "run_usage", "run_finish",

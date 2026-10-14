@@ -52,3 +52,5 @@ jobs:
         run: uv pip check --system
       - name: Server capability check
         run: moonmcp --check
+      - name: Exercise installed wheel over MCP stdio
+        run: env -u PYTHONPATH python -I scripts/mcp_smoke.py

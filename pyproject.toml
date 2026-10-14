@@ -32,11 +32,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The whole point of MoonMCP is to work with (almost) zero dependencies.
-# MCP 2.x renamed FastMCP and changed other APIs; keep the supported 1.x line
-# explicit until the server is migrated.  defusedxml is required by the SAML
+# MCP 1.30 is the tested floor for structured outcomes and current Pydantic;
+# MCP 2.x changes the FastMCP API, so retain the supported 1.x line until migration.
+# defusedxml is required by the SAML
 # parser to reject entity-expansion attacks safely.
 dependencies = [
-    "mcp>=1.2.0,<2",
+    "mcp>=1.30.0,<2",
     "defusedxml>=0.7.1,<1",
 ]
 

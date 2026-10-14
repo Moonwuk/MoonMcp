@@ -123,8 +123,11 @@ def test_entity_upsert_dedupes_and_keeps_curated():
     assert e1 == e2
     ents = m.entities(kind="host")
     assert len(ents) == 1
-    assert ents[0]["attrs"] == "nginx"       # attrs merged in
+    assert ents[0]["attrs"] == ""            # untrusted attrs are pending, not vetted
     assert ents[0]["trust"] == "curated"     # curated never downgraded
+    proposal = m.entity_revisions(e1)[0]
+    assert proposal["content"]["attrs"] == "nginx"
+    assert proposal["trust"] == "untrusted" and not proposal["accepted"]
     # a blank name is a no-op
     assert m.add_entity(kind="host", name="   ") == 0
 

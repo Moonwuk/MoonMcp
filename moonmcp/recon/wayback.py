@@ -43,7 +43,7 @@ async def fetch_wayback_urls(
         "https://web.archive.org/cdx/search/cdx"
         f"?url={quote(pattern)}&output=json&fl=original&collapse=urlkey&limit={limit}"
     )
-    r = await client.fetch(url, timeout=30.0, follow_redirects=True)
+    r = await client.fetch(url, timeout=30.0, follow_redirects=True, suppress_auth=True)
     result = WaybackResult(domain=domain)
     if r.error or r.status != 200:
         result.error = r.error or f"HTTP {r.status}"
