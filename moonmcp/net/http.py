@@ -34,6 +34,31 @@ from .ratelimit import Governor
 
 DEFAULT_MAX_BODY = 512 * 1024  # 512 KiB
 
+
+class _TransportPermit:
+    """A cancelled coroutine keeps its permit until the blocking send finishes."""
+
+    def __init__(self, governor: Governor) -> None:
+        self.governor = governor
+        self.worker: asyncio.Task | None = None
+
+    async def __aenter__(self) -> _TransportPermit:
+        await self.governor.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self.worker is not None and not self.worker.done():
+            # HttpClient shields this task from caller cancellation. Transfer
+            # ownership of the occupied slot instead of overbooking a live send.
+            self.worker.add_done_callback(self._release)
+        else:
+            await self.governor.__aexit__(*exc)
+
+    def _release(self, worker: asyncio.Task) -> None:
+        self.governor.semaphore.release()
+        if not worker.cancelled():
+            worker.exception()  # retrieve a late transport error without replaying
+
 # Opt-in browser-TLS impersonation. When set to a curl_cffi profile name
 # ("chrome", "chrome131", "firefox", "safari", ...) and curl_cffi is importable,
 # the request transport forges that browser's TLS/HTTP2/header-order fingerprint
@@ -448,6 +473,7 @@ class HttpClient:
         auth_provider: Callable[[], dict[str, str]] | None = None,
         opsec: object | None = None,
         proxy_rules: object | None = None,
+        telemetry: object | None = None,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
@@ -468,6 +494,7 @@ class HttpClient:
         # proxy_rules: ProxyRuleEngine for match & replace on outbound requests.
         # When set, apply_rules() runs before each request is sent.
         self._proxy_rules = proxy_rules
+        self._telemetry = telemetry
 
     async def fetch(
         self,
@@ -498,6 +525,13 @@ class HttpClient:
             merged = self._opsec.build_headers(method)
         else:
             merged = {"User-Agent": self._ua, "Accept-Encoding": "gzip, deflate", "Accept": "*/*"}
+        if suppress_auth and self._opsec is not None:
+            # OPSEC may retain the startup program's identifying header even
+            # when auth_provider is suppressed. Third-party research and the
+            # anonymous leg of an auth diff must not inherit that identity.
+            config = getattr(self._opsec, "config", None)
+            bb_name = str(getattr(config, "bb_header_name", "")).lower()
+            merged = {key: value for key, value in merged.items() if key.lower() != bb_name}
         # Scope-check the INITIAL url before the first hop. The redirect-loop
         # below already checks each Location, but without this guard a caller-
         # supplied initial URL is fetched with engagement auth attached before
@@ -516,7 +550,11 @@ class HttpClient:
             merged.update(headers)  # per-call headers win over engagement auth
         # Proxy rules: apply match & replace transformations to the request.
         # The engine's API is apply_rules(request_dict) -> new request_dict.
-        if self._proxy_rules is not None and hasattr(self._proxy_rules, 'apply_rules'):
+        # Engagement rewrite rules can inject credentials as well. Suppression
+        # keeps explicit per-call provider/identity headers, but skips ambient
+        # rules so an anonymous/provider request cannot acquire target auth.
+        if (not suppress_auth and self._proxy_rules is not None
+                and hasattr(self._proxy_rules, 'apply_rules')):
             req_dict = {"url": url, "method": method, "headers": dict(merged),
                         "body": body.decode("utf-8", errors="replace") if body else ""}
             try:
@@ -568,7 +606,7 @@ class HttpClient:
                     result.redirect_blocked = current
                     result.blocked_reason = reason
                     break
-            async with self._gov:
+            async with _TransportPermit(self._gov) as permit:
                 # OPSEC jitter: small random delay to break uniform timing pattern.
                 if self._opsec is not None:
                     delay = self._opsec.get_delay()
@@ -585,31 +623,46 @@ class HttpClient:
                         )
                     if self._opsec and hasattr(self._opsec, 'record_request'):
                         self._opsec.record_request(urlsplit(current).hostname or current)
-                if _USE_CURL_CFFI:
-                    result = await asyncio.to_thread(
-                        _curl_cffi_fetch,
-                        current,
-                        method,
-                        merged,
-                        body,
-                        timeout or self._timeout,
-                        verify_tls,
-                        max_body or self._max_body,
-                        _IMPERSONATE_PROFILE,
-                        pinned_ip,
-                    )
-                else:
-                    result = await asyncio.to_thread(
-                        _blocking_fetch,
-                        current,
-                        method,
-                        merged,
-                        body,
-                        timeout or self._timeout,
-                        verify_tls,
-                        max_body or self._max_body,
-                        pinned_ip,
-                    )
+                # Reserve immediately before each transport dispatch (including
+                # redirect hops), after gates, rate limits and jitter. ContextVar
+                # scope propagates to all tasks in a composite tool invocation.
+                from ..execution import current_execution
+                execution = current_execution()
+                if execution is not None:
+                    execution.before_request(current)
+                telemetry = self._telemetry
+                if telemetry is None and execution is not None:
+                    telemetry = execution.ctx.telemetry
+                attempt_started = time.monotonic()
+                attempt_result: HttpResult | None = None
+                try:
+                    if _USE_CURL_CFFI:
+                        permit.worker = asyncio.create_task(asyncio.to_thread(
+                            _curl_cffi_fetch, current, method, merged, body,
+                            timeout or self._timeout, verify_tls,
+                            max_body or self._max_body, _IMPERSONATE_PROFILE, pinned_ip,
+                        ))
+                    else:
+                        permit.worker = asyncio.create_task(asyncio.to_thread(
+                            _blocking_fetch, current, method, merged, body,
+                            timeout or self._timeout, verify_tls,
+                            max_body or self._max_body, pinned_ip,
+                        ))
+                    attempt_result = await asyncio.shield(permit.worker)
+                    result = attempt_result
+                finally:
+                    # Cancelling to_thread does not recall an already sent
+                    # request. Retain an unknown receipt; never retry it blindly.
+                    if execution is not None and (
+                        attempt_result is None or attempt_result.status is None
+                    ):
+                        execution.ambiguous = True
+                    if telemetry is not None:
+                        telemetry.record_request(
+                            method, current,
+                            (attempt_result.status or 0) if attempt_result else 0,
+                            time.monotonic() - attempt_started,
+                        )
             if not follow_redirects or result.status is None or not (300 <= result.status < 400):
                 break
             location = result.header("Location")

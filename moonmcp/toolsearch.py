@@ -1,146 +1,171 @@
-"""Task-driven tool discovery (AGENT_NAVIGATION_PLAN.md stage 1).
+"""Small local lexical retriever over the exposed registry and capabilities.
 
-``tool_search`` hands the agent a SHORT candidate list for the job in
-front of it, with the reason each candidate matched — instead of a
-172KB tools/list. The searchable index is generated from the live
-registry (family, purpose, gate flags) plus a small hand-curated
-keyword map, so it can never silently drift from what is registered
-(a contract test enforces that).
-
-The search deliberately does NOT promise dynamic schema loading: the
-plan is explicit that a short catalog does not shrink what the client
-loads. What it does fix is the *choice* problem — «which 3 tools do I
-need for THIS observation» — at a fraction of the full map's context
-cost.
+Unicode normalization and reviewed domain aliases are intentionally modest:
+they support a labelled vocabulary, not general multilingual understanding.
+Cards help selection; they do not change schemas loaded by an MCP client.
 """
 
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass
+import unicodedata
+from collections import Counter
+from typing import Any
 
-from . import catalog as cat
+from . import toolspec
 
-# Observation/phase → tool name keywords. Curated from the navigation
-# plan's table and the families' blurbs; intentionally small — the
-# purpose text of every tool is searched too, this only biases it.
-_BIAS: dict[str, list[str]] = {
-    "recon": ["subdomain", "dns", "wayback", "probe", "fingerprint", "recon",
-              "well_known", "tls", "crawl"],
-    "injection": ["sqli", "xss", "ssti", "cmdi", "xxe", "nosqli", "interp",
-                  "injection", "lfi", "traversal"],
-    "auth": ["auth", "jwt", "oauth", "saml", "session", "idor", "access_control",
-             "authz", "bola", "mfa", "password", "login"],
-    "logic": ["logic", "race", "workflow", "value", "mass", "parameter", "ratelimit"],
-    "infra": ["waf", "cache", "cors", "vhost", "desync", "smuggling", "edge",
-              "backend", "ratelimit", "timing"],
-    "ssrf": ["ssrf", "gopher", "metadata", "smuggling", "protocol"],
-    "report": ["finding", "report", "export", "cvss", "remediation", "triage",
-                "obsidian", "sarif"],
-    "knowledge": ["knowledge", "payload", "cheat", "writeup", "dataset",
-                  "nuclei", "cve", "playbook", "injection_info"],
-    "oast": ["oast", "blind", "callback", "canary", "interactsh"],
-    "run": ["run_", "task", "coverage", "budget", "artifact"],
+_PHASES = {
+    "recon": "subdomain dns wayback fingerprint recon crawl",
+    "injection": "sqli xss ssti cmdi xxe nosqli injection lfi traversal",
+    "auth": "auth jwt oauth saml session idor access control authz bola mfa login",
+    "logic": "logic race workflow value parameter ratelimit",
+    "infra": "waf cache cors vhost desync smuggling edge backend timing",
+    "ssrf": "ssrf gopher metadata protocol callback",
+    "report": "finding report export cvss remediation triage sarif",
+    "knowledge": "knowledge payload cheat writeup dataset cve playbook",
+    "oast": "oast blind callback canary interactsh",
+    "run": "run task coverage budget artifact",
 }
 
+# Explicit vocabulary, not machine translation. Keep phrases narrow enough to
+# avoid conflating requesting authorization with checking access control.
+_QUERY_ALIASES = {
+    "sql injection": "sqli", "sql-инъекция": "sqli", "sql инъекция": "sqli",
+    "sql注入": "sqli", "sql 인젝션": "sqli", "injeção sql": "sqli",
+    "sql इंजेक्शन": "sqli", "sql injection testing": "sqli",
+    "проверить авторизацию": "authorization check", "проверка авторизации": "authorization check",
+    "контроль доступа": "access control authorization", "аутентификация": "authentication",
+    "身份验证": "authentication check", "权限检查": "authorization check",
+    "访问控制": "access control", "인증 검사": "authentication check",
+    "권한 검사": "authorization check", "접근 제어": "access control",
+    "verificar autorização": "authorization check", "controle de acesso": "access control",
+    "autenticação": "authentication", "प्राधिकरण जांच": "authorization check",
+    "प्रमाणीकरण": "authentication", "доступные цели": "scope list",
+    "проверить scope": "scope list", "область проверки": "scope list",
+    "授权范围": "scope list", "범위 확인": "scope list",
+    "verificar escopo": "scope list", "दायरा जांच": "scope list",
+    "бюджет запуска": "run budget", "остаток бюджета": "run budget remaining",
+    "运行预算": "run budget", "실행 예산": "run budget",
+    "orçamento da execução": "run budget", "रन बजट": "run budget",
+    "скриншот": "screenshot", "浏览器截图": "browser screenshot",
+    "브라우저 스크린샷": "browser screenshot", "captura de tela": "screenshot",
+    "स्क्रीनशॉट": "screenshot", "сохранить наблюдение": "flag observation add",
+    "гипотеза": "hypothesis", "假设": "hypothesis", "가설": "hypothesis",
+    "hipótese": "hypothesis", "परिकल्पना": "hypothesis",
+}
 
-@dataclass
-class Candidate:
-    name: str
-    family: str
-    purpose: str
-    reason: str
-    scope_gated: bool
-    intrusive: bool
+_STOP = {"the", "a", "an", "to", "for", "of", "and", "or", "with", "in", "is", "this", "tool", "tools"}
+_MUTATIONS = {"add", "remove", "exclude", "clear", "set", "configure", "start", "update", "usage", "record", "create", "delete"}
+
+
+def _normalize(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold()
 
 
 def _tokens(text: str) -> set[str]:
-    return {w for w in re.split(r"[^a-z0-9_]+", text.lower()) if len(w) > 1}
+    # Unicode categories preserve combining marks (essential for Hindi), and
+    # split snake_case while keeping the complete identifier as an exact term.
+    normalized = _normalize(text)
+    words: list[str] = []
+    current: list[str] = []
+    for char in normalized:
+        if unicodedata.category(char)[0] in {"L", "N", "M"}:
+            current.append(char)
+        elif current:
+            words.append("".join(current))
+            current = []
+    if current:
+        words.append("".join(current))
+    identifiers = re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", normalized)
+    return {word for word in [*words, *identifiers] if len(word) > 1 and word not in _STOP}
 
 
-def _phase_terms(phase: str) -> list[str]:
-    key = (phase or "").strip().lower()
-    for known, terms in _BIAS.items():
-        if key == known or key.startswith(known):
-            return terms
-    # unknown phase: treat the phase string itself as part of the query
-    return sorted(_tokens(phase))[:6] if key else []
+def _query_tokens(query: str) -> set[str]:
+    normal = _normalize(query)
+    terms = _tokens(normal)
+    for phrase, expanded in _QUERY_ALIASES.items():
+        cjk_phrase = any("CJK" in unicodedata.name(char, "") for char in phrase)
+        for match in re.finditer(re.escape(phrase), normal):
+            if not cjk_phrase:
+                adjacent = normal[match.start() - 1:match.start()] if match.start() else ""
+                adjacent += normal[match.end():match.end() + 1]
+                if any(unicodedata.category(char)[0] in {"L", "N", "M"} or char == "_"
+                       for char in adjacent):
+                    continue
+            terms.update(_tokens(expanded))
+            break
+    return terms
 
 
 def search(query: str, phase: str = "", available_only: bool = True,
-           limit: int = 5) -> dict:
-    """Rank tools for the task at hand. Returns short cards with reasons."""
-    meta = _live_meta()
-    q = _tokens(query or "")
-    phase_terms = set(_phase_terms(phase))
+           limit: int = 5) -> dict[str, Any]:
+    """Rank cards; known missing dependencies/gates can be filtered.
 
-    scored: list[tuple[float, str, dict]] = []
-    for name, info in meta.items():
-        purpose_t = _tokens(info.get("purpose", ""))
-        name_t = _tokens(name)
-        # score: query tokens in the name weigh most, then purpose, then phase bias
-        score = 0.0
-        reason_bits: list[str] = []
-        hits_name = q & name_t
-        hits_purpose = q & purpose_t - name_t
-        hits_phase = phase_terms & (name_t | purpose_t)
-        if hits_name:
-            score += 3.0 * len(hits_name)
-            reason_bits.append("name match: " + ", ".join(sorted(hits_name)[:4]))
-        if hits_purpose:
-            score += 1.0 * len(hits_purpose)
-            reason_bits.append("purpose: " + ", ".join(sorted(hits_purpose)[:4]))
-        if hits_phase:
-            score += 0.5 * len(hits_phase)
-            reason_bits.append(f"phase bias ({phase})")
-        if not score:
-            continue
-        if available_only and info.get("hidden"):
-            continue
-        scored.append((score, name, {**info, "reason": "; ".join(reason_bits)}))
-
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    top = scored[: max(1, min(limit, 10))]
-
-    candidates = [
-        Candidate(
-            name=name,
-            family=cat.TOOL_FAMILY.get(name, "uncategorized"),
-            purpose=info["purpose"],
-            reason=info["reason"],
-            scope_gated=bool(info.get("gated")),
-            intrusive=bool(info.get("intrusive")),
-        ).__dict__
-        for _score, name, info in top
-    ]
-    return {
-        "query": query,
-        "phase": phase or None,
-        "candidates": candidates,
-        "count": len(candidates),
-        "hint": (
-            "Cards only — load the tool's full schema from the client when you "
-            "call it. scope_gated/intrusive still apply per tool: family or "
-            "search rank is never permission."
-        ) if candidates else (
-            "No candidates — try a different keyword or drop the phase filter."
-        ),
+    Unknown target/role requirements remain visible and explicitly unknown.
+    They can only be checked using the eventual invocation arguments.
+    """
+    specs = toolspec.registry()
+    q = _query_tokens((query or "")[:2000])
+    phase_terms = _tokens(_PHASES.get(_normalize(phase), phase))
+    documents: dict[str, tuple[set[str], set[str], set[str]]] = {
+        name: (_tokens(name), _tokens(spec.aliases), _tokens(spec.purpose))
+        for name, spec in specs.items()
     }
-
-
-def _live_meta() -> dict[str, dict]:
-    """name -> {purpose, gated, intrusive, hidden} from the live registry."""
-    from .server import mcp
-    out: dict[str, dict] = {}
-    for t in mcp._tool_manager.list_tools():
-        desc = " ".join((t.description or "").split())
-        purpose = cat._first_sentence(desc)
-        fn = getattr(t.fn, "__moonmcp_gated__", False)
-        intr = getattr(t.fn, "__moonmcp_intrusive__", False)
-        out[t.name] = {
-            "purpose": purpose,
-            "gated": fn,
-            "intrusive": intr,
-            "hidden": False,  # profile filtering already ran at import
-        }
-    return out
+    df: Counter[str] = Counter()
+    for fields in documents.values():
+        df.update(set().union(*fields))
+    total = max(len(documents), 1)
+    avg_length = sum(len(set().union(*fields)) for fields in documents.values()) / total or 1
+    ranked: list[tuple[float, str, list[str]]] = []
+    for name, spec in specs.items():
+        if available_only and spec.availability["status"] == "unavailable":
+            continue
+        name_terms, aliases, purpose = documents[name]
+        all_terms = name_terms | aliases | purpose
+        matched = q & all_terms
+        phase_matches = phase_terms & all_terms
+        if not matched and not phase_matches:
+            continue
+        # BM25 with field-weighted term frequency. Length normalization uses
+        # the short card, preventing long boilerplate from dominating results.
+        norm = 1.2 * (0.25 + 0.75 * len(all_terms) / avg_length)
+        score = 0.0
+        for term in matched:
+            freq = 5 * (term in name_terms) + 3 * (term in aliases) + (term in purpose)
+            inverse = math.log(1 + (total - df[term] + 0.5) / (df[term] + 0.5))
+            score += inverse * freq * 2.2 / (freq + norm)
+        score += 0.15 * len(phase_matches)
+        reasons = ["matched: " + ", ".join(sorted(matched)[:5])] if matched else []
+        if phase_matches:
+            reasons.append("phase: " + phase)
+        if _normalize(query.strip()) == name:
+            score += 100
+            reasons.append("exact registered name")
+        # Default scope/budget intents are inspection; mutation must be explicit.
+        changes = q & _MUTATIONS
+        if "scope" in q:
+            if name == "scope_list" and not changes:
+                score += 12
+                reasons.append("inspect scope")
+            elif name.startswith("scope_") and changes & name_terms:
+                score += 12
+                reasons.append("explicit scope change")
+        if "budget" in q and "run" in q and name == "run_status" and not changes:
+            score += 12
+            reasons.append("inspect run budget")
+        if (q & {"check", "view", "list", "remaining"}) and name_terms & _MUTATIONS and not changes:
+            score *= 0.4
+        ranked.append((score, name, reasons))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    cards = [{**specs[name].card(), "reason": "; ".join(reasons)}
+             for _, name, reasons in ranked[:max(1, min(limit, 10))]]
+    return {
+        "query": query, "phase": phase or None, "candidates": cards, "count": len(cards),
+        "registry_version": toolspec.registry_version(specs),
+        "hint": (
+            "Cards only; use tool_describe for the real schema. available_only excludes known "
+            "missing dependencies/disabled gates; unknown scope/auth/argument requirements remain. "
+            "Rank is not permission and does not reduce client-loaded schemas."
+        ) if cards else "No candidates; try a supported domain term or available_only=false to inspect missing prerequisites.",
+    }

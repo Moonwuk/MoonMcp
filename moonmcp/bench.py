@@ -1,31 +1,29 @@
-"""Stage 0 baseline scenarios (AGENT_NAVIGATION_PLAN.md).
+"""Deterministic offline navigation baselines with semantic outcome checks.
 
-Reproducible, offline scenarios that measure the cost of a typical
-agent navigation step *without* network or an LLM:
-
-  calls    — how many MoonMCP tool invocations the scenario needs
-  schema   — bytes of tools/list the agent would load for the slice
-  duration — wall-clock of the tool calls themselves
-
-The scenarios deliberately drive REAL tool callables (server functions
-or underlying module functions) against fixture data, so the numbers
-measure MoonMCP itself, not a mock of it. No scenario touches a target;
-fixtures are local files/objects only.
-
-Run:  python -m moonmcp.bench  (or pytest tests/test_baseline_scenarios.py)
+Every scenario owns temporary stores and a new application context. Real tools,
+scope checks, auth merging and HTTP response analysis run against an in-process
+fixture transport; sockets and DNS are forbidden. Measurements are tool calls,
+fixture requests, wall time and UTF-8 JSON schema bytes, not client context tokens
+or LLM success. Run with ``python -m moonmcp.bench``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
+import os
+import socket
 import time
+from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field
-from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
+from unittest.mock import patch
+from urllib.parse import urlsplit
 
-# ──────────────────────────────────────────────────────────────────
-# Measurement harness
-# ──────────────────────────────────────────────────────────────────
+from .outcomes import failure
 
 
 @dataclass
@@ -36,258 +34,305 @@ class ScenarioResult:
     duration_s: float = 0.0
     schema_bytes: int = 0
     notes: list[str] = field(default_factory=list)
+    outcomes: dict[str, bool] = field(default_factory=dict)
+    fixture_requests: int = 0
+    expected_errors: int = 0
+
+
+def _schemas() -> dict[str, dict]:
+    """Use SDK tools/list definitions, including output schemas when present."""
+    from .server import mcp
+
+    return {tool.name: tool.model_dump(by_alias=True, exclude_none=True)
+            for tool in asyncio.run(mcp.list_tools())}
 
 
 def _schema_bytes(tool_names: list[str]) -> int:
-    """The context cost of the tools the scenario says it needs — the
-    JSON-schema bytes of exactly those tools' definitions."""
-    from .server import mcp
-    tools = {t.name: t for t in mcp._tool_manager.list_tools()}
-    return sum(len(json.dumps({"name": n,
-                               "description": tools[n].description or "",
-                               "inputSchema": tools[n].parameters}))
-               for n in tool_names if n in tools)
+    schemas = _schemas()
+    missing = set(tool_names) - schemas.keys()
+    if missing:
+        raise AssertionError(f"baseline tools not exposed by current profile: {sorted(missing)}")
+    return len(json.dumps([schemas[name] for name in sorted(set(tool_names))],
+                          ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def _full_schema_bytes() -> int:
-    from .server import mcp
-    tools = mcp._tool_manager.list_tools()
-    return sum(len(json.dumps({"name": t.name,
-                              "description": t.description or "",
-                              "inputSchema": t.parameters}))
-               for t in tools)
+    return _schema_bytes(list(_schemas()))
+
+
+class _Sandbox:
+    """A standalone fixture session, including a real close/reopen operation."""
+
+    def __enter__(self) -> _Sandbox:
+        from . import server as srv
+        from .config import Settings
+        from .net import http
+
+        self.stack = ExitStack()
+        self.requests: list[dict] = []
+        self.network_attempts: list[str] = []
+        state_dir = self.stack.enter_context(TemporaryDirectory(prefix="moonmcp-baseline-"))
+        self.stack.enter_context(patch.dict(os.environ, {
+            "MOONMCP_STATE_DIR": state_dir,
+            "MOONMCP_AUDIT_LOG": os.path.join(state_dir, "audit.jsonl"),
+            "MOONMCP_OAST_DOMAIN": "", "MOONMCP_OAST_POLL_URL": "",
+        }))
+        self.settings = Settings(scope=["baseline.test"], state_dir=state_dir,
+                                 rate_limit=0, allow_external_tools=False)
+        self.stack.enter_context(patch.object(srv, "_CTX", None))
+        self.stack.enter_context(patch.object(http, "_blocking_fetch", self._transport))
+        self.stack.enter_context(patch.object(http, "_USE_CURL_CFFI", False))
+        self.stack.enter_context(patch.object(socket, "getaddrinfo", self._deny_network))
+        self.stack.enter_context(patch.object(socket, "create_connection", self._deny_network))
+        self.stack.enter_context(patch.object(socket.socket, "connect", self._deny_network))
+        try:
+            self._open()
+        except BaseException:
+            self.stack.close()
+            raise
+        return self
+
+    def _open(self) -> None:
+        from . import server as srv
+        from .context import build_context
+
+        self.ctx = build_context(self.settings)
+        # Real scope/SSRF checks, deterministic public-address DNS fixture.
+        # No actual connection is made to the returned address.
+        self.ctx.scope._resolver = lambda host: ["93.184.216.34"]
+        self.ctx.http._opsec = None  # no random delay in offline measurements
+        self.ctx.http._proxy_rules = None
+        srv._CTX = self.ctx
+
+    def _close(self) -> None:
+        for store in vars(self.ctx).values():
+            close = getattr(store, "close", None)
+            if callable(close):
+                close()
+
+    def restart(self) -> None:
+        self._close()
+        self._open()
+
+    def _deny_network(self, *args, **kwargs):
+        self.network_attempts.append(repr(args[:1]))
+        raise AssertionError("baseline attempted real network I/O")
+
+    def _transport(self, url, method, headers, body, *args):
+        from .net.http import HttpResult
+
+        assert urlsplit(url).hostname == "baseline.test", url
+        self.requests.append({"url": url, "method": method, "headers": headers, "body": body})
+        path = urlsplit(url).path
+        status, content_type, content = 404, "text/plain", b"not found"
+        if path == "/graphql" and method == "POST":
+            query = json.loads(body)["query"]
+            data = ({"__schema": {"queryType": {"name": "Query"},
+                                   "types": [{"name": "Query", "kind": "OBJECT"}]}}
+                    if "__schema" in query else {"__typename": "Query"})
+            status, content_type, content = 200, "application/json", json.dumps({"data": data}).encode()
+        elif path == "/private":
+            token = next((value for key, value in headers.items()
+                          if key.lower() == "authorization"), "")
+            status, content = ((200, b'{"owner":"A","private":"fixture record"}')
+                               if token == "Bearer fixture-A" else (403, b"access denied"))
+        elif path == "/unchanged":
+            status, content = 200, b"The same public response for both control and test."
+        elif path == "/app.js":
+            status, content_type, content = 200, "application/javascript", b'fetch("/api/profile");'
+        return HttpResult(url=url, final_url=url, status=status, reason="fixture",
+                          headers=[("Content-Type", content_type)], body=content, elapsed_ms=1)
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        try:
+            self._close()
+        finally:
+            self.stack.close()
+        if exc_type is None and self.network_attempts:
+            raise AssertionError(f"real network attempted: {self.network_attempts}")
+
+
+def _isolated(fn: Callable[[_Sandbox], ScenarioResult]) -> Callable[[], ScenarioResult]:
+    @functools.wraps(fn)
+    def wrapped() -> ScenarioResult:
+        with _Sandbox() as sandbox:
+            return fn(sandbox)
+    return wrapped
 
 
 class Harness:
-    """Drives real tool callables, counting every invocation."""
+    """Count tool calls and fail immediately on an unexpected error or outcome."""
 
-    def __init__(self) -> None:
-        self.result: ScenarioResult | None = None
-        self._t0 = 0.0
-
-    def start(self, name: str, description: str) -> Harness:
+    def __init__(self, sandbox: _Sandbox, name: str, description: str) -> None:
+        self.sandbox = sandbox
         self.result = ScenarioResult(name=name, description=description)
         self._t0 = time.monotonic()
-        return self
 
-    def call(self, tool_name: str, coro_factory) -> object:
-        """Run an async tool callable, count it, return its result."""
-        assert self.result is not None
-        self.result.calls.append(tool_name)
-        out = asyncio.run(_run(coro_factory))
-        return out
+    def call(self, name: str, *, expect_error: str | None = None, **kwargs) -> dict:
+        from .server import mcp
 
-    def note(self, text: str) -> None:
-        assert self.result is not None
-        self.result.notes.append(text)
+        self.result.calls.append(name)
+        async def invoke():
+            # Same schema validation and profile-filtered lookup as the SDK.
+            return await mcp._tool_manager.call_tool(name, kwargs, convert_result=False)
+        result = asyncio.run(invoke())
+        error = failure(result)
+        if expect_error is not None:
+            assert error is not None and error.code == expect_error, (name, result)
+            self.result.expected_errors += 1
+        else:
+            assert error is None, (name, result)
+        assert isinstance(result, dict), (name, result)
+        return result
 
-    def finish(self, needed_tools: list[str]) -> ScenarioResult:
-        assert self.result is not None
+    def check(self, name: str, condition: object) -> None:
+        assert condition, f"{self.result.name}: {name}"
+        self.result.outcomes[name] = True
+
+    def finish(self) -> ScenarioResult:
         self.result.duration_s = time.monotonic() - self._t0
-        self.result.schema_bytes = _schema_bytes(needed_tools)
+        self.result.schema_bytes = _schema_bytes(self.result.calls)
+        self.result.fixture_requests = len(self.sandbox.requests)
+        assert self.result.outcomes, "a scenario must assert a semantic outcome"
         return self.result
 
 
-async def _run(factory) -> object:
-    return await factory()
+@_isolated
+def scenario_new_target(sandbox: _Sandbox) -> ScenarioResult:
+    h = Harness(sandbox, "new_target", "Orient on a fresh target and verify empty target memory.")
+    h.call("server_status")
+    catalog = h.call("tool_catalog", family="light_active")
+    memory = h.call("memory_brief", target="baseline.test")
+    h.check("catalog_contains_graphql_check", "graphql_check" in json.dumps(catalog))
+    h.check("fresh_target_has_no_findings", memory["counts"]["findings"] == 0)
+    return h.finish()
 
 
-def _run_id(created: object) -> str:
-    """run_start returns {"run": {"id": ...}}."""
-    if isinstance(created, dict):
-        run = created.get("run")
-        if isinstance(run, dict) and run.get("id"):
-            return str(run["id"])
-        if created.get("id"):
-            return str(created["id"])
-    raise AssertionError(f"unexpected run_start payload: {created!r}")
+@_isolated
+def scenario_run_continuation(sandbox: _Sandbox) -> ScenarioResult:
+    h = Harness(sandbox, "run_continuation", "Close and reopen stores, then resume the correct task.")
+    earlier = h.call("run_start", target="baseline.test", focus="unrelated run")
+    earlier_task = earlier["next"]["id"]
+    created = h.call("run_start", target="baseline.test", focus="continuation probe")
+    run_id, task_id = created["run"]["id"], created["next"]["id"]
+    h.call("run_task_update", task_id=task_id, state="running", result="checkpoint saved")
+    original_store = sandbox.ctx.runs
+    sandbox.restart()
+    status = h.call("run_status", run_id=run_id)
+    resumed = next(task for task in status["tasks"] if task["id"] == task_id)
+    h.check("store_reopened", sandbox.ctx.runs is not original_store)
+    h.check("task_state_survived_restart", resumed["state"] == "running"
+            and resumed["result"] == "checkpoint saved")
+    h.call("run_task_update", task_id=task_id, state="completed", result="resumed and completed")
+    h.call("run_next", run_id=run_id)
+    h.check("other_run_untouched", sandbox.ctx.runs.task(earlier_task)["state"] == "pending")
+    return h.finish()
 
 
-def _setup_scope() -> None:
-    """Authorise the offline baseline host so run tools accept it."""
-    from . import server as srv
-    ctx = srv.get_context()
-    try:
-        ctx.scope.add("baseline.test")
-    except Exception:  # noqa: BLE001 — already added
-        pass
+@_isolated
+def scenario_graphql_signs(sandbox: _Sandbox) -> ScenarioResult:
+    h = Harness(sandbox, "graphql_signs", "Discover and inspect a GraphQL fixture endpoint.")
+    result = h.call("graphql_check", target="https://baseline.test/graphql")
+    h.check("one_graphql_endpoint", len(result["endpoints"]) == 1)
+    endpoint = result["endpoints"][0]
+    h.check("introspection_observed", endpoint["introspection_enabled"] and endpoint["type_count"] == 1)
+    h.check("fixture_requests_counted", len(sandbox.requests) == 15)
+    return h.finish()
 
 
-# ──────────────────────────────────────────────────────────────────
-# The seven plan scenarios (offline slices only)
-# ──────────────────────────────────────────────────────────────────
+@_isolated
+def scenario_authed_surface(sandbox: _Sandbox) -> ScenarioResult:
+    h = Harness(sandbox, "authed_surface", "Compare owner, second user and anonymous access on a fixture.")
+    h.call("auth_set", bearer="fixture-A")
+    result = h.call("access_control_check", target="https://baseline.test/private",
+                    second_headers={"Authorization": "Bearer fixture-B"})
+    h.check("owner_can_access", result["identities"]["auth_A"]["status"] == 200)
+    h.check("other_identities_denied", all(result["identities"][name]["status"] == 403
+                                          for name in ("user_B", "anonymous")))
+    h.check("no_false_authz_lead", result["verdict"] == "no_obvious_idor" and not result["concerns"])
+    h.check("three_identity_requests", len(sandbox.requests) == 3)
+    return h.finish()
 
 
-def scenario_new_target() -> ScenarioResult:
-    """A fresh, unknown target: orient → map the surface (offline slice:
-    catalog + knowledge recall; the network probes are listed as the
-    would-be next step, not executed)."""
-    from . import server as srv
-
-    h = Harness().start("new_target",
-                        "Orient on a fresh target: status, catalog, recall.")
-    h.call("server_status", lambda: srv.server_status())
-    h.call("tool_catalog", lambda: srv.tool_catalog(family="light_active"))
-    h.call("memory_brief", lambda: srv.memory_brief(target="baseline.test"))
-    res = h.finish(["server_status", "tool_catalog", "memory_brief",
-                    "http_probe", "fingerprint", "recon_target"])
-    res.notes.append("network probes (http_probe/fingerprint/recon_target) "
-                     "listed but not executed — offline baseline")
-    return res
+@_isolated
+def scenario_false_lead(sandbox: _Sandbox) -> ScenarioResult:
+    h = Harness(sandbox, "false_lead", "Reject an unchanged differential response and recall the lesson.")
+    result = h.call("confirm_finding", target="https://baseline.test/unchanged",
+                    payload="fixture-marker", param="q", record=True)
+    h.check("control_refutes_lead", result["verdict"] == "unconfirmed")
+    h.check("no_finding_recorded", not sandbox.ctx.findings.list())
+    h.call("memory_lesson", action="add", title="Unchanged fixture response",
+           body="The control and candidate matched; do not repeat this candidate unchanged.")
+    lesson = h.call("memory_lesson", query="Unchanged fixture")
+    h.check("negative_result_recalled", lesson["count"] == 1)
+    h.check("control_and_candidate_requested", len(sandbox.requests) == 2)
+    return h.finish()
 
 
-def scenario_run_continuation() -> ScenarioResult:
-    """Resume a persisted run: list runs, read status, ask for next task."""
-    from . import server as srv
+@_isolated
+def scenario_no_browser(sandbox: _Sandbox) -> ScenarioResult:
+    from .web import browser
 
-    h = Harness().start("run_continuation",
-                        "Pick up an existing run: list, status, next task.")
-    h.call("run_list", lambda: srv.run_list(limit=5))
-
-    # create a scratch run to have something to continue
-    store_dir = Path.home() / ".moonmcp_baseline_runs"
-    store_dir.mkdir(exist_ok=True)
-    import os
-    os.environ.setdefault("MOONMCP_STATE_DIR", str(Path.home() / ".hermes" / "moonmcp_state"))
-    created = h.call("run_start", lambda: srv.run_start(target="baseline.test",
-                                                        focus="continuation probe"))
-    run_id = _run_id(created)
-    h.call("run_status", lambda: srv.run_status(run_id=run_id))
-    h.call("run_next", lambda: srv.run_next(run_id=run_id))
-    h.call("run_task_update", lambda: srv.run_task_update(task_id=1, state="running"))
-    h.call("run_finish", lambda: srv.run_finish(run_id=run_id, force=True))
-    res = h.finish(["run_list", "run_start", "run_status", "run_next",
-                    "run_task_update", "run_finish", "memory_brief"])
-    return res
+    h = Harness(sandbox, "no_browser", "Observe a missing browser, then extract static JavaScript endpoints.")
+    with patch.object(browser, "playwright_available", return_value=False):
+        result = h.call("browser_open", target="https://baseline.test/app.js",
+                        expect_error="missing_dependency")
+    h.check("browser_dependency_reported", result["available"] is False and result["install_hint"])
+    static = h.call("analyze_js", target="https://baseline.test/app.js")
+    h.check("static_fallback_found_endpoint", "/api/profile" in static["endpoints"])
+    h.check("only_static_request_sent", len(sandbox.requests) == 1)
+    return h.finish()
 
 
-def scenario_graphql_signs() -> ScenarioResult:
-    """Observed GraphQL: the minimal navigation is check-then-deepen
-    (offline slice: the class reference)."""
-    from . import server as srv
-
-    h = Harness().start("graphql_signs",
-                        "GraphQL observed: class reference + planned deepening.")
-    h.call("graphql_check", lambda: srv.graphql_check(target="https://baseline.test/graphql"))
-    h.call("injection_info", lambda: srv.injection_info(injection_class="graphql"))
-    res = h.finish(["graphql_check", "graphql_probe", "injection_info"])
-    res.notes.append("graphql_probe listed as the deepening step; reference "
-                     "lookup executed offline")
-    return res
-
-
-def scenario_authed_surface() -> ScenarioResult:
-    """Auth + roles context: what the agent loads before IDOR work."""
-    from . import server as srv
-
-    h = Harness().start("authed_surface",
-                        "Authed surface: recall + access-control class reference.")
-    h.call("memory_brief", lambda: srv.memory_brief(target="baseline.test"))
-    h.call("injection_info", lambda: srv.injection_info(injection_class="xss"))  # baseline class ref
-    res = h.finish(["auth_set", "access_control_check", "authz_probe", "memory_brief"])
-    res.notes.append("auth_set/access_control_check need live credentials — "
-                     "schema cost measured, not executed")
-    return res
+@_isolated
+def scenario_budget_exhausted(sandbox: _Sandbox) -> ScenarioResult:
+    h = Harness(sandbox, "budget_exhausted", "Refuse an overrun, preserve counters and block the actual task.")
+    created = h.call("run_start", target="baseline.test", focus="budget probe",
+                     max_requests=1, max_tool_calls=2)
+    run_id, task_id = created["run"]["id"], created["next"]["id"]
+    h.call("run_usage", run_id=run_id, requests=5, expect_error="budget_exhausted")
+    h.call("run_task_update", task_id=task_id, state="blocked", result="request budget exhausted")
+    result = h.call("run_status", run_id=run_id)
+    h.check("refusal_did_not_consume_budget", result["run"]["budget"]["requests"]["used"] == 0)
+    h.check("task_blocked", next(t for t in result["tasks"] if t["id"] == task_id)["state"] == "blocked")
+    h.check("no_request_after_refusal", len(sandbox.requests) == 0)
+    return h.finish()
 
 
-def scenario_false_lead() -> ScenarioResult:
-    """A lead that dies under validation: the plan demands the dead end be
-    RECORDED, not repeated."""
-    from . import server as srv
-
-    h = Harness().start("false_lead",
-                        "Lead recorded as not confirmed; lesson saved.")
-    h.call("promote_lead", lambda: srv.promote_lead(
-        target="baseline.test", kind="multistep_bola", severity="low",
-        detail="baseline: not reproduced (control matched)",
-        evidence="control == baseline", record=True))
-    h.call("memory_lesson", lambda: srv.memory_lesson(action="add",
-        title="baseline false-lead pattern",
-        body="A lead that fails its control must be recorded, never re-fired "
-             "unchanged."))
-    res = h.finish(["promote_lead", "memory_lesson", "confirm_finding"])
-    return res
+ALL_SCENARIOS = [scenario_new_target, scenario_run_continuation, scenario_graphql_signs,
+                 scenario_authed_surface, scenario_false_lead, scenario_no_browser,
+                 scenario_budget_exhausted]
 
 
-def scenario_no_browser() -> ScenarioResult:
-    """Browser-dependent step with no browser present: degrade, don't stall."""
-    from . import server as srv
-
-    h = Harness().start("no_browser",
-                        "browser_open unavailable — navigate around it.")
-    res_probe = h.call("analyze_js", lambda: srv.analyze_js(target="https://baseline.test/app.js"))
-    if not isinstance(res_probe, dict) or res_probe.get("error"):
-        h.note("analyze_js degraded the same way a missing browser would — "
-               "record and continue with the static slice")
-    res = h.finish(["browser_open", "analyze_js", "well_known"])
-    res.notes.append("browser_open listed for schema cost only; static slice "
-                     "executed offline")
-    return res
-
-
-def scenario_budget_exhausted() -> ScenarioResult:
-    """Budget refused: record the blocked task, stop."""
-    from . import server as srv
-
-    h = Harness().start("budget_exhausted",
-                        "run_usage refuses the overrun; task recorded blocked.")
-    created = h.call("run_start", lambda: srv.run_start(
-        target="baseline.test", focus="budget probe",
-        max_requests=1, max_tool_calls=2))
-    run_id = _run_id(created)
-    try:
-        h.call("run_usage", lambda: srv.run_usage(run_id=run_id, requests=5))
-        h.note("UNEXPECTED: budget not enforced")
-    except Exception as exc:  # noqa: BLE001 — the refusal is the point
-        h.note(f"budget refused as designed: {type(exc).__name__}")
-    res = h.finish(["run_usage", "run_task_update", "run_status"])
-    return res
-
-
-ALL_SCENARIOS = [
-    scenario_new_target,
-    scenario_run_continuation,
-    scenario_graphql_signs,
-    scenario_authed_surface,
-    scenario_false_lead,
-    scenario_no_browser,
-    scenario_budget_exhausted,
-]
-
-
-def run_baselines() -> dict:
-    """Run every scenario, return the measured report."""
-    _setup_scope()
-    results = [fn() for fn in ALL_SCENARIOS]
+def run_baselines() -> dict[str, Any]:
+    results = [scenario() for scenario in ALL_SCENARIOS]
     full = _full_schema_bytes()
-    report = {
-        "stage": "0-baseline",
-        "total_scenarios": len(results),
-        "full_schema_bytes": full,
+    return {
+        "stage": "0-baseline", "total_scenarios": len(results), "full_schema_bytes": full,
+        "measurement": "UTF-8 JSON tools/list schema bytes; not client context tokens or LLM task success",
+        "network": "in-process fixture transport only; no sockets or DNS",
         "scenarios": [{
-            "name": r.name,
-            "description": r.description,
-            "tool_calls": len(r.calls),
-            "calls": r.calls,
-            "duration_s": round(r.duration_s, 3),
+            "name": r.name, "description": r.description, "tool_calls": len(r.calls),
+            "calls": r.calls, "duration_s": round(r.duration_s, 3),
             "slice_schema_bytes": r.schema_bytes,
             "slice_vs_full_pct": round(100 * r.schema_bytes / max(full, 1), 1),
-            "notes": r.notes,
+            "fixture_requests": r.fixture_requests, "expected_errors": r.expected_errors,
+            "outcomes": r.outcomes, "notes": r.notes,
         } for r in results],
         "totals": {
             "tool_calls": sum(len(r.calls) for r in results),
+            "fixture_requests": sum(r.fixture_requests for r in results),
             "duration_s": round(sum(r.duration_s for r in results), 3),
-            "avg_slice_pct": round(
-                sum(r.schema_bytes for r in results) / len(results) / max(full, 1) * 100, 1),
+            "avg_slice_pct": round(sum(r.schema_bytes for r in results) / len(results) /
+                                   max(full, 1) * 100, 1),
         },
     }
-    return report
 
 
 def main() -> int:
     import sys
-    report = run_baselines()
-    json.dump(report, sys.stdout, indent=1)
+
+    json.dump(run_baselines(), sys.stdout, indent=1)
     return 0
 
 

@@ -52,7 +52,7 @@ def _clean(host: str, apex: str) -> str | None:
 
 async def _crtsh(client: HttpClient, domain: str) -> tuple[str, set[str], str | None]:
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
-    r = await client.fetch(url, timeout=25.0, follow_redirects=True)
+    r = await client.fetch(url, timeout=25.0, follow_redirects=True, suppress_auth=True)
     if r.error or r.status != 200:
         return "crtsh", set(), r.error or f"HTTP {r.status}"
     found: set[str] = set()
@@ -80,7 +80,7 @@ async def _crtsh(client: HttpClient, domain: str) -> tuple[str, set[str], str | 
 
 async def _hackertarget(client: HttpClient, domain: str) -> tuple[str, set[str], str | None]:
     url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
-    r = await client.fetch(url, timeout=20.0, follow_redirects=True)
+    r = await client.fetch(url, timeout=20.0, follow_redirects=True, suppress_auth=True)
     if r.error or r.status != 200:
         return "hackertarget", set(), r.error or f"HTTP {r.status}"
     text = r.text()
@@ -100,7 +100,7 @@ async def _hackertarget(client: HttpClient, domain: str) -> tuple[str, set[str],
 
 async def _anubis(client: HttpClient, domain: str) -> tuple[str, set[str], str | None]:
     url = f"https://jldc.me/anubis/subdomains/{domain}"
-    r = await client.fetch(url, timeout=20.0, follow_redirects=True)
+    r = await client.fetch(url, timeout=20.0, follow_redirects=True, suppress_auth=True)
     if r.error or r.status != 200:
         return "anubis", set(), r.error or f"HTTP {r.status}"
     found: set[str] = set()
@@ -119,7 +119,7 @@ async def _anubis(client: HttpClient, domain: str) -> tuple[str, set[str], str |
 
 async def _otx(client: HttpClient, domain: str) -> tuple[str, set[str], str | None]:
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
-    r = await client.fetch(url, timeout=20.0, follow_redirects=True)
+    r = await client.fetch(url, timeout=20.0, follow_redirects=True, suppress_auth=True)
     if r.error or r.status != 200:
         return "otx", set(), r.error or f"HTTP {r.status}"
     found: set[str] = set()

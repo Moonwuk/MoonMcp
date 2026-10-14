@@ -7,12 +7,14 @@ and HTTP client so every tool draws on the same rate limit and scope state.
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .audit import AuditLog, setup_logging
 from .auth import AuthContext
 from .config import Settings, load_settings
 from .findings import FindingsStore
+from .flags import FlagStore
 from .intel.oast import OastStore
 from .intel.oast_server import CallbackServer
 from .intercept import HistoryStore
@@ -43,6 +45,7 @@ class AppContext:
     telemetry: TelemetryCollector
     runs: RunStore
     oast_server: CallbackServer | None = None
+    flags: FlagStore = field(default_factory=FlagStore)
 
 
 def build_context(settings: Settings | None = None) -> AppContext:
@@ -55,7 +58,7 @@ def build_context(settings: Settings | None = None) -> AppContext:
         scope.exclude(entry)
     governor = Governor(rate=settings.rate_limit, max_concurrency=settings.max_concurrency)
     auth = AuthContext()
-    programs = ProgramStore.from_env()
+    programs = ProgramStore(state_dir=settings.state_dir or None)
     # If a program was persisted as active, apply its scope so a restart resumes
     # the same engagement rather than an empty scope.
     active = programs.active
@@ -89,6 +92,11 @@ def build_context(settings: Settings | None = None) -> AppContext:
     from .web.proxy_rules import get_engine as _get_proxy_engine
     proxy_engine = _get_proxy_engine()
 
+    telemetry = TelemetryCollector()
+    state_dir = Path(settings.state_dir) if settings.state_dir else None
+    if state_dir is not None:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    memory = MemoryStore(str(state_dir / "memory.db") if state_dir is not None else None)
     http = HttpClient(
         governor,
         user_agent=settings.user_agent,
@@ -97,13 +105,24 @@ def build_context(settings: Settings | None = None) -> AppContext:
         auth_provider=_request_headers,
         opsec=opsec_engine,
         proxy_rules=proxy_engine,
+        telemetry=telemetry,
     )
-    return AppContext(settings=settings, scope=scope, governor=governor, http=http,
-                      findings=FindingsStore(), auth=auth, oast=OastStore.from_env(),
+    ctx = AppContext(settings=settings, scope=scope, governor=governor, http=http,
+                      findings=FindingsStore.from_env(settings.state_dir or None), auth=auth, oast=OastStore.from_env(),
                       snapshots=SnapshotStore(state_dir=settings.state_dir or None),
                       audit=AuditLog.from_env(), programs=programs, history=HistoryStore(),
-                      memory=MemoryStore.from_env(), telemetry=TelemetryCollector(),
-                      runs=RunStore.from_env(settings.state_dir or None))
+                      memory=memory, telemetry=telemetry,
+                      runs=RunStore.from_env(settings.state_dir or None),
+                      flags=FlagStore(memory.db_path))
+    from .execution import current_execution
+
+    def _finding_run() -> str | None:
+        execution = current_execution()
+        return execution.run_id if execution is not None and execution.ctx is ctx else None
+
+    ctx.findings.run_id_provider = _finding_run
+    ctx.findings.on_record = lambda finding: telemetry.record_finding(finding.severity, finding.type)
+    return ctx
 
 
 def to_dict(obj: object, *, drop_none: bool = True) -> object:

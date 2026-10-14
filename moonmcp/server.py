@@ -30,8 +30,6 @@ import statistics
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-
 from . import __version__
 from . import catalog as catalogmod
 from . import confirm as confirmmod
@@ -64,6 +62,7 @@ from .net import dns as dnsmod
 from .net import jarm as jarmmod
 from .net import ports as portsmod
 from .net import tls as tlsmod
+from .outcomes import MoonMCPFastMCP as FastMCP
 from .programs import Program, parse_header
 from .recon import binary as binarymod
 from .recon import buckets as bucketsmod
@@ -148,8 +147,20 @@ CONFIRM -> RECORD.
 - RECALL: `memory_brief(target)` — the memory hub is persistent and cross-agent,
   so build on prior work instead of re-deriving it.
 - ORIENT: `server_status` (config, active program, installed CLIs, intrusive
-  on/off) and `tool_catalog` (a grouped map of every tool with its scope_gated /
-  intrusive flags) — call it to pick the right tool instead of guessing.
+  on/off), then `tool_search` for the next question and `tool_describe` for its
+  current schema and request accounting. Use `tool_catalog` for a family map.
+- RESUME: `run_list` -> `run_brief(run_id, project)` and
+  `analysis_brief(project, target)` before repeating prior work.
+- EXECUTE: `run_start` -> `run_claim` -> `run_execute` for supported local/HTTP
+  actions. Keep the claim token and idempotency key; heartbeat a live lease.
+  Direct typed calls do not join the run budget. Compact mode exposes control
+  tools directly; discover and execute the remaining allowed tools via the run.
+  Unknown outcomes require evidence-backed reconciliation before a new action.
+- CONNECT: `flag_record` retains an interesting observation with evidence,
+  source_group, role and time. Inspect related clues; `flag_link` and
+  `hypothesis_record` retain supporting AND contradicting evidence, alternatives
+  and a test plan. `hypothesis_update` records the check outcome. Failed checks
+  are inconclusive; correlated flags never automatically become findings.
 - AUTHORISE: `scope_add` (or a `program_*` profile that also attaches the
   program's identifying header); `auth_set` for authenticated testing.
 - PASSIVE (no packets to the target): `web_search` + `web_read`, `search_dorks`,
@@ -202,7 +213,7 @@ def safe_tool(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[An
         except ToolBlocked as exc:
             return {"error": "disabled", "detail": str(exc)}
         except ValueError as exc:
-            return {"error": "invalid_input", "detail": str(exc)}
+            return {"error": getattr(exc, "code", "invalid_input"), "detail": str(exc)}
         except Exception as exc:  # never surface an opaque crash to the MCP client
             return {"error": "internal_error", "detail": f"{type(exc).__name__}: {exc}"}
     return wrapper
@@ -674,6 +685,7 @@ async def server_status() -> dict:
     ctx = get_context()
     s = ctx.settings
     tools = cli.detect_tools()
+    from . import toolspec
     return {
         "name": TOOL_NAME,
         "version": __version__,
@@ -682,6 +694,9 @@ async def server_status() -> dict:
         "scope_enforced": s.enforce_scope,
         "tool_profile": os.environ.get("MOONMCP_PROFILE") or "full",
         "tools_exposed": len(mcp._tool_manager.list_tools()),
+        "compact_mode": mcp.advertised_tools is not None,
+        "tools_advertised": len(await mcp.list_tools()),
+        "capabilities": toolspec.capabilities(s),
         "active_program": ctx.programs.active.summary() if ctx.programs.active else None,
         "auth_context": ctx.auth.redacted(),
         "block_private_addresses": s.block_private,
@@ -3548,17 +3563,28 @@ async def desync_modern_probe(target: str) -> dict:
 @mcp.tool()
 @safe_tool
 async def add_finding(target: str, severity: str, title: str, detail: str = "",
-                      evidence: str = "", type: str = "manual") -> dict:
-    """Record a finding in the session findings store (severity: critical/high/
+                      evidence: str = "", type: str = "manual", run_id: str = "") -> dict:
+    """Record a finding in the persistent findings store (severity: critical/high/
     medium/low/info). Findings are also readable via the `findings://current`
-    resource and summarised by `report`. In-memory for the session only.
+    resource and summarised by `report`. Survives restarts when state storage is configured.
+    Managed execution associates the current run automatically.
     """
 
     from datetime import datetime, timezone
 
     ctx = get_context()
+    from .execution import current_execution, target_in_run
+
+    execution = current_execution()
+    if execution is not None and execution.ctx is ctx:
+        if run_id and run_id != execution.run_id:
+            raise ValueError("finding run must match the executing run")
+        run_id = execution.run_id
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    tgt = target.strip().lower()
+    tgt = target.strip() if "://" in target else target.strip().lower()
+    if run_id:
+        if not target_in_run(target, ctx.runs.get(run_id)["target"]):
+            raise ValueError("finding target must match its run target")
     # Audit the recording of a finding — findings carry evidence/PII, and the
     # evidentiary trail must show what was recorded, when, and at what severity.
     # (Audit 2026-07-27, SV5: add_finding was the one evidence-bearing op with
@@ -3567,7 +3593,7 @@ async def add_finding(target: str, severity: str, title: str, detail: str = "",
                      decision="record", severity=severity, title=title[:120])
     f = ctx.findings.add(target=tgt, severity=severity, title=title,
                          detail=detail, evidence=evidence, type=type, source="manual",
-                         created_at=ts)
+                         created_at=ts, run_id=run_id or None)
     # Mirror into the shared persistent memory hub as a CURATED item — a finding
     # is an asserted conclusion, not raw scraped content.
     mid = ctx.memory.add(kind="finding", title=title, body=(detail or evidence or ""),
@@ -3663,12 +3689,13 @@ async def metrics(known_positives: int | None = None) -> dict:
 
 @mcp.tool()
 @safe_tool
-async def list_findings(target: str | None = None, severity: str | None = None) -> dict:
+async def list_findings(target: str | None = None, severity: str | None = None,
+                        run_id: str | None = None) -> dict:
     """List recorded findings (optionally filtered by target or severity),
     severity-ranked, with a summary count. Reads the session findings store.
     """
 
-    return get_context().findings.as_dict(target=target, severity=severity)
+    return get_context().findings.as_dict(target=target, severity=severity, run_id=run_id)
 
 
 @mcp.tool()
@@ -3739,10 +3766,13 @@ async def memory_add(kind: str, title: str, body: str = "", target: str | None =
     """
 
     mid = get_context().memory.add(
-        kind=kind, title=title, body=body, target=(target.strip().lower() if target else None),
+        kind=kind, title=title, body=body, target=(target.strip() if target else None),
         severity=severity, trust=trust, provenance="manual", tags=tags, source="memory_add",
     )
-    return {"id": mid, "kind": kind, "trust": trust}
+    stored = get_context().memory.get(mid)
+    return {"id": mid, "kind": kind, "trust": stored["trust"] if stored else trust,
+            "revision": stored.get("revision") if stored else None,
+            "pending_revisions": stored.get("pending_revisions", 0) if stored else 0}
 
 
 @mcp.tool()
@@ -3763,10 +3793,12 @@ async def memory_search(query: str = "", kind: str | None = None, trust: str | N
 
 @mcp.tool()
 @safe_tool
-async def memory_get(item_id: int) -> dict:
-    """Fetch one memory item by id (from `memory_search` / `memory_add`)."""
+async def memory_get(item_id: int, include_history: bool = False) -> dict:
+    """Fetch a memory item, optionally including vetted and pending content revisions."""
 
     item = get_context().memory.get(item_id)
+    if item and include_history:
+        item["history"] = get_context().memory.revisions(item_id)
     return item if item else {"error": "not_found", "detail": f"no memory item #{item_id}"}
 
 
@@ -3830,7 +3862,7 @@ async def memory_graph(target: str | None = None, kind: str | None = None,
 
 @mcp.tool()
 @safe_tool
-async def memory_brief(target: str) -> dict:
+async def memory_brief(target: str, project: str = "") -> dict:
     """**What do we know about TARGET?** — a one-shot rollup for orienting before (or
     resuming) work on an asset: graph entities grouped by kind, confirmed findings,
     open leads, applicable cross-target **lessons**, and counts. Call this FIRST when
@@ -3838,7 +3870,11 @@ async def memory_brief(target: str) -> dict:
     is a host (or URL — the host is extracted). Offline; reads the local store.
     """
 
-    return get_context().memory.brief(_host_key(target))
+    ctx = get_context()
+    out = ctx.memory.brief(_host_key(target))
+    if project:
+        out["analysis"] = ctx.flags.brief(project, target=target)
+    return out
 
 
 @mcp.tool()
@@ -4493,10 +4529,12 @@ async def run_task_add(run_id: str, title: str, role: str = "coordinator",
 
 @mcp.tool()
 @safe_tool
-async def run_task_update(task_id: int, state: str, result: str = "") -> dict:
+async def run_task_update(task_id: int, state: str, result: str = "",
+                          owner: str | None = None, claim_token: str | None = None) -> dict:
     """Move a run task through its lifecycle and attach its result summary."""
 
-    return {"task": get_context().runs.update_task(task_id, state, result=result)}
+    return {"task": get_context().runs.update_task(task_id, state, result=result,
+                                                   owner=owner, claim_token=claim_token)}
 
 
 @mcp.tool()
@@ -7498,7 +7536,13 @@ async def tool_search(query: str, phase: str = "", available_only: bool = True,
                              limit=limit)
 
 
+from . import agent_tools as _agent_tools  # noqa: E402
+
+globals().update(_agent_tools.register(mcp, safe_tool, active_tool, get_context))
 _apply_tool_profile()
+if (os.environ.get("MOONMCP_COMPACT", "").strip().lower() in {"1", "true", "yes", "on"}
+        and {"run_execute", "run_start"} <= set(mcp._tool_manager._tools)):
+    mcp.advertised_tools = _agent_tools.COMPACT_TOOLS & set(mcp._tool_manager._tools)
 
 
 def run() -> None:

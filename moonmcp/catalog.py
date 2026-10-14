@@ -22,7 +22,7 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "Authorise and identify before touching anything: scope, per-program "
         "header, engagement auth, out-of-band callbacks, audit trail.",
         [
-            "server_status", "tool_catalog", "tool_search",
+            "server_status", "tool_catalog", "tool_search", "tool_describe",
             "scope_list", "scope_add", "scope_exclude", "scope_remove",
             "program_add", "program_use", "program_list", "program_remove",
             "auth_set", "auth_clear",
@@ -93,6 +93,8 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
             "run_task_add", "run_task_update", "run_next",
             "run_coverage_update", "run_usage", "run_artifact_add", "run_artifacts",
             "run_finish",
+            "run_brief", "run_execute", "run_claim", "run_heartbeat", "run_task_retry",
+            "run_artifact_read", "run_recover", "run_reconcile",
             "probe_batch", "recon_target", "report",
         ],
     )),
@@ -146,7 +148,9 @@ FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
         "typed knowledge graph (entities + relations) structures findings, and "
         "cross-target lessons carry tradecraft forward between sessions.",
         ["memory_add", "memory_search", "memory_get", "memory_stats",
-         "memory_link", "memory_graph", "memory_brief", "memory_lesson"],
+         "memory_link", "memory_graph", "memory_brief", "memory_lesson",
+         "flag_record", "flag_get", "flag_search", "flag_update", "flag_link",
+         "hypothesis_record", "hypothesis_get", "hypothesis_update", "analysis_brief"],
     )),
     ("external", (
         "External CLIs",
@@ -239,7 +243,7 @@ PROFILES: dict[str, set[str] | None] = {
 }
 
 # Always reachable so an agent can orient itself and check scope, whatever the profile.
-_ALWAYS_ON = {"server_status", "tool_catalog", "tool_search", "scope_list"}
+_ALWAYS_ON = {"server_status", "tool_catalog", "tool_search", "tool_describe", "scope_list"}
 
 
 def profile_names() -> list[str]:

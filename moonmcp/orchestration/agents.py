@@ -21,12 +21,14 @@ Usage::
 
 from __future__ import annotations
 
+import inspect
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..memory import MemoryStore
+from ..outcomes import failure
 from ..strix_adapted import AgentGraph
 
 if TYPE_CHECKING:
@@ -38,7 +40,7 @@ logger = logging.getLogger(__name__)
 #  Types
 # ──────────────────────────────────────────────────────────────────────
 
-AgentStatus = str  # "running" | "waiting" | "completed" | "crashed"
+AgentStatus = str  # "running" | "waiting" | "completed" | "failed" | "blocked" | "crashed"
 AgentRole = str    # "recon" | "exploit" | "post-ex" | "orchestrator"
 
 MAX_SPAWN_DEPTH = 1
@@ -61,18 +63,23 @@ class AgentResult(Protocol):
     success: bool
     findings: list[dict[str, Any]]
     summary: str
+    state: str
+    errors: list[dict[str, Any]]
 
 
 class _AgentResult:
     """Concrete default implementation of ``AgentResult``."""
 
-    __slots__ = ("success", "findings", "summary")
+    __slots__ = ("success", "findings", "summary", "state", "errors")
 
     def __init__(self, success: bool = True, findings: list[dict] | None = None,
-                 summary: str = "") -> None:
+                 summary: str = "", *, state: str | None = None,
+                 errors: list[dict[str, Any]] | None = None) -> None:
         self.success = success
         self.findings = findings or []
         self.summary = summary
+        self.state = state or ("completed" if success else "failed")
+        self.errors = errors or []
 
     def __repr__(self) -> str:
         return (f"_AgentResult(success={self.success}, "
@@ -162,13 +169,16 @@ class BaseAgent:
         body: str = "",
         *,
         severity: str | None = None,
-        trust: str = "curated",
+        trust: str = "untrusted",
+        provenance: str = "inferred",
         tags: str = "",
     ) -> int:
         """Write a finding/observation to the shared memory hub.
 
         Returns the memory item id. Other agents can retrieve this via
         ``agent.search(title)`` or ``agent.recall()``.
+        Agent-authored content defaults to untrusted/inferred; curated trust
+        requires an explicit review by the caller, never just an agent role.
         """
         kind = _ROLE_KIND.get(self.role, "note")
         item_id = self.memory.add(
@@ -179,6 +189,7 @@ class BaseAgent:
             severity=severity,
             source=self.agent_id,
             trust=trust,
+            provenance=provenance,
             tags=tags,
         )
         self._findings_cache.append({
@@ -208,8 +219,8 @@ class BaseAgent:
         )
 
     def recall(self, *, kind: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        """Retrieve recent items from the memory hub (optionally filtered by kind)."""
-        return self.memory.recent(limit=limit, kind=kind)
+        """Retrieve recent items for this target (optionally filtered by kind)."""
+        return self.memory.search("", target=self.target, limit=limit, kind=kind)
 
     @property
     def findings(self) -> list[dict[str, Any]]:
@@ -217,6 +228,62 @@ class BaseAgent:
         return list(self._findings_cache)
 
     # ── lifecycle ───────────────────────────────────────────────────────
+
+    def _run_callbacks(self, callbacks: list[Callable]) -> _AgentResult:
+        """Run synchronous actions in order, stopping on error or budget stop.
+
+        ``None`` remains a valid result for callbacks that update this agent.
+        Top-level execution errors are failures; negative detector verdicts are
+        valid results. No callback is retried automatically.
+        """
+        if self.graph.budget_stopped:
+            return _AgentResult(success=False, state="blocked", errors=[{
+                "error": "budget_exhausted", "skipped_actions": len(callbacks),
+                "retryable": False,
+            }])
+        for index, callback in enumerate(callbacks):
+            error: dict[str, Any] | None = None
+            state = "failed" if index == 0 else "partial"
+            stopped_before_action = self.graph.budget_stopped
+            if stopped_before_action:
+                error = {"error": "budget_exhausted"}
+                state = "blocked" if index == 0 else "partial"
+            else:
+                try:
+                    value = callback(self)
+                    if inspect.isawaitable(value):
+                        # This API is synchronous. Do not silently discard an
+                        # async tool call and report that it executed.
+                        if inspect.iscoroutine(value):
+                            value.close()
+                        elif hasattr(value, "cancel"):
+                            value.cancel()
+                        error = {"error": "async_callback_unsupported",
+                                 "recovery": "Await the tool in an asynchronous driver; "
+                                             "run() accepts synchronous callbacks."}
+                    else:
+                        failed = failure(value)
+                        if failed is not None:
+                            error = {"error": failed.code, "recovery": failed.recovery}
+                        elif (value is False or getattr(value, "success", None) is False
+                              or isinstance(value, dict) and (
+                                  value.get("success") is False or value.get("ok") is False
+                                  or value.get("state") in {"failed", "partial", "blocked",
+                                                            "cancelled", "unknown"})):
+                            error = {"error": "action_failed"}
+                        returned_state = (value.get("state") if isinstance(value, dict)
+                                          else getattr(value, "state", None))
+                        if returned_state == "unknown":
+                            state = "unknown"
+                except Exception as exc:
+                    logger.exception("Action %d failed for %s", index, self.agent_id)
+                    error = {"error": "callback_exception", "exception_type": type(exc).__name__}
+            if error is not None:
+                skipped = len(callbacks) - index - (0 if stopped_before_action else 1)
+                error.update(action_index=index, skipped_actions=skipped,
+                             retryable=False)
+                return _AgentResult(success=False, state=state, errors=[error])
+        return _AgentResult()
 
     def run(self) -> _AgentResult:
         """Execute the agent's task. Override in subclasses."""
@@ -284,19 +351,17 @@ class ReconAgent(BaseAgent):
 
         # If action callbacks were injected via metadata, run them.
         actions: list[Callable] = self.metadata.get("actions", [])
-        for action in actions:
-            try:
-                action(self)
-            except Exception:
-                logger.exception("Recon action failed for %s", self.agent_id)
+        outcome = self._run_callbacks(actions)
 
         summary = (f"Recon on {self.target}: "
                   f"{len(self.subdomains)} subdomains, "
                   f"{len(self.technologies)} technologies, "
-                  f"{len(self.endpoints)} endpoints")
+                  f"{len(self.endpoints)} endpoints; state={outcome.state}")
 
         return _AgentResult(
-            success=True,
+            success=outcome.success,
+            state=outcome.state,
+            errors=outcome.errors,
             findings=list(self._findings_cache),
             summary=summary,
         )
@@ -370,18 +435,16 @@ class ExploitAgent(BaseAgent):
 
         # Run injected probe callbacks.
         probes: list[Callable] = self.metadata.get("probes", [])
-        for probe in probes:
-            try:
-                probe(self)
-            except Exception:
-                logger.exception("Exploit probe failed for %s", self.agent_id)
+        outcome = self._run_callbacks(probes)
 
         summary = (f"Exploit on {self.target}: "
                   f"{len(self.probes_run)} probes run, "
-                  f"{len(self.confirmed)} confirmed")
+                  f"{len(self.confirmed)} confirmed; state={outcome.state}")
 
         return _AgentResult(
-            success=True,
+            success=outcome.success,
+            state=outcome.state,
+            errors=outcome.errors,
             findings=list(self._findings_cache),
             summary=summary,
         )
@@ -450,26 +513,27 @@ class PostExAgent(BaseAgent):
 
         # Run injected post-ex callbacks.
         actions: list[Callable] = self.metadata.get("actions", [])
-        for action in actions:
-            try:
-                action(self)
-            except Exception:
-                logger.exception("Post-ex action failed for %s", self.agent_id)
+        outcome = self._run_callbacks(actions)
 
         # Build a simple report from findings.
         self.report = self._build_report(all_findings)
+        if not outcome.success:
+            self.report += (f"\n\n## Incomplete execution\n\nState: {outcome.state}. "
+                            "Later actions were skipped; reconcile the reported errors before retrying.")
 
         self.share(
             f"Report: {self.target}",
             body=self.report,
-            trust="curated",
             tags="post-ex,report",
         )
 
         return _AgentResult(
-            success=True,
+            success=outcome.success,
+            state=outcome.state,
+            errors=outcome.errors,
             findings=list(self._findings_cache),
-            summary=f"Post-ex on {self.target}: {len(self.chains)} chains, report generated",
+            summary=f"Post-ex on {self.target}: {len(self.chains)} chains, "
+                    f"report generated; state={outcome.state}",
         )
 
     def _build_report(self, findings: list[dict[str, Any]]) -> str:
@@ -479,7 +543,7 @@ class PostExAgent(BaseAgent):
             "",
             f"Generated: {datetime.now(timezone.utc).isoformat()}",
             f"Agent: {self.agent_id}",
-            f"Total findings: {len(findings)}",
+            f"Total memory items: {len(findings)}",
             "",
         ]
 
@@ -493,7 +557,8 @@ class PostExAgent(BaseAgent):
             lines.append("")
             for item in by_kind[kind]:
                 sev = item.get("severity") or "—"
-                lines.append(f"- **[{sev}]** {item.get('title', 'untitled')}")
+                lines.append(f"- **[{sev}]** {item.get('title', 'untitled')} "
+                             f"(trust: {item.get('trust', 'untrusted')})")
             lines.append("")
 
         if self.chains:
@@ -594,22 +659,42 @@ class OrchestratorAgent(BaseAgent):
         return child
 
     def run_all(self) -> list[_AgentResult]:
-        """Run all child agents sequentially and return their results."""
+        """Run the sequential workflow, preserving failed and skipped outcomes.
+
+        A failed child blocks subsequent phases: they must not assume their
+        prerequisite completed. Every child gets a result, including skipped work.
+        """
         results: list[_AgentResult] = []
+        blocked_reason: str | None = None
         for child in self.children:
             if self.graph.budget_stopped:
-                logger.warning("Budget stop active — skipping %s", child.agent_id)
-                break
+                blocked_reason = "budget_exhausted"
+            if blocked_reason is not None:
+                child.set_status("blocked")
+                results.append(_AgentResult(
+                    success=False, state="blocked",
+                    summary=f"{child.role} agent skipped: {blocked_reason}",
+                    errors=[{"error": blocked_reason, "agent_id": child.agent_id,
+                             "retryable": False}],
+                ))
+                continue
             child.set_status("running")
             try:
                 result = child.run()
-                child.complete()
+                if result.success:
+                    child.complete()
+                else:
+                    child.set_status(getattr(result, "state", "failed"))
+                    blocked_reason = "prerequisite_failed"
                 results.append(result)
             except Exception:
                 logger.exception("Child agent %s crashed", child.agent_id)
                 child.crash()
+                blocked_reason = "prerequisite_failed"
                 results.append(_AgentResult(
-                    success=False, summary=f"{child.role} agent crashed"))
+                    success=False, summary=f"{child.role} agent crashed",
+                    errors=[{"error": "child_crashed", "agent_id": child.agent_id,
+                             "retryable": False}]))
         return results
 
     def run(self) -> _AgentResult:
@@ -623,16 +708,28 @@ class OrchestratorAgent(BaseAgent):
         )
 
         # If children were pre-spawned, run them.
+        success = True
+        state = "ready"
+        errors: list[dict[str, Any]] = []
         if self.children:
             results = self.run_all()
             completed = sum(1 for r in results if r.success)
+            success = completed == len(self.children)
+            state = "completed" if success else "partial" if completed else "failed"
+            if results and all(getattr(r, "state", "") == "blocked" for r in results):
+                state = "blocked"
+            elif any(getattr(r, "state", "") == "unknown" for r in results):
+                state = "unknown"
+            elif any(getattr(r, "state", "") == "partial" for r in results):
+                state = "partial"
+            errors = [error for result in results for error in getattr(result, "errors", [])]
             summary = (f"Orchestration of {self.target}: "
-                      f"{completed}/{len(results)} agents completed")
+                      f"{completed}/{len(self.children)} agents completed; state={state}")
         else:
             summary = (f"Orchestrator {self.agent_id} ready on {self.target} "
                       f"(no children spawned yet)")
 
-        return _AgentResult(success=True, summary=summary)
+        return _AgentResult(success=success, summary=summary, state=state, errors=errors)
 
     def list_children(self) -> list[dict[str, Any]]:
         """Return a summary of all spawned child agents."""

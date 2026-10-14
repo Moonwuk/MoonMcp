@@ -101,8 +101,9 @@ def _cmd_call(tool: str, json_args: str | None, kv_args: list[str]) -> int:
         print(json.dumps({"error": "call_failed", "detail": f"{type(exc).__name__}: {exc}"}))
         return 1
     print(json.dumps(result, default=str, indent=2))
-    # A structured error from the tool itself is still exit 0 (the call ran).
-    return 0
+    from .outcomes import failure
+
+    return 1 if failure(result) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
