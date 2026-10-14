@@ -1,0 +1,133 @@
+{
+  "tools": 213,
+  "schema_bytes_utf8": 178070,
+  "schema_measurement": "JSON array of name/description/inputSchema, ensure_ascii=False",
+  "profile_counts": {
+    "full": 213,
+    "strix": 137,
+    "passive": 87,
+    "knowledge": 34,
+    "recon": 122
+  },
+  "queries": {
+    "scope": [
+      "access_control_check",
+      "analyze_binary",
+      "audit_log",
+      "behavior_probe",
+      "browser_eval"
+    ],
+    "check scope": [
+      "takeover_check",
+      "vcs_exposure",
+      "access_control_check",
+      "analyze_binary",
+      "audit_log"
+    ],
+    "sql injection": [
+      "orm_leak_probe",
+      "sast_scan",
+      "second_order_sqli_probe",
+      "sqli_probe",
+      "cmdi_probe"
+    ],
+    "sqli": [
+      "oast_generate",
+      "oast_payload_gen",
+      "vuln_info",
+      "waf_efficacy"
+    ],
+    "run budget": [
+      "agent_tree",
+      "browser_eval",
+      "browser_interact",
+      "passive_scan",
+      "program_add"
+    ],
+    "browser screenshot": [
+      "screenshot",
+      "browser_eval",
+      "browser_interact",
+      "browser_open",
+      "cspp_probe"
+    ],
+    "проверить авторизацию": [],
+    "身份验证": [],
+    "인증 검사": [],
+    "verificar autorização": [],
+    "authentication check": [
+      "auth_clear",
+      "auth_set",
+      "dependency_confusion",
+      "response_leak_probe",
+      "takeover_check"
+    ],
+    "missing playwright": [
+      "browser_open",
+      "email_security",
+      "jwt_analyze",
+      "screenshot"
+    ]
+  },
+  "identifier_tokenization_experiment": {
+    "scope": [
+      "scope_add",
+      "scope_exclude",
+      "scope_list",
+      "scope_remove",
+      "access_control_check"
+    ],
+    "check scope": [
+      "access_control_check",
+      "graphql_check",
+      "takeover_check",
+      "check_subdomain_takeover",
+      "scope_add"
+    ],
+    "sql injection": [
+      "injection_info",
+      "injection_search",
+      "match_injection_signatures",
+      "orm_leak_probe",
+      "sast_scan"
+    ],
+    "sqli": [
+      "second_order_sqli_probe",
+      "sqli_probe",
+      "oast_generate",
+      "oast_payload_gen",
+      "orm_leak_probe"
+    ],
+    "run budget": [
+      "run_artifact_add",
+      "run_artifacts",
+      "run_control",
+      "run_coverage_update",
+      "run_finish"
+    ],
+    "browser screenshot": [
+      "browser_eval",
+      "browser_interact",
+      "browser_open",
+      "screenshot",
+      "cspp_probe"
+    ],
+    "проверить авторизацию": [],
+    "身份验证": [],
+    "인증 검사": [],
+    "verificar autorização": [],
+    "authentication check": [
+      "access_control_check",
+      "check_subdomain_takeover",
+      "graphql_check",
+      "takeover_check",
+      "version_vuln_check"
+    ],
+    "missing playwright": [
+      "browser_open",
+      "email_security",
+      "jwt_analyze",
+      "screenshot"
+    ]
+  }
+}

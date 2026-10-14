@@ -1,0 +1,67 @@
+{
+  "sdk_version": "1.30.0",
+  "memory": {
+    "host_collision": [
+      {
+        "title": "unrelated host",
+        "severity": null,
+        "trust": "untrusted"
+      }
+    ],
+    "older_target_brief": {
+      "target": "example.com",
+      "entities": {},
+      "findings": [],
+      "leads": [],
+      "lessons": [],
+      "relation_count": 0,
+      "counts": {
+        "entities": 0,
+        "findings": 0,
+        "leads": 0
+      }
+    },
+    "trust_after_untrusted_overwrite": {
+      "id": 208,
+      "kind": "lesson",
+      "target": "example.com",
+      "title": "same key",
+      "body": "unreviewed replacement",
+      "severity": null,
+      "source": "",
+      "trust": "curated",
+      "provenance": "manual",
+      "tags": "",
+      "session": "",
+      "created_at": ""
+    }
+  },
+  "baseline": {
+    "earlier_run_task": {
+      "id": 1,
+      "before": "pending",
+      "after": "running"
+    },
+    "budget_scenario_notes": [
+      "UNEXPECTED: budget not enforced"
+    ],
+    "actual_budget_refusal": {
+      "error": "invalid_input",
+      "detail": "budget exceeded: requests"
+    }
+  },
+  "protocol": {
+    "tools_count_first_page": 213,
+    "next_cursor": null,
+    "output_schema_count": 0,
+    "error_result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"error\": \"invalid_input\",\n  \"detail\": \"unknown run: audit-missing-run\"\n}"
+        }
+      ],
+      "isError": false
+    }
+  }
+}
