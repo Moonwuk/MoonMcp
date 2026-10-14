@@ -81,3 +81,12 @@ Generic Git worktree, code-review and software-branch skills are intentionally
 not copied into the MoonMCP operator pack: they improve development of MoonMCP,
 not operation of a security assessment, and are better installed directly from
 Superpowers in a coding harness.
+
+## Beyond the evidence-driven foundation
+
+The [advanced discovery roadmap](ADVANCED_DISCOVERY_ROADMAP.md) proposes the next
+research layer: policy consistency across application representations, bounded
+state exploration, optional source/trace guidance, root-cause variants and
+validated reusable methods. Its entry gates depend on the evidence-driven
+discovery foundation; neither proposal marks those capabilities as implemented.
+The advanced plan is independently reviewable and does not replace these stages.

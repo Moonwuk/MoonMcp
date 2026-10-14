@@ -143,6 +143,7 @@ The repository contains detailed reference material for areas that would make th
 - [Server-side vulnerability reference](docs/SERVER_SIDE_VULNS.md)
 - [Root-cause reference](docs/ROOT_CAUSES.md)
 - [WAF reference](docs/WAF.md)
+- [Advanced vulnerability discovery roadmap (next-stage proposal)](docs/ADVANCED_DISCOVERY_ROADMAP.md)
 
 ## Development
 
