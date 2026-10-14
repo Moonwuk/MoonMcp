@@ -130,6 +130,7 @@ The repository contains detailed reference material for areas that would make th
 
 - [Research and design notes](docs/RESEARCH.md)
 - [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
+- [Evidence-driven vulnerability discovery roadmap (proposal)](docs/VULNERABILITY_DISCOVERY_ROADMAP.md)
 - [Agent navigation and optimization plan](docs/AGENT_NAVIGATION_PLAN.md)
 - [Agent workflow: tools, flags, hypotheses and recovery](docs/AGENT_WORKFLOW.md)
 - [Tool registry and registration architecture](docs/TOOL_ARCHITECTURE.md)
