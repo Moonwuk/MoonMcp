@@ -17,60 +17,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import catalog
+from . import catalog, sdk
 from .config import Settings
+from .registry import POLICIES, policy
 
 SPEC_VERSION = "1"
 
-# Intent phrases supplement real descriptions, never invent tools or privileges.
-ALIASES: dict[str, str] = {
-    "scope_list": "scope check view list authorized targets boundaries",
-    "scope_add": "scope add authorize target",
-    "scope_remove": "scope remove revoke target",
-    "scope_exclude": "scope exclude deny target",
-    "run_status": "run budget remaining usage status progress",
-    "run_start": "run create start budget limits assessment",
-    "run_usage": "run budget record spend usage accounting",
-    "run_control": "run pause resume cancel",
-    "run_next": "run next pending task",
-    "run_execute": "run execute tool task budget",
-    "run_brief": "run summary continuation resume context",
-    "sqli_probe": "sql injection sqli differential test",
-    "ssrf_probe": "blind ssrf callback server side request forgery",
-    "access_control_check": "authentication authorization access control idor role comparison",
-    "authz_probe": "authentication authorization access control idor bola role comparison",
-    "browser_open": "browser rendered page playwright chromium",
-    "screenshot": "browser screenshot image playwright chromium",
-    "tool_search": "discover search tools task capabilities",
-    "tool_describe": "tool schema arguments prerequisites describe",
-    "server_status": "capabilities dependencies configuration status",
-    "memory_brief": "memory recall target summary prior observations",
-}
-
-_LOCAL_READS = {
-    "tool_catalog", "tool_search", "tool_describe", "server_status", "scope_list",
-    "program_list", "audit_log", "external_tools", "scan_coverage", "telemetry",
-    "memory_search", "memory_get", "memory_stats", "memory_graph", "memory_brief",
-    "run_status", "run_list", "run_next", "run_artifacts", "run_brief",
-    "list_findings", "metrics", "http_history", "list_queue", "list_targets",
-    "get_target", "list_report_categories", "list_web_security_categories",
-    "search_knowledge_base", "search_bugbounty_reports", "search_datasets",
-    "match_signature_to_cve", "get_nuclei_template", "search_web_security_resources",
-    "check_subdomain_takeover", "cvss_score", "render_finding_md", "deduplicate_findings",
-    "flag_list", "flag_get", "flag_search", "flag_brief", "hypothesis_list", "hypothesis_get",
-}
-_BROWSER_TOOLS = {"browser_open", "browser_eval", "browser_interact", "screenshot", "cspp_probe"}
-_KB_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "search_knowledge_base": ("knowledge_base",),
-    "search_bugbounty_reports": ("knowledge_base", "hackerone_reports", "tops_by_bug_type"),
-    "search_datasets": ("knowledge_base", "airecon_datasets"),
-    "match_signature_to_cve": ("knowledge_base", "nuclei_index.sqlite3"),
-    "get_nuclei_template": ("knowledge_base", "nuclei_index.sqlite3"),
-    "search_web_security_resources": ("knowledge_base", "web_security_index", "index.json"),
-    "list_web_security_categories": ("knowledge_base", "web_security_index", "index.json"),
-    "check_subdomain_takeover": ("knowledge_base", "subdomain_takeover", "fingerprints.json"),
-    "get_target": ("targets.yaml",), "list_targets": ("targets.yaml",),
-}
+# Compatibility views, derived from the same tool policies as dispatch/catalog.
+ALIASES = {p.name: p.aliases for p in POLICIES.values() if p.aliases}
+_KB_REQUIREMENTS = {p.name: p.knowledge_paths for p in POLICIES.values() if p.knowledge_paths}
 
 
 def _digest(value: Any) -> str:
@@ -189,8 +144,9 @@ def registry(settings: Settings | None = None, *,
 
     cap = snapshot if snapshot is not None else capabilities(settings)
     out: dict[str, ToolSpec] = {}
-    for tool in mcp._tool_manager.list_tools():
+    for tool in sdk.list_registered(mcp):
         name = tool.name
+        declaration = policy(name)
         gated = bool(getattr(tool.fn, "__moonmcp_gated__", False))
         intrusive = bool(getattr(tool.fn, "__moonmcp_intrusive__", False))
         checks: list[dict[str, str]] = []
@@ -200,12 +156,12 @@ def registry(settings: Settings | None = None, *,
         if intrusive:
             checks.append({"kind": "intrusive", "status": "available" if cap["configuration"]["intrusive_allowed"] else "unavailable",
                            "reason": "intrusive_configuration_gate"})
-        if name in _BROWSER_TOOLS:
+        if declaration.browser:
             checks.append({"kind": "browser", **cap["browser"]})
-        if name in {"run_scanner", "vuln_scan"}:
+        if declaration.external_cli:
             checks.append({"kind": "external", "status": "available" if cap["configuration"]["external_tools_allowed"] else "unavailable",
                            "reason": "external_tools_configuration_gate"})
-            if name == "vuln_scan":
+            if declaration.external_cli == "nuclei":
                 checks.append({"kind": "cli", "status": "available" if cap["external_cli"].get("nuclei") else "unavailable",
                                "reason": "nuclei_executable_required"})
             else:
@@ -214,14 +170,14 @@ def registry(settings: Settings | None = None, *,
         if name in _KB_REQUIREMENTS:
             checks.append({"kind": "knowledge", "status": "available" if cap["knowledge"].get(name) else "unavailable",
                            "reason": "local_resource_required"})
-            if name in {"search_knowledge_base", "search_datasets", "search_bugbounty_reports", "get_target"}:
+            if declaration.selected_resource:
                 checks.append({"kind": "resource", "status": "unknown", "reason": "selected_resource_checked_at_invocation"})
         states = {check["status"] for check in checks}
         status = "unavailable" if "unavailable" in states else "unknown" if "unknown" in states else "available"
         description = " ".join((tool.description or "").split())
         schema = tool.parameters
-        output_schema = getattr(tool.fn_metadata, "output_schema", None)
-        local_read = name in _LOCAL_READS or catalog.TOOL_FAMILY.get(name) == "knowledge" and name.endswith(("_info", "_search", "_tools"))
+        output_schema = sdk.output_schema(tool)
+        local_read = declaration.read_only
         out[name] = ToolSpec(
             name=name, version=_digest([SPEC_VERSION, name, description, schema, output_schema,
                                        gated, intrusive, local_read, ALIASES.get(name, ""),

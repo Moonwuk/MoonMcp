@@ -6,18 +6,10 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from . import toolspec
+from . import sdk, toolspec
 from .execution import current_execution, execute_tool, request_accounting, target_in_run
 from .flags import EvidenceRef
-
-COMPACT_TOOLS = {
-    "server_status", "scope_list", "tool_search", "tool_describe",
-    "run_list", "run_start", "run_brief", "run_execute", "run_artifact_read",
-    "run_control", "run_claim", "run_heartbeat", "run_task_update", "run_task_retry",
-    "run_coverage_update", "run_finish",
-    "run_recover", "run_reconcile", "run_artifact_add", "run_task_add",
-    "scope_add", "scope_exclude", "scope_remove", "auth_set", "auth_clear", "program_use",
-}
+from .registry import COMPACT_TOOLS as COMPACT_TOOLS
 
 
 def register(mcp: Any, safe_tool: Callable, active_tool: Callable, get_context: Callable) -> dict:
@@ -216,7 +208,7 @@ def register(mcp: Any, safe_tool: Callable, active_tool: Callable, get_context: 
         Summary mode keeps bounded output and complete artifact references.
         """
         ctx = get_context()
-        registry = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
+        registry = {tool.name: tool for tool in sdk.list_registered(mcp)}
         availability = {tool_name: toolspec.tool_availability(tool_name, ctx)} if tool_name in registry else {}
         return await execute_tool(ctx, registry, run_id, tool_name, arguments, task_id=task_id,
                                   idempotency_key=idempotency_key, owner=owner, claim_token=claim_token,

@@ -23,6 +23,7 @@ from typing import Any
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
+from . import sdk
 from .outcomes import failure
 
 
@@ -174,7 +175,7 @@ class Harness:
         self.result.calls.append(name)
         async def invoke():
             # Same schema validation and profile-filtered lookup as the SDK.
-            return await mcp._tool_manager.call_tool(name, kwargs, convert_result=False)
+            return await sdk.call_registered(mcp, name, kwargs)
         result = asyncio.run(invoke())
         error = failure(result)
         if expect_error is not None:
