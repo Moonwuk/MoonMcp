@@ -136,6 +136,7 @@ The repository contains detailed reference material for areas that would make th
 - [Execution results and errors: versioned contract](docs/TOOL_OUTCOMES.md)
 - [Research into comparable flag and hypothesis systems](docs/FLAG_SYSTEM_RESEARCH.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
+- [Experimental vulnerability discovery roadmap (third-stage proposal)](docs/EXPERIMENTAL_DISCOVERY_ROADMAP.md)
 - [System prompts](docs/SYSTEM_PROMPTS.md)
 - [Injection reference](docs/INJECTIONS.md)
 - [Security techniques](docs/TECHNIQUES.md)
