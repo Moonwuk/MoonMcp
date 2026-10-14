@@ -23,53 +23,17 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from . import __version__
+from . import __version__, sdk
 from .memory import normalize_target
 from .outcomes import failure
 
-# Only bundled, immutable reference data. No memory, findings, files, registry,
-# auth-dependent responses, network tools or unknown tools are cacheable.
-PURE_REFERENCE_TOOLS = frozenset({
-    "injection_info", "injection_search", "technique_info", "technique_search",
-    "privesc_info", "privesc_search", "privesc_tools", "vuln_info", "vuln_search",
-    "vuln_tools", "rootcause_info", "playbook_info", "waf_info",
-})
+# Derived views preserve existing import contracts; policies live in registry.py.
+from .registry import POLICIES, policy, request_accounting
 
-# Deliberately reviewed allowlists, not a default claim that an arbitrary tool's
-# network use is measurable. DNS resolution for the existing scope/connect guard
-# is not an HTTP request; raw protocol/browser/CLI traffic remains unsupported.
-METERED_HTTP_TOOLS = frozenset({
-    "http_probe", "http_repeater", "probe_batch", "passive_scan", "well_known",
-    "analyze_headers", "crawl", "analyze_js", "trace_redirects", "content_discovery",
-    "http_methods", "access_control_check", "authz_probe", "graphql_check",
-    "graphql_probe", "discover_parameters", "cors_audit", "waf_detect",
-    "waf_efficacy", "web_search", "web_read", "cve_lookup", "cve_search",
-    "wayback_urls", "enumerate_subdomains", "timing_diff", "parse_openapi",
-})
-LOCAL_TOOLS = PURE_REFERENCE_TOOLS | frozenset({
-    "server_status", "tool_catalog", "tool_search", "tool_describe", "capabilities",
-    "scope_list", "program_list", "http_history", "telemetry", "external_tools",
-    "search_dorks", "oast_payload_gen", "oast_techniques", "oast_list",
-    "memory_add", "memory_search", "memory_get", "memory_stats", "memory_link",
-    "memory_graph", "memory_brief", "memory_lesson", "add_finding", "promote_lead",
-    "label_finding", "list_findings", "clear_findings", "triage_findings", "metrics",
-    "cvss_score", "audit_log", "export_findings", "deduplicate_findings",
-    "render_finding_md", "match_injection_signatures", "match_privesc", "identify_waf",
-    "flag_record", "flag_get", "flag_search", "flag_update", "flag_link",
-    "hypothesis_record", "hypothesis_get", "hypothesis_update", "analysis_brief",
-})
-
-
-def request_accounting(name: str) -> str:
-    if name in METERED_HTTP_TOOLS:
-        return "http_client"
-    return "local" if name in LOCAL_TOOLS else "unmetered"
-
-
-PUBLIC_RESEARCH_TOOLS = frozenset({
-    "web_search", "web_read", "cve_lookup", "cve_search", "wayback_urls",
-    "enumerate_subdomains",
-})
+PURE_REFERENCE_TOOLS = frozenset(p.name for p in POLICIES.values() if p.static_reference)
+METERED_HTTP_TOOLS = frozenset(p.name for p in POLICIES.values() if p.accounting == "http_client")
+LOCAL_TOOLS = frozenset(p.name for p in POLICIES.values() if p.accounting == "local")
+PUBLIC_RESEARCH_TOOLS = frozenset(p.name for p in POLICIES.values() if p.public_research)
 
 
 def target_in_run(target: str, run_target: str) -> bool:
@@ -349,11 +313,7 @@ async def execute_tool(ctx: Any, registry: Mapping[str, Any], run_id: str,
         raise ExecutionBlocked("recursive_execution", "nested run execution is not supported")
     if result_mode not in {"summary", "full"}:
         raise ValueError("result_mode must be summary or full")
-    if tool_name.startswith("run_") or tool_name in {
-        "scope_add", "scope_remove", "scope_clear", "auth_set", "auth_clear",
-        "program_add", "program_use", "program_remove", "program_clear", "agent_tree",
-        "proxy_manage", "sandbox_exec", "proxy_rules", "clear_findings",
-    }:
+    if policy(tool_name).execution_control or tool_name.startswith("run_"):
         raise ExecutionBlocked("execution_control", "use control tools directly, outside run_execute")
     tool = registry.get(tool_name)
     if tool is None:
@@ -372,9 +332,7 @@ async def execute_tool(ctx: Any, registry: Mapping[str, Any], run_id: str,
     if set(arguments) - allowed:
         raise ValueError("unknown tool arguments: " + ", ".join(sorted(set(arguments) - allowed)))
     try:
-        parsed = tool.fn_metadata.arg_model.model_validate(arguments, strict=True)
-        validated = parsed.model_dump_one_level()
-        canonical_arguments = parsed.model_dump(mode="json")
+        validated, canonical_arguments = sdk.validate_arguments(tool, arguments)
     except ValidationError as exc:
         # ValidationError text can contain input credentials; expose field names only.
         fields = sorted({".".join(str(p) for p in e["loc"]) for e in exc.errors()})
@@ -385,7 +343,7 @@ async def execute_tool(ctx: Any, registry: Mapping[str, Any], run_id: str,
         owned_ids = {finding.id for finding in ctx.findings.list(run_id=run_id)}
         if validated.get("finding_id") not in owned_ids:
             raise ExecutionBlocked("run_target_mismatch", "finding must belong to the executing run")
-    if getattr(tool, "context_kwarg", None) is not None:
+    if sdk.requires_context(tool):
         raise ExecutionBlocked("tool_unavailable", "tool requires a direct MCP session context")
     intrusive = bool(getattr(tool.fn, "__moonmcp_intrusive__", False))
     if tool_name == "waf_detect" and ctx.settings.allow_intrusive:

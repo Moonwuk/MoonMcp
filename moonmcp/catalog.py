@@ -13,167 +13,7 @@ live descriptions and gate markers so this never drifts from what is registered
 
 from __future__ import annotations
 
-from collections import OrderedDict
-
-# family key -> (title, one-line blurb, [tool names in suggested order])
-FAMILIES: OrderedDict[str, tuple[str, str, list[str]]] = OrderedDict([
-    ("setup", (
-        "Setup & safety",
-        "Authorise and identify before touching anything: scope, per-program "
-        "header, engagement auth, out-of-band callbacks, audit trail.",
-        [
-            "server_status", "tool_catalog", "tool_search", "tool_describe",
-            "scope_list", "scope_add", "scope_exclude", "scope_remove",
-            "program_add", "program_use", "program_list", "program_remove",
-            "auth_set", "auth_clear",
-            "oast_configure", "oast_selfhost", "oast_generate", "oast_poll", "oast_list",
-            "oast_payload_gen", "oast_techniques",
-            "proxy_rules", "telemetry", "view_dashboard",
-            "sast_scan", "generate_remediation",
-            "opsec_config", "extract_api_schemas",
-            "audit_log",
-        ],
-    )),
-    ("passive_osint", (
-        "Passive OSINT",
-        "Queries third-party datasets / search engines about the target — no "
-        "packets to the target itself.",
-        [
-            "web_search", "web_read", "search_dorks",
-            "enumerate_subdomains", "wayback_urls",
-            "cve_lookup", "cve_search",
-            "cve_patch_diff", "variant_search", "version_vuln_check",
-            "host_intel", "ip_intel", "reverse_ip",
-            "cloud_audit", "cloud_buckets", "email_security", "dependency_confusion",
-        ],
-    )),
-    ("light_active", (
-        "Light active",
-        "Benign, low-noise in-scope requests: probe, fingerprint, crawl, and "
-        "analyse the web-app surface (incl. a headless browser).",
-        [
-            "dns_lookup", "http_probe", "tls_inspect", "analyze_headers",
-            "fingerprint", "well_known", "favicon_hash", "tls_fingerprint",
-            "jarm_fingerprint", "origin_discovery", "behavior_probe",
-            "crawl", "analyze_js", "js_library_scan", "recover_sourcemaps", "parse_openapi",
-            "extract_secrets",
-            "firebase_exposure", "supabase_exposure",
-            "cors_audit", "access_control_check", "authz_probe", "graphql_check",
-            "graphql_probe", "ws_probe", "discover_parameters", "waf_detect", "takeover_check",
-            "open_redirect", "trace_redirects", "crlf_probe", "vcs_exposure",
-            "git_forensics",
-            "response_leak_probe", "reset_poison_probe", "path_bypass_probe",
-            "debug_exposure",
-            "screenshot", "browser_open", "browser_eval", "browser_interact", "cspp_probe",
-            "analyze_binary", "analyze_config", "jwt_analyze", "jwt_crack", "jwt_alg_confusion",
-            "deserialize_fingerprint",
-            "oauth_probe", "oauth_redirect_probe",
-        ],
-    )),
-    ("intrusive", (
-        "Intrusive (gated)",
-        "Noisier scanning that must be explicitly enabled with "
-        "MOONMCP_ALLOW_INTRUSIVE — get consent first.",
-        [
-            "port_scan", "content_discovery", "http_methods",
-            "waf_efficacy", "desync_probe", "desync_modern_probe", "vuln_scan",
-            "cache_deception_probe", "stack_probe", "ssrf_metadata_probe",
-            "logic_probe", "race_probe", "workflow_probe", "value_probe", "jwt_jku_probe",
-            "nosqli_probe", "db_exposure", "second_order_sqli_probe", "orm_leak_probe",
-            "fastjson_oast_probe", "ssrf_protocol_probe", "parser_diff_probe",
-            "graphql_nosqli",
-        ],
-    )),
-    ("orchestration", (
-        "Orchestration",
-        "Create resumable assessment runs, coordinate role-based tasks, enforce "
-        "budgets and coverage gates, then chain the safe recon/report tools.",
-        [
-            "run_start", "run_status", "run_list", "run_control",
-            "run_task_add", "run_task_update", "run_next",
-            "run_coverage_update", "run_usage", "run_artifact_add", "run_artifacts",
-            "run_finish",
-            "run_brief", "run_execute", "run_claim", "run_heartbeat", "run_task_retry",
-            "run_artifact_read", "run_recover", "run_reconcile",
-            "probe_batch", "recon_target", "report",
-        ],
-    )),
-    ("infra", (
-        "Behavioural infrastructure",
-        "Infer the infra's shape from response variance: backend fleet / patch "
-        "drift, DNS/zone behaviour (wildcard, LB, dangling CNAME), Host-header "
-        "routing, and rate-limit behaviour.",
-        ["backend_probe", "dns_behavior", "vhost_probe", "ratelimit_probe",
-         "tls_behavior", "edge_map", "http_behavior", "timing_diff"],
-    )),
-    ("intercept", (
-        "Interception & active probes",
-        "Drive the Burp workflow from tools (repeater, intruder, passive scan, "
-        "history), plus differential detectors for top-payout classes (SSTI, SQLi, "
-        "blind SSRF, cache poisoning) and the confirm_finding gate.",
-        ["http_repeater", "intruder", "passive_scan", "confirm_finding",
-         "ssti_probe", "sqli_probe", "cmdi_probe", "lfi_probe", "ssrf_probe",
-         "xxe_probe", "interp_probe", "saml_xsw_probe", "cache_probe", "http_history"],
-    )),
-    ("knowledge", (
-        "Knowledge bases",
-        "Offline reference: injections, techniques/PoCs, privilege escalation, "
-        "server-side vulns + root causes, WAF fingerprints. No traffic.",
-        [
-            "injection_info", "injection_search", "match_injection_signatures",
-            "technique_info", "technique_search",
-            "privesc_info", "privesc_search", "privesc_tools", "match_privesc",
-            "vuln_info", "vuln_search", "vuln_tools", "rootcause_info",
-            "playbook_info",
-            "deduplicate_findings", "render_finding_md",
-            "proxy_manage", "sandbox_exec", "agent_tree", "export_csv",
-            "waf_info", "identify_waf",
-        ],
-    )),
-    ("reporting", (
-        "Findings & reporting",
-        "Record findings, export (SARIF/JSON/Obsidian), and diff the attack "
-        "surface across runs.",
-        [
-            "add_finding", "promote_lead", "label_finding", "metrics",
-            "list_findings", "clear_findings", "triage_findings",
-            "cvss_score", "export_findings", "export_obsidian",
-            "surface_diff", "surface_snapshots",
-        ],
-    )),
-    ("memory", (
-        "Shared memory hub",
-        "Persistent, cross-agent, provenance/trust-tagged memory (SQLite + FTS) "
-        "so agents build on each other's work instead of re-deriving context. A "
-        "typed knowledge graph (entities + relations) structures findings, and "
-        "cross-target lessons carry tradecraft forward between sessions.",
-        ["memory_add", "memory_search", "memory_get", "memory_stats",
-         "memory_link", "memory_graph", "memory_brief", "memory_lesson",
-         "flag_record", "flag_get", "flag_search", "flag_update", "flag_link",
-         "hypothesis_record", "hypothesis_get", "hypothesis_update", "analysis_brief"],
-    )),
-    ("external", (
-        "External CLIs",
-        "Detect and safely drive installed security CLIs (scope-checked, "
-        "file-I/O flags refused). Gated by MOONMCP_ALLOW_EXTERNAL_TOOLS.",
-        ["external_tools", "run_scanner", "scan_coverage"],
-    )),
-    ("pipeline", (
-        "Hermes pipeline (absorbed)",
-        "The retired Node server's local data tools, now served natively: "
-        "engagement queue, targets.yaml scope/config, HackerOne report "
-        "calibration, knowledge-base grep, airecon FTS5 datasets, nuclei "
-        "CVE index, web-security catalog, takeover fingerprints.",
-        [
-            "queue_task", "list_queue", "get_target", "list_targets",
-            "search_bugbounty_reports", "list_report_categories",
-            "search_knowledge_base", "search_datasets",
-            "match_signature_to_cve", "get_nuclei_template",
-            "search_web_security_resources", "list_web_security_categories",
-            "check_subdomain_takeover",
-        ],
-    )),
-])
+from .registry import FAMILIES, ORIENTATION_TOOLS, TOOL_FAMILY
 
 # The recommended order of operations for a fresh engagement.
 # Run-aware (AGENT_NAVIGATION_PLAN.md): the run_* coordinator frames the work;
@@ -219,11 +59,6 @@ NAVIGATION: dict[str, str] = {
     "budget refused": "stop; do not start new work — record the blocked task with the reason",
 }
 
-# Which family a tool name belongs to (inverted from FAMILIES).
-TOOL_FAMILY: dict[str, str] = {
-    name: fam for fam, (_t, _b, names) in FAMILIES.items() for name in names
-}
-
 # Named exposure profiles → the set of families to expose. Used to hand a *curated
 # slice* of MoonMCP to another agent (e.g. embed the knowledge + memory + recon
 # slice inside Strix, which already has its own scanners/proxy/browser). ``full``
@@ -243,7 +78,7 @@ PROFILES: dict[str, set[str] | None] = {
 }
 
 # Always reachable so an agent can orient itself and check scope, whatever the profile.
-_ALWAYS_ON = {"server_status", "tool_catalog", "tool_search", "tool_describe", "scope_list"}
+_ALWAYS_ON = ORIENTATION_TOOLS
 
 
 def profile_names() -> list[str]:

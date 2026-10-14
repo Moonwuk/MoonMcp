@@ -132,6 +132,7 @@ The repository contains detailed reference material for areas that would make th
 - [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
 - [Agent navigation and optimization plan](docs/AGENT_NAVIGATION_PLAN.md)
 - [Agent workflow: tools, flags, hypotheses and recovery](docs/AGENT_WORKFLOW.md)
+- [Tool registry and registration architecture](docs/TOOL_ARCHITECTURE.md)
 - [Research into comparable flag and hypothesis systems](docs/FLAG_SYSTEM_RESEARCH.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
 - [System prompts](docs/SYSTEM_PROMPTS.md)

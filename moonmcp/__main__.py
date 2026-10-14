@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__
+from . import __version__, sdk
 
 
 def _coerce(v: str) -> object:
@@ -47,7 +47,7 @@ def _cmd_tools(as_json: bool) -> int:
 
     from .server import mcp
 
-    tools = sorted(mcp._tool_manager.list_tools(), key=lambda t: t.name)
+    tools = sorted(sdk.list_registered(mcp), key=lambda t: t.name)
     if as_json:
         print(json.dumps([{"name": t.name,
                            "description": " ".join((t.description or "").split())[:200]}
@@ -66,7 +66,7 @@ def _cmd_call(tool: str, json_args: str | None, kv_args: list[str]) -> int:
 
     from .server import mcp
 
-    registry = {t.name: t for t in mcp._tool_manager.list_tools()}
+    registry = {t.name: t for t in sdk.list_registered(mcp)}
     if tool not in registry:
         print(json.dumps({"error": "unknown_tool",
                           "detail": f"{tool!r} is not exposed (check MOONMCP_PROFILE)",
