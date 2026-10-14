@@ -4,6 +4,11 @@ MoonMCP's deterministic security engine remains the product core. The autonomy
 work adds an optional host/runtime around it rather than replacing specialised,
 scope-gated probes with unconstrained LLM shell execution.
 
+For a discovery-focused delivery sequence, see the
+[evidence-driven vulnerability discovery proposal](VULNERABILITY_DISCOVERY_ROADMAP.md).
+It defines a BOLA-first vertical slice, proof requirements, fixture-based
+evaluation and acceptance gates while reusing these autonomy foundations.
+
 ## Delivered foundation
 
 - Persistent SQLite runs with pause/resume/cancel/fail states.
