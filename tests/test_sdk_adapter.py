@@ -57,5 +57,6 @@ async def test_structured_output_validation_survives_protocol_adapter():
         return {"count": "wrong"}
     typed.__annotations__["return"] = Answer
     application.add_tool(typed)
-    with pytest.raises(ValidationError):
-        await application.call_tool("typed", {})
+    result = await application.call_tool("typed", {})
+    assert result.isError
+    assert result.structuredContent["error"] == "output_validation_error"

@@ -147,9 +147,9 @@ def test_orchestrator_propagates_child_failure_and_blocks_later_phases(memory):
     later = []
     exploit = parent.spawn_child("exploit", metadata={"probes": [lambda _: later.append("bad")]})
     result = parent.run()
-    assert not result.success and result.state == "failed"
+    assert not result.success and result.state == "blocked"
     assert "0/2" in result.summary and not later
-    assert recon.status == graph.statuses[recon.agent_id] == "failed"
+    assert recon.status == graph.statuses[recon.agent_id] == "blocked"
     assert exploit.status == graph.statuses[exploit.agent_id] == "blocked"
     assert {error["error"] for error in result.errors} == {"out_of_scope", "prerequisite_failed"}
 
@@ -221,3 +221,17 @@ def test_child_exception_preserves_failure_and_blocks_later_work(memory, monkeyp
     result = parent.run()
     assert not result.success and result.errors[0]["error"] == "child_crashed"
     assert child.status == "crashed" and next_child.status == "blocked"
+
+
+@pytest.mark.parametrize("state", ["unknown", "partial", "blocked", "cancelled"])
+def test_native_protocol_outcome_reaches_agent_state(state, memory):
+    from moonmcp.outcomes import RESULT_META, outcome
+
+    status = outcome({"ok": False, "state": state})
+    native = CallToolResult(content=[TextContent(type="text", text="receipt")], isError=True,
+                            _meta={RESULT_META: status.metadata()})
+    agent = ReconAgent("example.com", memory=memory, metadata={"actions": [lambda _: native]})
+    result = agent.run()
+    assert result.state == state
+    assert not result.success
+    assert result.errors[0]["error"] == status.error.code

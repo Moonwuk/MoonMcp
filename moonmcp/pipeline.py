@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .outcomes import TextFailure
+
 _PIPELINE_DIRS = [
     Path.home() / "hermes_pipeline",
     Path.home() / "Desktop" / "hermes_pipeline",
@@ -267,8 +269,8 @@ def get_target(name: str) -> str:
     targets = _load_targets()
     t = targets.get(name)
     if not t:
-        return (f"Таргет \"{name}\" не найден. Доступные: "
-                f"{', '.join(targets) or 'нет настроенных таргетов'}")
+        return TextFailure(f"Таргет \"{name}\" не найден. Доступные: "
+                f"{', '.join(targets) or 'нет настроенных таргетов'}", "not_found")
     headers = {k: _resolve_env_vars(v) for k, v in (t.get("headers") or {}).items()}
     return json.dumps({
         "base_url": t.get("base_url"),
@@ -287,14 +289,14 @@ def search_bugbounty_reports(vuln_type: str, limit: int = 10) -> str:
     fname = REPORT_TYPE_MAP.get(key)
     if not fname:
         known = ", ".join(REPORT_TYPE_MAP)  # insertion order, as before
-        return f"Неизвестный тип уязвимости \"{vuln_type}\". Доступные: {known}"
+        return TextFailure(f"Неизвестный тип уязвимости \"{vuln_type}\". Доступные: {known}", "invalid_input")
     path = _first("knowledge_base", "hackerone_reports", "tops_by_bug_type", fname)
     if path is None:
-        return f"Файл {fname} не найден в базе репортов."
+        return TextFailure(f"Файл {fname} не найден в базе репортов.", "missing_dependency")
     try:
         raw = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return f"Ошибка чтения {fname}."
+        return TextFailure(f"Ошибка чтения {fname}.", "read_failed")
     # The TOP*.md files are markdown numbered lists — keep report lines only.
     numbered = [line.strip() for line in raw.split("\n")
                 if re.match(r"^\d+\.", line.strip())]
@@ -311,14 +313,14 @@ def list_report_categories() -> str:
 def search_knowledge_base(source: str, keyword: str, limit: int = 20) -> str:
     dir_name = KB_SOURCES.get(source)
     if not dir_name:
-        return (f"Неизвестный источник \"{source}\". Доступные: "
-                f"{', '.join(KB_SOURCES)}")
+        return TextFailure(f"Неизвестный источник \"{source}\". Доступные: "
+                f"{', '.join(KB_SOURCES)}", "invalid_input")
     base = _first("knowledge_base")
     if base is None:
-        return "База знаний (knowledge_base/) не найдена."
+        return TextFailure("База знаний (knowledge_base/) не найдена.", "missing_dependency")
     source_dir = base / dir_name
     if not source_dir.exists():
-        return f"Директория {dir_name} не найдена в базе знаний."
+        return TextFailure(f"Директория {dir_name} не найдена в базе знаний.", "missing_dependency")
     matches = _grep_kb(source_dir, keyword, max_matches=limit)
     if not matches:
         return f"Совпадений для \"{keyword}\" в {source} не найдено."
@@ -332,11 +334,11 @@ def search_datasets(dataset: str, query: str, limit: int = 5,
                     full_answer: bool = False) -> str:
     info = AIRECON_DBS.get(dataset)
     if not info:
-        return (f"Неизвестный датасет \"{dataset}\". Доступные: "
-                f"{', '.join(AIRECON_DBS)}")
+        return TextFailure(f"Неизвестный датасет \"{dataset}\". Доступные: "
+                f"{', '.join(AIRECON_DBS)}", "invalid_input")
     db_path = _first("knowledge_base", "airecon_datasets", info["file"])
     if db_path is None:
-        return f"База {info['file']} не найдена в knowledge_base/airecon_datasets/"
+        return TextFailure(f"База {info['file']} не найдена в knowledge_base/airecon_datasets/", "missing_dependency")
     limit = max(1, min(limit, 10))
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
@@ -370,7 +372,7 @@ def match_signature_to_cve(technology: str, min_severity: str | None = None,
                            limit: int = 15) -> str:
     db_path = _first("knowledge_base", "nuclei_index.sqlite3")
     if db_path is None:
-        return "Индекс nuclei-templates не найден. Запусти build_nuclei_index.py."
+        return TextFailure("Индекс nuclei-templates не найден. Запусти build_nuclei_index.py.", "missing_dependency")
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         tech = f"%{technology.lower()}%"
@@ -399,7 +401,7 @@ def match_signature_to_cve(technology: str, min_severity: str | None = None,
 def get_nuclei_template(template_id: str) -> str:
     db_path = _first("knowledge_base", "nuclei_index.sqlite3")
     if db_path is None:
-        return "Индекс nuclei-templates не найден."
+        return TextFailure("Индекс nuclei-templates не найден.", "missing_dependency")
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         row = con.execute("SELECT filepath FROM templates WHERE id = ?",
@@ -407,14 +409,14 @@ def get_nuclei_template(template_id: str) -> str:
     finally:
         con.close()
     if not row:
-        return f"Шаблон {template_id} не найден в индексе."
+        return TextFailure(f"Шаблон {template_id} не найден в индексе.", "not_found")
     filepath = row[0]
     if not os.path.exists(filepath):
-        return f"Файл шаблона отсутствует на диске: {filepath}"
+        return TextFailure(f"Файл шаблона отсутствует на диске: {filepath}", "missing_dependency")
     try:
         return Path(filepath).read_text(encoding="utf-8", errors="ignore")
     except OSError as e:
-        return f"Ошибка чтения шаблона: {e}"
+        return TextFailure(f"Ошибка чтения шаблона: {e}", "read_failed")
 
 
 def search_web_security_resources(category: str, keyword: str | None = None,
@@ -424,11 +426,11 @@ def search_web_security_resources(category: str, keyword: str | None = None,
                                   limit: int = 15) -> str:
     idx_path = _first("knowledge_base", "web_security_index", "index.json")
     if idx_path is None:
-        return "Индекс web_security_index/index.json не найден."
+        return TextFailure("Индекс web_security_index/index.json не найден.", "missing_dependency")
     try:
         idx = json.loads(idx_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return "Ошибка чтения web_security_index/index.json."
+        return TextFailure("Ошибка чтения web_security_index/index.json.", "read_failed")
     results = [e for e in idx.get("entries", [])
                if e.get("category") == category.lower()]
     if keyword:
@@ -458,11 +460,11 @@ def search_web_security_resources(category: str, keyword: str | None = None,
 def list_web_security_categories() -> str:
     idx_path = _first("knowledge_base", "web_security_index", "index.json")
     if idx_path is None:
-        return "Индекс web_security_index/index.json не найден."
+        return TextFailure("Индекс web_security_index/index.json не найден.", "missing_dependency")
     try:
         idx = json.loads(idx_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return "Ошибка чтения web_security_index/index.json."
+        return TextFailure("Ошибка чтения web_security_index/index.json.", "read_failed")
     return "\n".join(f"{c['key']} — {c['title']}"
                      for c in idx.get("categories", []))
 
@@ -470,11 +472,11 @@ def list_web_security_categories() -> str:
 def check_subdomain_takeover(service: str) -> str:
     fp_path = _first("knowledge_base", "subdomain_takeover", "fingerprints.json")
     if fp_path is None:
-        return "База fingerprints.json не найдена."
+        return TextFailure("База fingerprints.json не найдена.", "missing_dependency")
     try:
         data = json.loads(fp_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return "Ошибка чтения fingerprints.json."
+        return TextFailure("Ошибка чтения fingerprints.json.", "read_failed")
     q = service.lower()
     matches = [d for d in data
                if q in (d.get("service") or "").lower()

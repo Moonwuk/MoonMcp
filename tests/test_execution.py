@@ -619,3 +619,63 @@ async def test_recovered_receipt_without_result_remains_unknown_after_resolution
     assert resolved["resolution"]["outcome"] == "completed"
     assert resolved["retryable"] is False
     assert calls == [1]
+
+
+async def test_text_failure_is_persisted_and_replayed_without_another_call(ctx):
+    from moonmcp.outcomes import TextFailure
+
+    calls = []
+
+    async def query():
+        calls.append(True)
+        return TextFailure("Required reference index is missing", "missing_dependency")
+
+    tools = registry(query, "injection_info")
+    run = start(ctx)
+    first = await execute_tool(ctx, tools, run, "injection_info", {}, idempotency_key="index")
+    replay = await execute_tool(ctx, tools, run, "injection_info", {}, idempotency_key="index")
+    assert first["state"] == "failed"
+    assert first["error"] == "missing_dependency"
+    assert first["outcome"]["state"] == "blocked"
+    assert replay["error"] == "missing_dependency"
+    assert replay["outcome"] == first["outcome"]
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("state,expected", [("partial", "failed"), ("unknown", "unknown")])
+async def test_incomplete_tool_status_never_becomes_completed_receipt(ctx, state, expected):
+    async def probe(target: str):
+        return {"ok": False, "state": state, "observations": ["first step completed"]}
+
+    tools = registry(probe)
+    run = start(ctx)
+    result = await execute_tool(ctx, tools, run, "http_probe", {"target": "https://example.test"})
+    assert not result["ok"]
+    assert result["state"] == expected
+    assert result["outcome"]["state"] == state
+    assert result["data"]["observations"] == ["first step completed"]
+
+
+async def test_invalid_declared_output_keeps_unknown_receipt_and_cannot_reexecute(ctx):
+    from pydantic import BaseModel
+
+    class Answer(BaseModel):
+        count: int
+
+    calls = []
+
+    async def probe(target: str):
+        calls.append(target)
+        return {"count": "not-an-integer"}
+
+    probe.__annotations__["return"] = Answer
+    tools = registry(probe)
+    run = start(ctx)
+    result = await execute_tool(ctx, tools, run, "http_probe", {"target": "https://example.test"},
+                                idempotency_key="invalid-output")
+    assert result["state"] == "unknown"
+    assert result["outcome"]["error"]["code"] == "output_validation_error"
+    replay = await execute_tool(ctx, tools, run, "http_probe", {"target": "https://example.test"},
+                                idempotency_key="invalid-output")
+    assert replay["state"] == "unknown"
+    assert calls == ["https://example.test"]

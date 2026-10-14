@@ -5,10 +5,8 @@ import json
 import os
 import sys
 
-import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult
 
 from moonmcp import server
@@ -22,7 +20,7 @@ def test_execution_error_classification_ignores_negative_verdicts():
     assert failure({"available": False}) is None
     assert failure({"error": None}) is None
     assert failure({"error": "invalid_input", "detail": "budget exceeded: requests"}).code == "budget_exhausted"
-    assert failure({"error": "timeout"}).retryable
+    assert not failure({"error": "timeout"}).retryable
     assert not failure({"error": "invalid_input"}).retryable
 
 
@@ -62,8 +60,9 @@ async def test_compact_filter_keeps_hidden_tool_out_of_direct_protocol():
 
     mcp.advertised_tools = {"facade"}
     assert [t.name for t in await mcp.list_tools()] == ["facade"]
-    with pytest.raises(ToolError, match="not advertised"):
-        await mcp.call_tool("direct", {})
+    blocked = await mcp.call_tool("direct", {})
+    assert blocked.isError
+    assert blocked.structuredContent["error"] == "tool_not_advertised"
     assert mcp._tool_manager.get_tool("direct") is not None
     assert not (await mcp.call_tool("facade", {})).isError
 

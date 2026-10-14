@@ -25,7 +25,7 @@ from pydantic import ValidationError
 
 from . import __version__, sdk
 from .memory import normalize_target
-from .outcomes import failure
+from .outcomes import outcome
 
 # Derived views preserve existing import contracts; policies live in registry.py.
 from .registry import POLICIES, policy, request_accounting
@@ -328,9 +328,6 @@ async def execute_tool(ctx: Any, registry: Mapping[str, Any], run_id: str,
         raise ValueError("timeout_seconds must be greater than zero and at most 3600")
     if not isinstance(arguments, dict):
         raise ValueError("arguments must be an object")
-    allowed = set(tool.parameters.get("properties", {}))
-    if set(arguments) - allowed:
-        raise ValueError("unknown tool arguments: " + ", ".join(sorted(set(arguments) - allowed)))
     try:
         validated, canonical_arguments = sdk.validate_arguments(tool, arguments)
     except ValidationError as exc:
@@ -422,14 +419,19 @@ async def execute_tool(ctx: Any, registry: Mapping[str, Any], run_id: str,
         if not cached:
             dispatched = True
             value = await _invoke(ctx, tool, validated, invocation_id, timeout_seconds)
-        err = failure(value)
-        if err is not None and err.code == "internal_error" and tool_name not in PURE_REFERENCE_TOOLS:
+        value = sdk.checked_result(tool, value)
+        observed = outcome(value)
+        err = observed.error
+        if err is not None and err.code in {"internal_error", "timeout", "output_validation_error"} and tool_name not in PURE_REFERENCE_TOOLS:
+            scope.ambiguous = True
+        if observed.state == "unknown":
             scope.ambiguous = True
         value = _jsonable(value)
         state = "unknown" if scope.ambiguous else "failed" if err or scope.blocked_code else "completed"
         result = {"ok": state == "completed", "run_id": run_id,
                   "invocation_id": invocation_id, "state": state, "data": value,
-                  "cached": cached, "requests": scope.requests}
+                  "cached": cached, "requests": scope.requests,
+                  "outcome": observed.metadata()}
         if scope.ambiguous:
             result.update(error="outcome_unknown", retryable=False,
                           recovery="Reconcile evidence before issuing another action.")
