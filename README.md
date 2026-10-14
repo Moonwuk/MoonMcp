@@ -135,6 +135,7 @@ The repository contains detailed reference material for areas that would make th
 - [Agent workflow: tools, flags, hypotheses and recovery](docs/AGENT_WORKFLOW.md)
 - [Tool registry and registration architecture](docs/TOOL_ARCHITECTURE.md)
 - [Execution results and errors: versioned contract](docs/TOOL_OUTCOMES.md)
+- [Relational vulnerability discovery roadmap (fourth-stage proposal)](docs/RELATIONAL_DISCOVERY_ROADMAP.md)
 - [Research into comparable flag and hypothesis systems](docs/FLAG_SYSTEM_RESEARCH.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
 - [Experimental vulnerability discovery roadmap (third-stage proposal)](docs/EXPERIMENTAL_DISCOVERY_ROADMAP.md)

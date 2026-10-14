@@ -21,6 +21,14 @@ evaluation and acceptance gates while reusing these autonomy foundations.
 - Operator skills for assessment planning, systematic lead validation and run
   coordination.
 
+## Relational discovery after the experimental layer
+
+The [relational discovery roadmap](RELATIONAL_DISCOVERY_ROADMAP.md) proposes
+paired-world confidentiality/integrity checks, reviewed executable rules,
+information/authority-flow evidence and small-model counterexamples. It starts
+with an indirect-disclosure fixture and depends on applicable earlier discovery
+gates; it does not mark those proposals implemented or claim system-wide safety.
+
 ## Remaining stages
 
 ### 1. Registry and contracts
