@@ -1,0 +1,52 @@
+{
+  "base_commit": "0aa2153b51b3ab1ce95dc9abcada17ff52322c38",
+  "python_files": 142,
+  "lines": 54169,
+  "test_python_files": 102,
+  "packages": {
+    "moonmcp": {
+      "files": 28,
+      "lines": 14107
+    },
+    "moonmcp/external": {
+      "files": 3,
+      "lines": 577
+    },
+    "moonmcp/intel": {
+      "files": 11,
+      "lines": 2638
+    },
+    "moonmcp/interface": {
+      "files": 3,
+      "lines": 545
+    },
+    "moonmcp/knowledge": {
+      "files": 13,
+      "lines": 20580
+    },
+    "moonmcp/net": {
+      "files": 7,
+      "lines": 1570
+    },
+    "moonmcp/orchestration": {
+      "files": 2,
+      "lines": 684
+    },
+    "moonmcp/recon": {
+      "files": 27,
+      "lines": 5218
+    },
+    "moonmcp/report": {
+      "files": 2,
+      "lines": 1219
+    },
+    "moonmcp/telemetry": {
+      "files": 2,
+      "lines": 235
+    },
+    "moonmcp/web": {
+      "files": 44,
+      "lines": 6796
+    }
+  }
+}

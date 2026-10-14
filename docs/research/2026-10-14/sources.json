@@ -1,0 +1,328 @@
+[
+  {
+    "name": "korean-langchain",
+    "url": "https://raw.githubusercontent.com/teddylee777/langchain-kr/main/README.md",
+    "bytes": 11197,
+    "accessed_date": "2026-10-14",
+    "sha256": "821abcd130ea78216af4462d95099d8a41f972441769d038edf797492741db3a",
+    "local_snapshot_name": "korean-langchain.md"
+  },
+  {
+    "name": "korean-opentutorial",
+    "url": "https://raw.githubusercontent.com/LangChain-OpenTutorial/LangChain-OpenTutorial/main/README.md",
+    "bytes": 9037,
+    "accessed_date": "2026-10-14",
+    "sha256": "e94ae533f4a83ee827c040373c8cdd24a62310a106fccfd90308d2df8c6188f4",
+    "local_snapshot_name": "korean-opentutorial.md"
+  },
+  {
+    "name": "crewai-portuguese",
+    "url": "https://raw.githubusercontent.com/crewAIInc/crewAI/main/docs/pt-BR/concepts/flows.mdx",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "crewai-pt-readme",
+    "url": "https://raw.githubusercontent.com/crewAIInc/crewAI/main/README.pt-BR.md",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "tooluniverse-compact",
+    "url": "https://raw.githubusercontent.com/mims-harvard/ToolUniverse/main/docs/guide/building_ai_scientists/compact_mode.rst",
+    "bytes": 5016,
+    "accessed_date": "2026-10-14",
+    "sha256": "b6a19f8db207220883ae84213012118c7f51d421caed7dc6e551ab856ef4e0f5",
+    "local_snapshot_name": "tooluniverse-compact.md"
+  },
+  {
+    "name": "tooluniverse-search",
+    "url": "https://raw.githubusercontent.com/mims-harvard/ToolUniverse/main/docs/guide/guide_tool_finder.rst",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "tau2-bench",
+    "url": "https://raw.githubusercontent.com/sierra-research/tau2-bench/main/README.md",
+    "bytes": 10443,
+    "accessed_date": "2026-10-14",
+    "sha256": "ed39688aa5d40bd73007355df65f4e41a6c250960642e56764c3ad44da1df8d2",
+    "local_snapshot_name": "tau2-bench.md"
+  },
+  {
+    "name": "toolbench-zh",
+    "url": "https://raw.githubusercontent.com/OpenBMB/ToolBench/master/README_zh.md",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "langgraph-issues",
+    "url": "https://github.com/langchain-ai/langgraph/issues?q=is%3Aissue+checkpoint+tool+calls",
+    "bytes": 398525,
+    "accessed_date": "2026-10-14",
+    "sha256": "1ecba91f8e55f19029b90569cb7a8586aa593e8d1845d2be312dc483611c37b2",
+    "local_snapshot_name": "langgraph-issues.html"
+  },
+  {
+    "name": "qwen-issues",
+    "url": "https://github.com/QwenLM/Qwen-Agent/issues?q=is%3Aissue+tool+call",
+    "bytes": 356603,
+    "accessed_date": "2026-10-14",
+    "sha256": "6fa3a1e14802b31ba06fd684e58ab798c1cbce92c96530563c71698e9ec7b70a",
+    "local_snapshot_name": "qwen-issues.html"
+  },
+  {
+    "name": "agno-issues",
+    "url": "https://github.com/agno-agi/agno/issues?q=is%3Aissue+tool+calls",
+    "bytes": 367734,
+    "accessed_date": "2026-10-14",
+    "sha256": "6b21a83d6298cf848bb11e89804ad5cce19cb108932333ca9373124d6545fd75",
+    "local_snapshot_name": "agno-issues.html"
+  },
+  {
+    "name": "forum-langgraph-9185",
+    "url": "https://github.com/langchain-ai/langgraph/issues/9185",
+    "bytes": 605368,
+    "accessed_date": "2026-10-14",
+    "sha256": "83590136e92b56e5582cfabe3b8ef6eadec8583e7ddfe57c17b4d2c45cef0651",
+    "local_snapshot_name": "forum-langgraph-9185.html"
+  },
+  {
+    "name": "forum-qwen-980",
+    "url": "https://github.com/QwenLM/Qwen-Agent/issues/980",
+    "bytes": 274759,
+    "accessed_date": "2026-10-14",
+    "sha256": "8b074436ffb86bcf8282571fc2ded8c914a87363ba268c0a6dd8ea7eaf26d499",
+    "local_snapshot_name": "forum-qwen-980.html"
+  },
+  {
+    "name": "forum-qwen-992",
+    "url": "https://github.com/QwenLM/Qwen-Agent/issues/992",
+    "bytes": 250561,
+    "accessed_date": "2026-10-14",
+    "sha256": "a59c1b1e51107bdeecf5dfd5f91af25f5579cc63af6bce6e7700e5086d2eb1f0",
+    "local_snapshot_name": "forum-qwen-992.html"
+  },
+  {
+    "name": "forum-agno-11014",
+    "url": "https://github.com/agno-agi/agno/issues/11014",
+    "bytes": 367640,
+    "accessed_date": "2026-10-14",
+    "sha256": "795a9bff6b18409774df57880bf0fe6ed3481cf393018e6ba4d8cd7336376bb3",
+    "local_snapshot_name": "forum-agno-11014.html"
+  },
+  {
+    "name": "portuguese-ms-agents",
+    "url": "https://raw.githubusercontent.com/microsoft/ai-agents-for-beginners/main/translations/pt-BR/04-tool-use/README.md",
+    "bytes": 22331,
+    "accessed_date": "2026-10-14",
+    "sha256": "70e575089af6028ce84124b8080780bede3929d96f1c643cbcebae741cbfe9d8",
+    "local_snapshot_name": "portuguese-ms-agents.md"
+  },
+  {
+    "name": "korean-ms-agents",
+    "url": "https://raw.githubusercontent.com/microsoft/ai-agents-for-beginners/main/translations/ko/04-tool-use/README.md",
+    "bytes": 21692,
+    "accessed_date": "2026-10-14",
+    "sha256": "f948628e2ed20a1ccd8ab050699480f90e97e9bb000f4408aeec49152d55dad7",
+    "local_snapshot_name": "korean-ms-agents.md"
+  },
+  {
+    "name": "hindi-ms-agents",
+    "url": "https://raw.githubusercontent.com/microsoft/ai-agents-for-beginners/main/translations/hi/04-tool-use/README.md",
+    "bytes": 38961,
+    "accessed_date": "2026-10-14",
+    "sha256": "421db78121a734c6f9007f422049cadc17972cdc85f26c46a01375325d16ef01",
+    "local_snapshot_name": "hindi-ms-agents.md"
+  },
+  {
+    "name": "langchain-kr-discuss",
+    "url": "https://github.com/teddylee777/langchain-kr/discussions",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "crewai-discuss",
+    "url": "https://github.com/crewAIInc/crewAI/discussions",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "stabletoolbench",
+    "url": "https://raw.githubusercontent.com/THUNLP-MT/StableToolBench/main/README.md",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "composio",
+    "url": "https://raw.githubusercontent.com/ComposioHQ/composio/master/README.md",
+    "bytes": 9257,
+    "accessed_date": "2026-10-14",
+    "sha256": "4dda711b7fb9d50ce6bc7bbfb86a1e9b04b816e8b89ee8b11e7139211816cf34",
+    "local_snapshot_name": "composio.md"
+  },
+  {
+    "name": "brazil-mcp-search",
+    "url": "https://github.com/search?q=MCP+agentes+ferramentas&type=repositories",
+    "bytes": 258950,
+    "accessed_date": "2026-10-14",
+    "sha256": "3dabd838e0f3fbd6901496d16ce1fec62602b55cf33b522ecf9fe6328430c5ef",
+    "local_snapshot_name": "brazil-mcp-search.html"
+  },
+  {
+    "name": "india-mcp-search",
+    "url": "https://github.com/search?q=MCP+India+tools&type=repositories",
+    "bytes": 255124,
+    "accessed_date": "2026-10-14",
+    "sha256": "d3683e68b59ec5a9799cff4a9e73837550f5b9e2e2222475002fa8afd3950a73",
+    "local_snapshot_name": "india-mcp-search.html"
+  },
+  {
+    "name": "stabletoolbench",
+    "url": "https://raw.githubusercontent.com/zhichengg/StableToolBench/main/README.md",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "brazil-contaazul",
+    "url": "https://raw.githubusercontent.com/douglac/contaazul-mcp/main/README.md",
+    "bytes": 19129,
+    "accessed_date": "2026-10-14",
+    "sha256": "d6e4d17438f302cf41b8621009000df76979706ecadaa4514a7dd2e02bea8c25",
+    "local_snapshot_name": "brazil-contaazul.md"
+  },
+  {
+    "name": "brazil-unisinos",
+    "url": "https://raw.githubusercontent.com/armandokeller/SAEP2026-Agentes-IA-e-Ferramentas/main/README.md",
+    "bytes": 12886,
+    "accessed_date": "2026-10-14",
+    "sha256": "ed4b990bb6797eb6bb776baa4a928ce1bd13f57e01d5da5313c89779259df3b1",
+    "local_snapshot_name": "brazil-unisinos.md"
+  },
+  {
+    "name": "india-tapetide",
+    "url": "https://raw.githubusercontent.com/Tapetide-hq/nse-bse-indian-stock-market-data-mcp/main/README.md",
+    "bytes": 28590,
+    "accessed_date": "2026-10-14",
+    "sha256": "59d5dcc96c51f9c4c2f249713ac257728b509ab7d69af9c6e1e50faea8b14ad5",
+    "local_snapshot_name": "india-tapetide.md"
+  },
+  {
+    "name": "stabletoolbench",
+    "url": "https://raw.githubusercontent.com/zhichengg/StableToolBench/master/README.md",
+    "bytes": 23629,
+    "accessed_date": "2026-10-14",
+    "sha256": "4b824a6ddde1ee051e68c1c80a77413c4cb414099216b25fc6d82e41772e46fe",
+    "local_snapshot_name": "stabletoolbench.md"
+  },
+  {
+    "name": "india-legal-budget",
+    "url": "https://raw.githubusercontent.com/rohankgeorge/indiankanoon-mcp-connector/main/README.md",
+    "bytes": 10110,
+    "accessed_date": "2026-10-14",
+    "sha256": "4bcd806c64c945634303830c848072f1921218d675714255e6821ae4776de2a7",
+    "local_snapshot_name": "india-legal-budget.md"
+  },
+  {
+    "name": "mcp-tools-spec",
+    "url": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/docs/specification/2025-06-18/server/tools.mdx",
+    "bytes": 10467,
+    "accessed_date": "2026-10-14",
+    "sha256": "6c0bc03b6579eef309a4a81660a707df20360d011e464c1b74eae56f96e6417e",
+    "local_snapshot_name": "mcp-tools-spec.md"
+  },
+  {
+    "name": "qwen-agent",
+    "url": "https://raw.githubusercontent.com/QwenLM/Qwen-Agent/main/README.md",
+    "bytes": 15159,
+    "accessed_date": "2026-10-14",
+    "sha256": "3918a61ddbd3b0fbc64e3a5ea0b20d663c5520f0d0effad43b10d831e6d61d8a",
+    "local_snapshot_name": "qwen-agent.md"
+  },
+  {
+    "name": "qwen-agent-zh",
+    "url": "https://raw.githubusercontent.com/QwenLM/Qwen-Agent/main/README_CN.md",
+    "bytes": 14162,
+    "accessed_date": "2026-10-14",
+    "sha256": "6f9d7e290ebea4d7c07bf0d60d3255bf7884cf3e24d0acfb34f101ecee00a2f4",
+    "local_snapshot_name": "qwen-agent-zh.md"
+  },
+  {
+    "name": "toolbench",
+    "url": "https://raw.githubusercontent.com/OpenBMB/ToolBench/master/README.md",
+    "bytes": 32745,
+    "accessed_date": "2026-10-14",
+    "sha256": "bb3ec8d8ab48fa998b0b6eea440f3e799cd0f06f242be7e1b383850ad2cc41f0",
+    "local_snapshot_name": "toolbench.md"
+  },
+  {
+    "name": "gorilla-bfcl",
+    "url": "https://raw.githubusercontent.com/ShishirPatil/gorilla/main/berkeley-function-call-leaderboard/README.md",
+    "bytes": 17311,
+    "accessed_date": "2026-10-14",
+    "sha256": "c6c95683cce9653788c8b3f3f5002d2f5c27b95a1288544fe82c2a2faf5e12d0",
+    "local_snapshot_name": "gorilla-bfcl.md"
+  },
+  {
+    "name": "langgraph",
+    "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/main/README.md",
+    "bytes": 6395,
+    "accessed_date": "2026-10-14",
+    "sha256": "3a13e257af1216962d53d72414a7f44ac1fc5cea34d994bdff60ea2a3b045933",
+    "local_snapshot_name": "langgraph.md"
+  },
+  {
+    "name": "tau-bench",
+    "url": "https://raw.githubusercontent.com/sierra-research/tau-bench/main/README.md",
+    "bytes": 8447,
+    "accessed_date": "2026-10-14",
+    "sha256": "1a4b1b00634fe46fd677dd11dfa25a9bf357b5d7c3d726ff83025e8f104329f9",
+    "local_snapshot_name": "tau-bench.md"
+  },
+  {
+    "name": "tooluniverse",
+    "url": "https://raw.githubusercontent.com/mims-harvard/ToolUniverse/main/README.md",
+    "bytes": 11711,
+    "accessed_date": "2026-10-14",
+    "sha256": "3d3e51522798a1ede1c39932d58a52796a9ee1a7eebb3f5d501d2b5d4a52cf87",
+    "local_snapshot_name": "tooluniverse.md"
+  },
+  {
+    "name": "mcp-agent",
+    "url": "https://raw.githubusercontent.com/lastmile-ai/mcp-agent/main/README.md",
+    "bytes": 35207,
+    "accessed_date": "2026-10-14",
+    "sha256": "f20d0148a6ba1ded30b6c60a1031292b48113c45794beadaccb1d9acb97eddf7",
+    "local_snapshot_name": "mcp-agent.md"
+  },
+  {
+    "name": "agentscope-zh",
+    "url": "https://raw.githubusercontent.com/agentscope-ai/agentscope/main/README_zh.md",
+    "bytes": 14598,
+    "accessed_date": "2026-10-14",
+    "sha256": "4b5bc62239631ec20141027858eed13c9274f9244b2e4fd2e3545fefbd5aa778",
+    "local_snapshot_name": "agentscope-zh.md"
+  },
+  {
+    "name": "langgraph-korean",
+    "url": "https://raw.githubusercontent.com/teddylee777/langgraph-tutorial/main/README.md",
+    "error": "HTTP Error 404: Not Found",
+    "accessed_date": "2026-10-14"
+  },
+  {
+    "name": "crewai",
+    "url": "https://raw.githubusercontent.com/crewAIInc/crewAI/main/README.md",
+    "bytes": 32755,
+    "accessed_date": "2026-10-14",
+    "sha256": "b0f39843f93676b12883d5821a34555e2146e62bd2c42dc12733fc41222de013",
+    "local_snapshot_name": "crewai.md"
+  },
+  {
+    "name": "agno",
+    "url": "https://raw.githubusercontent.com/agno-agi/agno/main/README.md",
+    "bytes": 4960,
+    "accessed_date": "2026-10-14",
+    "sha256": "ee04510fcc6e82fa87258c3bba766da73bbffd1f8bd8a2320babee8bc291ff30",
+    "local_snapshot_name": "agno.md"
+  }
+]
