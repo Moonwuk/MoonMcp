@@ -72,6 +72,12 @@ Measure precision/recall, requests, duration and cost on vulnerable, patched and
 noisy fixtures. Add agent-level benchmark runs, scope-violation invariants,
 resume/cancellation tests and reproducible versioned results.
 
+For a later research layer, see the
+[experimental discovery roadmap](EXPERIMENTAL_DISCOVERY_ROADMAP.md): controlled
+event order and faults, interpretation boundaries, guided input search,
+compositional proofs and diagnosis of missed vulnerabilities. Its implementation
+gates depend on the earlier discovery proposals; this link marks no work done.
+
 ## Skill-methodology assessment
 
 The [obra/superpowers](https://github.com/obra/superpowers) methodology is useful
