@@ -37,7 +37,7 @@ async def test_pipeline_text_keeps_legacy_schema_and_wire_shape(monkeypatch, tmp
     assert isinstance(await exports["list_queue"](), str)
     before = await exports["list_queue"]()
     protocol = await application.call_tool("list_queue", {})
-    assert protocol[0].text == before
+    assert protocol.content[0].text == before
     described = next(t for t in await application.list_tools() if t.name == "list_queue")
     assert described.outputSchema is None
     assert sdk.output_schema(sdk.get_registered(application, "list_queue")) is None
@@ -51,7 +51,7 @@ def test_family_imports_are_safe_without_loading_server(tmp_path):
     environment = dict(os.environ, MOONMCP_STATE_DIR=str(tmp_path / "unused-state"))
     code = """
 import json, sys
-from moonmcp.families import knowledge, memory, pipeline, reporting, runs
+from moonmcp.families import knowledge, memory, pipeline, reporting, runs, passive, network, infrastructure
 print(json.dumps({'server_loaded': 'moonmcp.server' in sys.modules}))
 """
     completed = subprocess.run([sys.executable, "-c", code], env=environment, check=True,
@@ -61,7 +61,8 @@ print(json.dumps({'server_loaded': 'moonmcp.server' in sys.modules}))
 
 
 def test_extracted_tools_remain_available_as_python_server_exports():
-    for name in ("injection_info", "memory_brief", "run_start", "add_finding", "list_queue"):
+    for name in ("injection_info", "memory_brief", "run_start", "add_finding", "list_queue",
+                 "http_probe", "cve_lookup", "edge_map"):
         registered = sdk.get_registered(server.mcp, name)
         assert registered.fn is getattr(server, name)
         assert registered.fn.__module__.startswith("moonmcp.families.")

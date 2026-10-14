@@ -2,7 +2,7 @@
 
 Run with the wheel environment's Python: ``python -I scripts/mcp_smoke.py``.
 The server runs from a temporary cwd with isolated state and Python import paths.
-Only local reference lookup and a deliberately invalid run lookup are invoked.
+Only local reference/target lookups and deliberately invalid calls are invoked.
 """
 
 from __future__ import annotations
@@ -52,10 +52,20 @@ async def smoke(workdir: Path) -> dict:
             assert invalid.structuredContent is not None
             assert invalid.structuredContent["error"] == "invalid_input"
             assert json.loads(invalid.content[0].text) == invalid.structuredContent
+            assert reference.meta["moonmcp.result"]["state"] == "completed"
+            assert invalid.meta["moonmcp.result"]["error"]["code"] == "invalid_input"
+            textual = await session.call_tool("get_target", {"name": "moonmcp-smoke-missing-target"})
+            assert textual.isError
+            assert textual.structuredContent is None
+            assert textual.meta["moonmcp.result"]["error"]["code"] == "not_found"
+            bad_args = await session.call_tool("http_probe", {})
+            assert bad_args.isError
+            assert bad_args.meta["moonmcp.result"]["error"]["code"] == "invalid_input"
+
 
     return {"server": initialized.serverInfo.name, "tools": len(names),
             "installed_package": str(installed_path), "structured_success": True,
-            "structured_error": True, "checks": ["local_reference", "missing_run"]}
+            "structured_error": True, "checks": ["local_reference", "missing_run", "text_error", "argument_error"]}
 
 
 def main() -> None:

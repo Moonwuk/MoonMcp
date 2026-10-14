@@ -20,3 +20,13 @@ def local_registration(mcp: Any, safe_tool: Callable, exported: dict, *,
         exported[fn.__name__] = wrapped
         return wrapped
     return local
+
+
+def object_payload(value: object) -> dict[str, Any]:
+    """Serialize a detector dataclass whose tool contract requires an object."""
+    from ..context import to_dict
+
+    payload = to_dict(value)
+    if not isinstance(payload, dict):
+        raise TypeError("Expected an object tool payload")
+    return payload

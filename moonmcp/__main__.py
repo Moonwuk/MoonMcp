@@ -60,17 +60,25 @@ def _cmd_tools(as_json: bool) -> int:
     return 0
 
 
-def _cmd_call(tool: str, json_args: str | None, kv_args: list[str]) -> int:
+def _cmd_call(tool: str, json_args: str | None, kv_args: list[str], *,
+              with_envelope: bool = False) -> int:
     import asyncio
     import json
 
+    from mcp.server.fastmcp.exceptions import ToolError
+    from pydantic import ValidationError
+
+    from .outcomes import envelope, failure
     from .server import mcp
 
-    registry = {t.name: t for t in sdk.list_registered(mcp)}
+    def emit(value: object) -> None:
+        print(json.dumps(envelope(value) if with_envelope else value, default=str, indent=2))
+
+    registry = sdk.registered_tools(mcp)
     if tool not in registry:
-        print(json.dumps({"error": "unknown_tool",
-                          "detail": f"{tool!r} is not exposed (check MOONMCP_PROFILE)",
-                          "known": sorted(registry)}, indent=2))
+        emit({"error": "unknown_tool",
+              "detail": f"{tool!r} is not exposed (check MOONMCP_PROFILE)",
+              "known": sorted(registry)})
         return 2
 
     kwargs: dict = {}
@@ -78,31 +86,29 @@ def _cmd_call(tool: str, json_args: str | None, kv_args: list[str]) -> int:
         try:
             parsed = json.loads(json_args)
         except json.JSONDecodeError as exc:
-            print(json.dumps({"error": "bad_json", "detail": str(exc)}))
+            emit({"error": "bad_json", "detail": str(exc)})
             return 2
         if not isinstance(parsed, dict):
-            print(json.dumps({"error": "bad_json", "detail": "--json must be a JSON object"}))
+            emit({"error": "bad_json", "detail": "--json must be a JSON object"})
             return 2
         kwargs.update(parsed)
     for kv in kv_args:
         if "=" not in kv:
-            print(json.dumps({"error": "bad_arg", "detail": f"expected K=V, got {kv!r}"}))
+            emit({"error": "bad_arg", "detail": f"expected K=V, got {kv!r}"})
             return 2
         k, v = kv.split("=", 1)
         kwargs[k] = _coerce(v)
 
-    fn = registry[tool].fn
     try:
-        result = asyncio.run(fn(**kwargs))
-    except TypeError as exc:  # bad argument names/shape
-        print(json.dumps({"error": "bad_args", "detail": str(exc)}))
-        return 2
+        result = asyncio.run(sdk.call_registered(mcp, tool, kwargs))
+    except ToolError as exc:
+        invalid = isinstance(exc.__cause__, (ValidationError, sdk.ArgumentError))
+        emit({"error": "invalid_input" if invalid else "internal_error", "detail": str(exc)})
+        return 2 if invalid else 1
     except Exception as exc:  # noqa: BLE001 - surface, don't crash the shell caller
-        print(json.dumps({"error": "call_failed", "detail": f"{type(exc).__name__}: {exc}"}))
+        emit({"error": "internal_error", "detail": f"{type(exc).__name__}: {exc}"})
         return 1
-    print(json.dumps(result, default=str, indent=2))
-    from .outcomes import failure
-
+    emit(result)
     return 1 if failure(result) else 0
 
 
@@ -120,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     p_tools = sub.add_parser("tools", help="List the exposed MCP tools (respects MOONMCP_PROFILE).")
     p_tools.add_argument("--json", action="store_true", help="Emit JSON.")
     p_call = sub.add_parser("call", help="Invoke one tool non-interactively and print JSON.")
+    p_call.add_argument("--envelope", action="store_true",
+                        help="Emit versioned execution status, error and original data.")
     p_call.add_argument("tool", help="Tool name (see `moonmcp tools`).")
     p_call.add_argument("--json", dest="json_args", metavar="OBJ",
                         help="JSON object of arguments, e.g. '{\"target\":\"x\"}'.")
@@ -149,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "tools":
         return _cmd_tools(args.json)
     if args.cmd == "call":
-        return _cmd_call(args.tool, args.json_args, args.arg)
+        return _cmd_call(args.tool, args.json_args, args.arg, with_envelope=args.envelope)
 
     # Default: serve over stdio. Import lazily so --version/--check/tools stay fast.
     from .server import run

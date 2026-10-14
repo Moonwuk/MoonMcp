@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..memory import MemoryStore
-from ..outcomes import failure
+from ..outcomes import outcome
 from ..strix_adapted import AgentGraph
 
 if TYPE_CHECKING:
@@ -262,7 +262,8 @@ class BaseAgent:
                                  "recovery": "Await the tool in an asynchronous driver; "
                                              "run() accepts synchronous callbacks."}
                     else:
-                        failed = failure(value)
+                        observed = outcome(value)
+                        failed = observed.error
                         if failed is not None:
                             error = {"error": failed.code, "recovery": failed.recovery}
                         elif (value is False or getattr(value, "success", None) is False
@@ -273,8 +274,14 @@ class BaseAgent:
                             error = {"error": "action_failed"}
                         returned_state = (value.get("state") if isinstance(value, dict)
                                           else getattr(value, "state", None))
+                        if not observed.ok:
+                            returned_state = observed.state
                         if returned_state == "unknown":
                             state = "unknown"
+                        elif returned_state == "partial":
+                            state = "partial"
+                        elif index == 0 and returned_state in {"blocked", "cancelled"}:
+                            state = returned_state
                 except Exception as exc:
                     logger.exception("Action %d failed for %s", index, self.agent_id)
                     error = {"error": "callback_exception", "exception_type": type(exc).__name__}

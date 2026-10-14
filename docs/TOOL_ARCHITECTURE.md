@@ -26,19 +26,24 @@ flowchart LR
 | `toolspec.py` | Sanitized capabilities and descriptions combining policy metadata with actual registered schemas/gates |
 | `execution.py` | Validation, receipts, budgeting, target/auth binding, cancellation and replay; policy sets are derived views |
 | `sdk.py` | SDK manager/function-metadata access, native validation and conversion, profile removal and protocol adapter |
-| `outcomes.py` | Failure classification; the previous `MoonMCPFastMCP` import remains available for Python callers |
+| `outcomes.py` | Versioned execution status, error classification, legacy text errors and exception guard; compatibility imports remain available |
 | `families/knowledge.py` | Offline reference and signature lookup tools |
 | `families/memory.py` | Shared memory and lessons |
 | `families/runs.py` | Run/task/budget/artifact control tools |
 | `families/reporting.py` | Findings, labels, scoring, exports and surface snapshots |
 | `families/pipeline.py` | Existing local Hermes pipeline tools |
+| `families/passive.py` | 15 OSINT, public research and reference handlers |
+| `families/network.py` | 6 basic DNS/HTTP/TLS, header, fingerprint and well-known handlers |
+| `families/infrastructure.py` | 7 backend, DNS, host routing, throttling, TLS, edge and raw HTTP handlers |
 | `agent_tools.py` | Flags, hypotheses, managed dispatch and recovery tools |
 | `server.py` | Composition, authorization wrappers, resources/prompts and remaining network families |
 
-The five extracted families contain 61 tool handlers. Their imports do not load
+The eight extracted families contain 89 tool handlers. Their imports do not load
 the server or construct application state. Each `register` binds the supplied
 context getter to that server instance, so separate registrations do not share
-their memory context. `server.py` re-exports the registered Python callables to
+their application context. Network registrations receive the context getter and
+scope gates explicitly; imports never pull in `server.py`. Bind gates and clients
+to the same context when composing an additional server. `server.py` re-exports the registered Python callables to
 retain existing imports and internal composite calls.
 
 All families register before profile filtering. Compact filtering controls
@@ -75,7 +80,9 @@ Managed calls retain the existing `ok/state/error/data` envelope. Existing direc
 tool payloads remain compatible, including text returned by pipeline tools.
 Pipeline annotations now accurately say `str`; explicit unstructured registration
 preserves their prior text content and absence of an output schema. New typed
-output schemas still go through SDK validation.
+output schemas still go through SDK validation. Every protocol result also exposes
+[the versioned execution outcome](TOOL_OUTCOMES.md), including text errors and
+validation failures. CLI clients can opt into the same envelope with `--envelope`.
 
 Before extraction, the full public definitions and policy metadata were captured
 from the running server. Comparison after refactoring found identical definitions
@@ -88,7 +95,7 @@ Run `ruff check .`, `mypy moonmcp`, and the normal pytest coverage gate. Build a
 wheel and run `python -I scripts/mcp_smoke.py` using the isolated environment
 where that wheel is installed; the smoke rejects importing the source checkout.
 
-Remaining work includes extracting the network families, consolidating legacy
-payloads through a versioned contract, independent retrieval/investigation
-benchmarks, and metering additional transports. This refactor preserves the
+Remaining work includes extracting the browser, scanner, web-probe and composite
+network families, making swallowed partial failures explicit in legacy producers,
+independent retrieval/investigation benchmarks, and metering additional transports. This refactor preserves the
 current accounting boundary and does not claim those extensions are implemented.
