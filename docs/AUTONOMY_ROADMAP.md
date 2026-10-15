@@ -9,6 +9,20 @@ For a discovery-focused delivery sequence, see the
 It defines a BOLA-first vertical slice, proof requirements, fixture-based
 evaluation and acceptance gates while reusing these autonomy foundations.
 
+## Implementation reconciliation (2026-10-15)
+
+Read the [source-based capability audit](CAPABILITY_AUDIT_2026-10-15.md) before
+turning historical stages into implementation tasks. Registry extraction,
+managed HTTP accounting, leases/recovery, Docker execution, browser actions,
+agent scaffolding and other primitives already exist; their coverage and safety
+limits differ. The audit identifies the remaining integration and proof work,
+not blanket completion of the stages below.
+
+The [faithful research environments roadmap](RESEARCH_ENVIRONMENT_ROADMAP.md)
+reuses and hardens those pieces to prepare applications, validate harness fidelity
+and preserve portable proofs. It is a parallel practical track, not a requirement
+to implement every advanced research proposal first.
+
 ## Delivered foundation
 
 - Persistent SQLite runs with pause/resume/cancel/fail states.
