@@ -19,6 +19,8 @@ from .strix_adapted import DockerSandbox
 IMAGE = "python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 APP = Path(__file__).with_name("research_app.py")
 LABEL = "moonmcp.research"
+PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY",
+              "http_proxy", "https_proxy", "all_proxy", "no_proxy", "ftp_proxy")
 
 
 def bounded_command(args: list[str], *, timeout: float = 30, capture_output=True,
@@ -173,6 +175,9 @@ class ResearchSandbox(DockerSandbox):
                       "--user", "65532:65532", "--read-only", "--cap-drop", "ALL",
                       "--security-opt", "no-new-privileges", "--pids-limit", "32",
                       "--memory", "128m", "--cpus", "0.5", "--log-driver", "none",
+                      # Docker CLI can inject proxy credentials from config.json
+                      # even without explicit env forwarding. Override all forms.
+                      *[arg for key in PROXY_KEYS for arg in ("--env", key + "=")],
                       "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m,mode=1777",
                       "--mount", f"type=bind,src={APP.resolve()},dst=/app.py,readonly",
                       "--mount", f"type=bind,src={self.directory.resolve()},dst=/exchange",

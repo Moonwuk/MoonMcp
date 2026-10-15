@@ -50,7 +50,13 @@ async def test_portable_capsule_replays_into_a_new_store_with_new_identities(tmp
     assert a["owner"] != b["owner"] and a["observer"] != b["observer"]
 
 
-def test_real_runtime_has_no_egress_readonly_root_and_bounded_exec(tmp_path):
+def test_real_runtime_has_no_egress_readonly_root_and_bounded_exec(tmp_path, monkeypatch):
+    docker_config = tmp_path / "docker-config"
+    docker_config.mkdir()
+    (docker_config / "config.json").write_text(json.dumps({"proxies": {"default": {
+        "httpProxy": "http://synthetic:credential@127.0.0.1:9",
+        "httpsProxy": "http://synthetic:credential@127.0.0.1:9"}}}))
+    monkeypatch.setenv("DOCKER_CONFIG", str(docker_config))
     ident = uuid.uuid4().hex
     record = {"id": ident, "container": "moonmcp-lab-" + ident, "variant": "fixed"}
     box = ResearchSandbox(record, tmp_path)
@@ -58,6 +64,7 @@ def test_real_runtime_has_no_egress_readonly_root_and_bounded_exec(tmp_path):
         assert box.start()["settings"]["network"] == "none"
         program = """import os,socket
 assert os.getuid()==65532
+assert not any(value for key,value in os.environ.items() if key.lower().endswith('_proxy'))
 assert [name for _,name in socket.if_nameindex()]==['lo']
 try:
  open('/unexpected','w')
