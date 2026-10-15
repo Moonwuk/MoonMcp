@@ -1,15 +1,19 @@
-# Reproducible local HTTP research recipe
+# Reproducible local HTTP research recipes
 
-`research_environment` adds one opt-in, synthetic SQLite orders application. It
+`research_environment` supports two opt-in, synthetic SQLite applications. It
 prepares fresh accounts and objects through HTTP, exercises the private-read
-verifier, saves evidence, and removes the environment. It implements a bounded
+verifier, saves evidence, and removes the environment. Neither application is a
+third-party production project. It implements a bounded
 part of IP-06/IP-07 in PR #21; it does not complete the general research environment
 roadmap or measure autonomous vulnerability discovery (IP-08).
 
 ## Agent workflow
 
 1. Call `research_environment(action="describe")`. This is local, side-effect-free
-   discovery. Select one of the returned capsules: `private_vulnerable`,
+   discovery and returns the available recipe IDs. The default is `sqlite-orders-v1`
+   (Bearer sessions). For WSGI notes with cookie sessions and CSRF, call
+   `research_environment(action="describe", recipe="sqlite-notes-v1")`.
+   Select one of the four returned capsules for the chosen recipe: `private_vulnerable`,
    `private_fixed`, `public`, or `shared`.
 2. Prepare local Linux Docker and persistent `MOONMCP_STATE_DIR`. Explicitly preload
    the image shown below. The tool never pulls images or runs an arbitrary project.
@@ -53,19 +57,50 @@ stable repeated owner reads using the existing verifier.
 Expected labels come from the builtin case definition, separately from the observed
 HTTP verdict. They are deliberately known synthetic cases, not a hidden discovery
 benchmark. An identical capsule can be repeated in another persistent store, without
-reusing state from the original run. The installed recipe validates every capsule
+reusing state from the original run. Original orders capsules remain compatible. Replay chooses the recipe from its
+validated capsule; the `recipe` argument selects only description. The installed
+recipe validates every capsule
 field, including the application source SHA-256 and image digest. A changed recipe
 requires a newly generated capsule; unsupported fields are refused before side effects.
 The recipe's HTTP client also ignores ambient proxy and impersonation settings, so
 its temporary credentials stay on the local application connection.
 
-Preparation and verification have separate durable invocation receipts, request counts
-and elapsed times. Every actual HTTP dispatch reserves budget through the common
+HTTP preparation and verification have separate durable invocation receipts, request
+counts and elapsed times. `metrics.runtime` and `metrics.cleanup` additionally include
+startup/removal wall time with zero HTTP dispatches (not zero computational cost).
+Top-level `elapsed_seconds` includes admission, startup, HTTP phases and cleanup up
+to result finalization. These measurements are not model token usage or discovery gains. Every actual HTTP dispatch reserves budget through the common
 `HttpClient` boundary. Readiness failures count too. Per replay: 32 HTTP dispatches,
 two phases, and 180 seconds for preparation plus verification. Cleanup has separate
 bounded command deadlines and remains available when that budget is exhausted.
 The running controller checks its task/run lease each second, so pausing/cancelling
 its run also stops work and initiates cleanup.
+
+## Cookie sessions and the invalid-harness control
+
+The notes recipe uses a separate WSGI stack: session middleware resolves a cookie
+against SQLite, object-policy middleware enforces private/shared/public access, and
+the domain handler performs the read. Setup validates an exact local `Set-Cookie`
+contract, exercises CSRF rejection, logs the observer out, confirms the old cookie
+receives 401, logs in again and checks both live identities. Forged identity headers
+also receive 401. The subsequent proof carries only explicit owner/observer cookie
+headers; no shared cookie jar, raw session values or CSRF tokens enter the artifacts.
+The `research_prepare` artifact records which HTTP preconditions were checked and
+that this admitted setup used no substitutions or instrumentation.
+
+An intentionally invalid test harness calls the notes domain handler directly,
+removing both middleware layers. It receives the same private object (verified by
+matching the owner's response digest). With the middleware intact, the real HTTP
+observer receives 403 and the verifier returns `not_verified`. The positive internal
+observation stays classified as `harness_only` in the test artifact; it is not a
+remote application finding. Normal owner reads must continue to work in the fixed
+case, so disabling the entire feature cannot satisfy this control.
+
+This is a concrete negative control for the approved entry point, not a universal
+harness-fidelity detector. The MCP API does not accept arbitrary harnesses. Likewise,
+if the observer's cookie is revoked before proof, identity validation yields
+`inconclusive`; the run retains incomplete evidence instead of reporting a clean
+negative. Future third-party adapters need their own normal-flow and bypass controls.
 
 ## Runtime constraints and cleanup
 
@@ -105,7 +140,7 @@ are removed. A failed cleanup retains the resource record for later reconciliati
 
 Docker shares the host kernel: these constraints do not make arbitrary hostile
 projects safe. The writable socket directory is narrowly exposed to this trusted
-fixture, not a general filesystem sandbox. Only the builtin recipe is admitted.
+fixture, not a general filesystem sandbox. Only the two builtin recipes are admitted.
 There is no persistent service, arbitrary command tool, production credential import,
 general project deployment, browser-based workflow, or automatic agent benchmark.
 Legacy `sandbox_exec` remains outside managed execution; its configurable Python
@@ -116,9 +151,14 @@ adapter has not acquired the stricter recipe's guarantees.
 `tests/test_research.py` covers capsule rejection, side-effect-free previews, durable
 intent, output/time bounds, ownership failures, cancellation/startup ordering, lease
 and host-lock recovery, request budget exhaustion, and the managed-dispatch boundary.
-`tests/test_research_live.py` runs real Docker/HTTP/SQLite cases, independently repeats a
-capsule with fresh state, checks denied egress and root writes, checks output overflow,
-and kills a worker process after startup to exercise orphan cleanup. Enable it with:
+`tests/test_research_notes.py` adds cookie admission, normal session/CSRF behavior,
+and a deliberately invalid middleware-bypassing harness.
+`tests/test_research_live.py` runs real Docker/HTTP/SQLite cases and fresh independent
+capsule repetitions for both apps, checks denied egress/root writes and output
+overflow, and kills workers after startup to exercise orphan cleanup for both recipes.
+It also reproduces the invalid internal harness against the same Docker database and
+compares it with a complete normal HTTP proof; a separate live session-revocation
+case must retain inconclusive evidence and a blocked task after cleanup. Enable it with:
 
 ```sh
 MOONMCP_TEST_DOCKER=1 pytest -q tests/test_research_live.py

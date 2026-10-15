@@ -82,8 +82,14 @@ The legacy heuristic mode remains available, with honest incomplete outcomes.
 The follow-up [local HTTP/SQLite research recipe](RESEARCH_REPLAY.md) now supplies a
 strict opt-in adapter with a pinned image, durable resource records, bounded output,
 checked cleanup, and fresh capsule replay against a separate application process.
-The table below describes the original verification delivery; the follow-up remains
-limited to one synthetic recipe and does not complete IP-07/IP-08.
+The table below describes the original verification delivery; the first follow-up
+was limited to one synthetic recipe and did not complete IP-07/IP-08.
+
+A subsequent extension admits a second WSGI/cookie recipe and checks a deliberately
+invalid middleware-bypassing harness against the same object through normal HTTP.
+Both recipes now have fresh independent replay and crash-recovery controls. This
+extends the IP-07 evidence; arbitrary project preparation and IP-08 model comparisons
+remain outstanding. See the replay guide for exact entry points and limitations.
 
 | Bundle | Delivered here | Still outside this delivery |
 | --- | --- | --- |

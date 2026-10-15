@@ -1,4 +1,4 @@
-"""Opt-in, single-recipe HTTP replay with durable intent and checked cleanup.
+"""Opt-in, fixed-recipe HTTP replay with durable intent and checked cleanup.
 
 This controller prepares a synthetic fixture. It is not an autonomous discovery
 agent or an arbitrary project runner. Portable capsules are data, never code.
@@ -19,35 +19,41 @@ from urllib.parse import urlsplit
 from .execution import current_execution
 from .net.http import HttpClient
 from .net.ratelimit import Governor
-from .research_runtime import APP, IMAGE, HTTPRelay, ResearchSandbox
+from .research_recipes import DEFAULT_RECIPE, IMAGE, recipe, recipes
+from .research_runtime import HTTPRelay, ResearchSandbox
+from .research_setup import prepare as prepare_application
 from .runs import RunBudget, RunStore
 from .web.bola_proof import verify_private_read
 
 CASES = {"private_vulnerable", "private_fixed", "public", "shared"}
-RECIPE = "sqlite-orders-v1"
+RECIPE = DEFAULT_RECIPE
 
 
-def capsule(case: str) -> dict:
+def capsule(case: str, recipe_id: str = RECIPE) -> dict:
+    definition = recipe(recipe_id)
     if case not in CASES:
         raise ValueError("Unsupported recipe case")
-    return {"version": 1, "recipe": RECIPE, "case": case, "image": IMAGE,
-            "application_sha256": hashlib.sha256(APP.read_bytes()).hexdigest(),
+    return {"version": 1, "recipe": definition.id, "case": case, "image": IMAGE,
+            "application_sha256": hashlib.sha256(definition.app.read_bytes()).hexdigest(),
             "entrypoint": "normal_http", "storage": "sqlite"}
 
 
 def validate_capsule(value: dict) -> dict:
-    if not isinstance(value, dict) or not isinstance(value.get("case"), str):
+    if (not isinstance(value, dict) or not isinstance(value.get("case"), str)
+            or not isinstance(value.get("recipe"), str)):
         raise ValueError("Capsule must identify a supported case")
-    expected = capsule(value["case"])
+    expected = capsule(value["case"], value["recipe"])
     if (set(value) != set(expected) or type(value.get("version")) is not int
             or value != expected):
         raise ValueError("Capsule does not match the installed trusted recipe")
     return expected
 
 
-def describe() -> dict:
-    return {"ok": True, "recipe": RECIPE, "cases": sorted(CASES),
-            "capsules": [capsule(case) for case in sorted(CASES)],
+def describe(recipe_id: str = RECIPE) -> dict:
+    definition = recipe(recipe_id)
+    return {"ok": True, "recipe": definition.id,
+            "recipes": [{"id": r.id, "authentication": r.authentication, "resource_type": r.resource_type} for r in recipes()], "cases": sorted(CASES),
+            "capsules": [capsule(case, recipe_id) for case in sorted(CASES)],
             "requires": ["execute=true", "persistent MOONMCP_STATE_DIR", "local Linux Docker",
                          f"preloaded image: {IMAGE}"],
             "limits": {"concurrent_per_state_dir": 1, "wall_seconds": 180,
@@ -100,7 +106,9 @@ async def _settle(task: asyncio.Task, on_cancel=None):
 
 
 async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> dict:
+    started_at = time.monotonic()
     manifest = validate_capsule(manifest)
+    definition = recipe(manifest["recipe"])
     if not execute:
         return {"ok": True, "executed": False, "capsule": manifest, "requirements": describe()["requires"]}
     if current_execution() is not None:
@@ -116,7 +124,7 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
     ident = uuid.uuid4().hex
     resource = {"version": 1, "id": ident, "container": f"moonmcp-lab-{ident}",
                 "variant": "vulnerable" if manifest["case"] == "private_vulnerable" else "fixed",
-                "task_id": task["id"], "recipe": RECIPE}
+                "task_id": task["id"], "recipe": definition.id}
     # Commit the resource identity BEFORE mkdir, Docker, relay or application I/O.
     ref = _artifact(store, run_id, "research_resource", resource)
     capsule_ref = _artifact(store, run_id, "research_capsule", manifest)
@@ -137,73 +145,24 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
                       connect_pin=lambda host: (None, "127.0.0.1"), before_send=admit, direct=True)
     prepared: dict = {}
 
-    async def request(path, *, method="GET", payload=None, token=None, status=200):
-        assert relay is not None
-        response = await http.fetch(relay.base_url + path, method=method,
-                                    headers={"Content-Type": "application/json", **(
-                                        {"Authorization": "Bearer " + token} if token else {})},
-                                    body=json.dumps(payload).encode() if payload is not None else None,
-                                    timeout=5, max_body=16384, follow_redirects=False,
-                                    suppress_auth=True)
-        if response.status != status or response.truncated or response.error:
-            raise ValueError("Normal HTTP workflow did not meet its contract")
-        return json.loads(response.body)
-
     async def prepare():
-        # Readiness is bounded and counts actual HTTP dispatches, including failures.
-        for attempt in range(10):
-            try:
-                if await request("/health") == {"ready": True, "storage": "sqlite"}:
-                    break
-            except ValueError:
-                if attempt == 9:
-                    raise
-            await asyncio.sleep(.1)
-        else:
-            raise ValueError("Application readiness was not established")
-        identities, tokens = [], []
-        for _ in range(2):
-            identity = {"subject": secrets.token_hex(12), "tenant": secrets.token_hex(12)}
-            password = secrets.token_urlsafe(32)
-            await request("/register", method="POST", payload={**identity, "password": password}, status=201)
-            logged = await request("/login", method="POST", payload={"subject": identity["subject"], "password": password})
-            identities.append(identity)
-            tokens.append(logged["token"])
-        visibility = manifest["case"] if manifest["case"] in {"public", "shared"} else "private"
-        secret = secrets.token_urlsafe(32)
-        created = await request("/orders", method="POST", token=tokens[0], status=201,
-                                payload={"secret": secret, "visibility": visibility,
-                                         "shared_with": identities[1]["subject"] if visibility == "shared" else ""})
-        path = "/orders/" + created["id"]
-        normal = await request(path, token=tokens[0])
-        expected = {"id": created["id"], "type": "order", "owner": identities[0]["subject"],
-                    "tenant": identities[0]["tenant"]}
-        if any(normal.get(k) != v for k, v in {**expected, "secret": secret}.items()):
-            raise ValueError("Normal create/read did not preserve the bound object")
-        await request(path, status=401)  # middleware is exercised, never bypassed
-        if visibility != "private":
-            allowed = await request(path, token=tokens[1])
-            if allowed.get("secret") != secret:
-                raise ValueError("Permitted observer cannot read the shared/public object")
-        prepared.update(tokens=tokens, identities=identities, path=path, resource=expected,
-                        visibility=visibility)
-        return {"ok": True, "state": "completed", "normal_create_read": True,
-                "anonymous_denied": True, "setup_entrypoint": "normal_http",
-                "database": "sqlite", "credentials_persisted": False}
+        assert relay is not None
+        prepared.update(await prepare_application(http, relay.base_url, definition, manifest["case"]))
+        return prepared["witness"]
 
     async def verify():
         assert relay is not None
         a, b = prepared["identities"]
         spec = {"version": 1, "owner": a, "observer": b, "resource": prepared["resource"],
-                "identity_url": relay.base_url + "/me",
-                "control_url": relay.base_url + "/orders/missing-" + secrets.token_hex(12),
+                "identity_url": relay.base_url + definition.identity,
+                "control_url": relay.base_url + definition.collection + "/missing-" + secrets.token_hex(12),
                 "protected_fields": ["secret"],
-                "policy": {"id": RECIPE, "source": "builtin recipe: owner-only private reads",
+                "policy": {"id": definition.id, "source": "builtin recipe: owner-only private reads",
                            "visibility": prepared["visibility"], "allowed_subjects": [a["subject"]] + (
                                [b["subject"]] if prepared["visibility"] == "shared" else [])}}
         value = await verify_private_read(http, relay.base_url + prepared["path"], spec,
-                                          owner_headers={"Authorization": "Bearer " + prepared["tokens"][0]},
-                                          second_headers={"Authorization": "Bearer " + prepared["tokens"][1]},
+                                          owner_headers=prepared["headers"][0],
+                                          second_headers=prepared["headers"][1],
                                           scope_check=lambda url: urlsplit(url)[:2] == urlsplit(relay.base_url)[:2])
         return value
 
@@ -233,12 +192,16 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
 
     async def work():
         nonlocal relay
+        runtime_started = time.monotonic()
         start = asyncio.create_task(asyncio.to_thread(sandbox.start))
         try:
             settings = await asyncio.shield(start)
         finally:
             # A cancelled await does not stop a Docker CLI thread.
-            await _settle(start)
+            try:
+                await _settle(start)
+            finally:
+                metrics["runtime"] = {"requests": 0, "elapsed_seconds": round(time.monotonic() - runtime_started, 3)}
         result["runtime"] = settings
         relay = HTTPRelay(sandbox.directory / "app.sock")
         await phase("prepare", prepare)
@@ -279,10 +242,12 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
                 result.update(ok=False, state="unknown", error="research_interrupted",
                               failure_type=type(exc).__name__)
             finally:
+                cleanup_started = time.monotonic()
                 if relay is not None:
                     relay.close()
                 cleanup_task = asyncio.create_task(asyncio.to_thread(ResearchSandbox(resource, root).cleanup))
                 cleanup_result = await _settle(cleanup_task, mark_interrupted)
+                metrics["cleanup"] = {"requests": 0, "elapsed_seconds": round(time.monotonic() - cleanup_started, 3)}
                 result["cleanup"] = cleanup_result
                 result["cleanup_artifact"] = _artifact(store, run_id, "research_cleanup", cleanup_result)
                 if not cleanup_result["ok"]:
@@ -291,6 +256,7 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
         result.update(ok=False, state="unknown", error="research_admission_failed", failure_type=type(exc).__name__)
     finally:
         result["metrics"] = metrics
+        result["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
         try:
             store.heartbeat(task["id"], **lease, lease_seconds=60)
         except ValueError:
@@ -318,8 +284,9 @@ async def cleanup(store: RunStore, run_id: str, artifact_id: int) -> dict:
     if artifact["kind"] != "research_resource":
         raise ValueError("Expected a research_resource artifact")
     resource = json.loads(artifact["content"])
-    if resource.get("version") != 1 or resource.get("recipe") != RECIPE:
+    if resource.get("version") != 1:
         raise ValueError("Unsupported resource record")
+    recipe(resource.get("recipe"))
     task = store.task(resource["task_id"])
     if task["run_id"] != run_id:
         raise ValueError("Resource task belongs to another run")
