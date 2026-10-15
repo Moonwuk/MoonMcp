@@ -128,6 +128,8 @@ See the source and documentation for specialised integrations and provider-speci
 
 The repository contains detailed reference material for areas that would make this README unnecessarily large:
 
+- [Capability audit and roadmap reconciliation (2026-10-15)](docs/CAPABILITY_AUDIT_2026-10-15.md)
+- [Faithful research environments roadmap (proposal)](docs/RESEARCH_ENVIRONMENT_ROADMAP.md)
 - [Research and design notes](docs/RESEARCH.md)
 - [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
 - [Evidence-driven vulnerability discovery roadmap (proposal)](docs/VULNERABILITY_DISCOVERY_ROADMAP.md)
