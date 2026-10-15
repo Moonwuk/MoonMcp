@@ -158,7 +158,17 @@ async def verify_private_read(client, target: str, spec: dict, *, owner_headers:
     if observed_response is None:
         return finished()
     denied = observed_response.status in {401, 403, 404}
-    observed = None if denied else read_json(observed_response, "observer_object")
+    if denied:
+        # An error status does not undo a leak in the response body. Ordinary
+        # non-JSON denials remain valid negative observations, not parse failures.
+        try:
+            data = json.loads(observed_response.body)
+            _digest(data)
+            observed = data if isinstance(data, dict) else None
+        except (ValueError, UnicodeError, RecursionError):
+            observed = None
+    else:
+        observed = read_json(observed_response, "observer_object")
     if not denied and observed is None:
         return finished()
     control = await fetch(spec["control_url"], "missing_object_control", "observer")

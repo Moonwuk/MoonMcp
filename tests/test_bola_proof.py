@@ -105,6 +105,30 @@ async def test_same_prefix_with_different_protected_suffix_does_not_verify(monke
     assert not result["proof"]["verified"]
 
 
+async def test_forbidden_status_does_not_hide_a_private_body_leak(monkeypatch):
+    app = BolaApplication(vulnerable=True)
+    def transport(url, method, headers, *args):
+        response = app.transport(url, method, headers, *args)
+        if len(app.requests) == 4:
+            response.status = 403
+        return response
+    result = await verify(monkeypatch, app, transport=transport)
+    assert result["proof"]["verified"]
+    assert result["verdict"] == "verified"
+
+
+async def test_json_false_is_not_the_same_protected_value_as_zero(monkeypatch):
+    app = BolaApplication(vulnerable=True, secret=False)
+    def transport(url, method, headers, *args):
+        response = app.transport(url, method, headers, *args)
+        if len(app.requests) == 4:
+            body = json.loads(response.body)
+            body["secret"] = 0
+            response.body = json.dumps(body).encode()
+        return response
+    assert not (await verify(monkeypatch, app, transport=transport))["proof"]["verified"]
+
+
 @pytest.mark.parametrize("field,value", [("identity_url", "https://outside.test/me"),
                                         ("control_url", TARGET), ("version", 2)])
 async def test_invalid_proof_sends_nothing(monkeypatch, field, value):
@@ -191,3 +215,19 @@ async def test_cancellation_retains_unknown_receipt_without_retry(monkeypatch, m
         await task
     receipt = await execute_tool(managed, tools, run, "authz_probe", args, idempotency_key="stop")
     assert receipt["state"] == "unknown" and not receipt["retryable"]
+
+
+async def test_changed_auth_context_stops_remaining_verification(monkeypatch, managed):
+    app = BolaApplication(vulnerable=True)
+    def transport(url, method, headers, *args):
+        response = app.transport(url, method, headers, *args)
+        if len(app.requests) == 3:
+            managed.auth.set_bearer("changed-owner-token")
+        return response
+    monkeypatch.setattr(http, "_blocking_fetch", transport)
+    run = managed.runs.create("example.test")["id"]
+    receipt = await execute_tool(managed, sdk.registered_tools(server.mcp), run, "authz_probe",
+                                 {"target": TARGET, "second_headers": OBSERVER, "proof": manifest()})
+    assert not receipt["ok"] and receipt["error"] == "execution_context_changed"
+    assert not expand_result(managed, receipt)["data"]["proof"]["verified"]
+    assert len(app.requests) == 3
