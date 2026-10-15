@@ -43,6 +43,14 @@ information/authority-flow evidence and small-model counterexamples. It starts
 with an indirect-disclosure fixture and depends on applicable earlier discovery
 gates; it does not mark those proposals implemented or claim system-wide safety.
 
+## Probabilistic discovery after paired executions
+
+The [probabilistic discovery roadmap](PROBABILISTIC_DISCOVERY_ROADMAP.md) extends
+the relational proposal with distribution-level checks, cumulative transcripts,
+blind observer validation and persistent statistical error control. It starts
+with a fixed-horizon synthetic fixture; timing and AI-agent adapters are optional
+later work. Merged documentation does not satisfy its implementation gates.
+
 ## Remaining stages
 
 ### 1. Registry and contracts
