@@ -60,6 +60,8 @@ PASSIVE = {
     # Strix-adapted enhancement tools — pure logic, no traffic
     "deduplicate_findings", "render_finding_md",
     "proxy_manage", "sandbox_exec", "agent_tree", "export_csv",
+    # Fixed local recipe; no caller-selected network targets or commands.
+    "research_environment",
     # hermes-pipeline absorbed tools — local KB/SQLite/queue only
     "queue_task", "list_queue", "get_target", "list_targets",
     "search_bugbounty_reports", "list_report_categories",

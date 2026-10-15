@@ -5732,6 +5732,7 @@ from .families import network as _network_tools  # noqa: E402
 from .families import passive as _passive_tools  # noqa: E402
 from .families import pipeline as _pipeline_tools  # noqa: E402
 from .families import reporting as _reporting_tools  # noqa: E402
+from .families import research as _research_tools  # noqa: E402
 from .families import runs as _run_tools  # noqa: E402
 
 globals().update(_passive_tools.register(mcp, safe_tool, active_tool, get_context))
@@ -5744,6 +5745,7 @@ globals().update(_memory_tools.register(mcp, safe_tool, get_context, _host_key))
 globals().update(_pipeline_tools.register(mcp, safe_tool))
 globals().update(_reporting_tools.register(mcp, safe_tool, get_context, _host_key))
 globals().update(_run_tools.register(mcp, safe_tool, get_context))
+globals().update(_research_tools.register(mcp, safe_tool, get_context))
 
 from . import agent_tools as _agent_tools  # noqa: E402
 

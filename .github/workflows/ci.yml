@@ -51,6 +51,26 @@ jobs:
       - name: Exercise browser guards and normal navigation
         run: pytest -q tests/test_browser.py tests/test_browser_guards.py
 
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install research test dependencies
+        run: uv pip install --system -e ".[dev]"
+      - name: Preload the pinned trusted recipe image
+        run: >-
+          env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH
+          docker --host=unix:///var/run/docker.sock pull
+          python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+      - name: Exercise actual HTTP, SQLite, isolation, worker loss and cleanup
+        env:
+          MOONMCP_TEST_DOCKER: "1"
+        run: pytest -q tests/test_research_live.py
+
   smoke:
     runs-on: ubuntu-latest
     steps:

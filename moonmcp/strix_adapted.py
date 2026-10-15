@@ -853,6 +853,11 @@ class DockerSandbox:
         self._container_id: str | None = None
         self._execution_unknown = False
 
+    def _run(self, args, **kwargs):
+        """Execution seam for the bounded opt-in research adapter."""
+        import subprocess
+        return subprocess.run(args, **kwargs)
+
     def _check_docker(self) -> bool:
         """Check if Docker is available."""
         import shutil
@@ -869,14 +874,13 @@ class DockerSandbox:
                 "error": "Docker not installed or not in PATH",
                 "hint": "Install Docker: sudo apt install docker.io && sudo systemctl start docker",
             }
-        import subprocess
         try:
-            result = subprocess.run(
+            result = self._run(
                 ["docker", "image", "inspect", self.image],
                 capture_output=True, timeout=30,
             )
             if result.returncode != 0:
-                pull = subprocess.run(
+                pull = self._run(
                     ["docker", "pull", self.image],
                     capture_output=True, timeout=300,
                 )
@@ -900,7 +904,7 @@ class DockerSandbox:
             # Retain a usable resource locator if the CLI loses the run result.
             self._container_id = container_name
             self._execution_unknown = True
-            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            result = self._run(cmd, capture_output=True, timeout=60)
             if result.returncode != 0:
                 return {"success": False, "error": "sandbox_start_failed",
                         "container_id": container_name,
@@ -949,7 +953,7 @@ class DockerSandbox:
                                       "sandbox execution refused."}
         import subprocess
         try:
-            result = subprocess.run(
+            result = self._run(
                 ["docker", "exec", self._container_id, "sh", "-c", command],
                 capture_output=True, timeout=timeout,
             )
@@ -980,9 +984,8 @@ class DockerSandbox:
         """Stop and remove the sandbox container."""
         if not self._container_id:
             return {"success": False, "error": "No container to stop"}
-        import subprocess
         try:
-            removed = subprocess.run(["docker", "rm", "-f", self._container_id],
+            removed = self._run(["docker", "rm", "-f", self._container_id],
                                      capture_output=True, timeout=30)
             if removed.returncode != 0:
                 return {"success": False, "error": "cleanup_failed", "retryable": False,
@@ -1000,9 +1003,8 @@ class DockerSandbox:
         """Check sandbox container status."""
         if not self._container_id:
             return {"running": False, "container_id": None}
-        import subprocess
         try:
-            result = subprocess.run(
+            result = self._run(
                 ["docker", "inspect", "-f", "{{.State.Status}}", self._container_id],
                 capture_output=True, timeout=10,
             )

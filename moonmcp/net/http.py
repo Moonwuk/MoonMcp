@@ -205,13 +205,14 @@ def _blocking_fetch(
     verify_tls: bool,
     max_body: int,
     pinned_ip: str | None = None,
+    *, trust_env: bool = True,
 ) -> HttpResult:
     started = time.monotonic()
     req = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
     ctx = _trusted_context() if verify_tls else _insecure_context()
     # Pin the vetted IP for the connection unless a proxy owns this request's routing.
-    use_pin = pinned_ip if (pinned_ip and not _proxy_applies(url)) else None
-    opener = _build_opener(ctx, pinned_ip=use_pin)
+    use_pin = pinned_ip if (pinned_ip and (not trust_env or not _proxy_applies(url))) else None
+    opener = _build_opener(ctx, pinned_ip=use_pin, trust_env=trust_env)
     resp: HTTPResponse | None = None
     try:
         resp = opener.open(req, timeout=timeout)
@@ -416,7 +417,8 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
                             req, context=self._context)
 
 
-def _build_opener(ctx: ssl.SSLContext, pinned_ip: str | None = None) -> urllib.request.OpenerDirector:
+def _build_opener(ctx: ssl.SSLContext, pinned_ip: str | None = None, *,
+                  trust_env: bool = True) -> urllib.request.OpenerDirector:
     """An opener with ONLY http(s) handlers — never urllib's default FileHandler /
     FTPHandler / DataHandler, so a redirect (or crafted URL) to ``file://`` /
     ``ftp://`` / ``data:`` cannot smuggle a local-file read or a non-HTTP fetch past
@@ -431,7 +433,7 @@ def _build_opener(ctx: ssl.SSLContext, pinned_ip: str | None = None) -> urllib.r
                else urllib.request.HTTPSHandler(context=ctx))
     opener = urllib.request.OpenerDirector()
     for h in (
-        urllib.request.ProxyHandler(),
+        urllib.request.ProxyHandler(None if trust_env else {}),
         urllib.request.UnknownHandler(),
         http_h,
         https_h,
@@ -474,6 +476,8 @@ class HttpClient:
         opsec: object | None = None,
         proxy_rules: object | None = None,
         telemetry: object | None = None,
+        before_send: Callable[[str], None] | None = None,
+        direct: bool = False,
     ) -> None:
         self._gov = governor
         self._ua = user_agent
@@ -495,6 +499,12 @@ class HttpClient:
         # When set, apply_rules() runs before each request is sent.
         self._proxy_rules = proxy_rules
         self._telemetry = telemetry
+        # Fixed local research recipes use the same dispatch boundary for their
+        # durable request budget; this never replaces managed execution checks.
+        self._before_send = before_send
+        # Local recipes must never send their ephemeral credentials to an
+        # ambient proxy or inherit an optional browser-impersonation transport.
+        self._direct = direct
 
     async def fetch(
         self,
@@ -512,7 +522,7 @@ class HttpClient:
         suppress_auth: bool = False,
     ) -> HttpResult:
         merged: dict[str, str]
-        if _USE_CURL_CFFI:
+        if _USE_CURL_CFFI and not self._direct:
             # curl_cffi's impersonate= profile supplies the full browser header
             # set (User-Agent, sec-ch-ua, sec-fetch-*, Accept, Accept-Encoding,
             # Accept-Language, Priority, ...). We must NOT override those with
@@ -630,21 +640,25 @@ class HttpClient:
                 execution = current_execution()
                 if execution is not None:
                     execution.before_request(current)
+                if self._before_send is not None:
+                    self._before_send(current)
                 telemetry = self._telemetry
                 if telemetry is None and execution is not None:
                     telemetry = execution.ctx.telemetry
                 attempt_started = time.monotonic()
                 attempt_result: HttpResult | None = None
                 try:
-                    if _USE_CURL_CFFI:
+                    if _USE_CURL_CFFI and not self._direct:
                         permit.worker = asyncio.create_task(asyncio.to_thread(
                             _curl_cffi_fetch, current, method, merged, body,
                             timeout or self._timeout, verify_tls,
                             max_body or self._max_body, _IMPERSONATE_PROFILE, pinned_ip,
                         ))
                     else:
+                        transport = (functools.partial(_blocking_fetch, trust_env=False)
+                                     if self._direct else _blocking_fetch)
                         permit.worker = asyncio.create_task(asyncio.to_thread(
-                            _blocking_fetch, current, method, merged, body,
+                            transport, current, method, merged, body,
                             timeout or self._timeout, verify_tls,
                             max_body or self._max_body, pinned_ip,
                         ))
