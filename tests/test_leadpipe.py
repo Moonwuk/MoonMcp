@@ -20,6 +20,13 @@ def test_classify_unknown_kind_has_safe_default():
     assert r["family"] == "general" and r["route"] == "observe" and r["needs_strix"] is False
 
 
+def test_direct_bola_routes_to_existing_probe_with_explicit_missing_inputs():
+    plan = lp.confirmation_plan("direct_bola", "https://example.test/orders/100")
+    assert plan["route"] == "authz_probe"
+    assert plan["verification"]["required_arguments"] == ["proof", "second_headers"]
+    assert plan["verification"]["executed"] is False
+
+
 def test_confirmation_plan_shape_and_strix_brief_constraints():
     plan = lp.confirmation_plan("step_skip", "https://shop.test/checkout", "reached confirm cold")
     assert plan["family"] == "workflow" and plan["next_step"]

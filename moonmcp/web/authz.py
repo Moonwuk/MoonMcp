@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .checks import ProbeChecks
+
 _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # object ids in a response body: "id"/"*_id"/"uuid" JSON fields, and /segment/<id> hrefs.
 # NB: the UUID alternative comes BEFORE \d{1,12} so a UUID's leading digits aren't
@@ -125,8 +127,11 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                      max_refs: int = 8, scope_check=None) -> dict:
     """Run the three BOLA signals (direct / sibling sweep / multi-step chain), GET-only."""
 
-    async def fetch_as(u: str, *, headers=None, suppress_auth=False):
-        return await client.fetch(u, method="GET", headers=headers, suppress_auth=suppress_auth,
+    checks = ProbeChecks()
+
+    async def fetch_as(u: str, *, check="owner", identity="owner", headers=None, suppress_auth=False):
+        return await checks.fetch(client, u, check=check, identity=identity,
+                                  method="GET", headers=headers, suppress_auth=suppress_auth,
                                   follow_redirects=False, timeout=12.0, scope_check=scope_check)
 
     others: list[tuple[str, dict | None]] = []
@@ -136,14 +141,16 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
 
     findings: list[dict] = []
     a = await fetch_as(url)  # owner = current engagement auth
-    a_ok = looks_like_object(a.status, a.body)
+    a_ok = a is not None and looks_like_object(a.status, a.body)
+    if not a_ok:
+        checks.missing("owner_object", "owner_object_unavailable")
     refs = object_refs(url)[:max_refs]
 
     # Signal 1 — direct BOLA: another identity gets the SAME object from the SAME URL.
     if a_ok:
         for name, hdr in others:
-            r = await fetch_as(url, headers=hdr, suppress_auth=True)
-            if looks_like_object(r.status, r.body) and similar(a.body, r.body) >= 0.95:
+            r = await fetch_as(url, check="direct", identity=name, headers=hdr, suppress_auth=True)
+            if r is not None and looks_like_object(r.status, r.body) and similar(a.body, r.body) >= 0.95:
                 findings.append({
                     "kind": "direct_bola", "identity": name, "url": url,
                     "severity": "high", "verdict": "review",
@@ -156,8 +163,9 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
     for ref in refs:
         for sib in sibling_values(ref):
             swapped = with_ref(url, ref, sib)
-            r = await fetch_as(swapped, headers=sweeper_hdr, suppress_auth=True)
-            if looks_like_object(r.status, r.body):
+            r = await fetch_as(swapped, check="sibling", identity=sweeper_name,
+                               headers=sweeper_hdr, suppress_auth=True)
+            if r is not None and looks_like_object(r.status, r.body):
                 findings.append({
                     "kind": "sibling_idor", "identity": sweeper_name, "url": swapped,
                     "ref": ref.value, "reached": sib, "severity": "high", "verdict": "review",
@@ -174,8 +182,8 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
         for name, hdr in others:
             for v in owned:
                 swapped = with_ref(url, ref0, v)
-                r = await fetch_as(swapped, headers=hdr, suppress_auth=True)
-                if looks_like_object(r.status, r.body):
+                r = await fetch_as(swapped, check="chain", identity=name, headers=hdr, suppress_auth=True)
+                if r is not None and looks_like_object(r.status, r.body):
                     findings.append({
                         "kind": "multistep_bola", "identity": name, "url": swapped,
                         "owner_ref": v, "severity": "high", "verdict": "review",
@@ -184,7 +192,7 @@ async def probe_bola(client, url: str, *, b_headers: dict | None = None,
                     })
                     break
 
-    return {
+    return checks.finish({
         "target": url, "refs_found": [{"value": r.value, "where": r.where} for r in refs],
-        "findings": findings, "verdict": "review" if findings else "no_obvious_bola",
-    }
+        "findings": findings,
+    }, negative="no_obvious_bola")

@@ -11,6 +11,13 @@ injection via page content, browser fingerprinting, and resource cost.
 (Layer 7) uses `browser.py` and was audited there as safe-by-design (own
 ephemeral browser, no engagement auth, fresh random marker).
 
+**Reconciled 2026-10-15:** BR5 below was a conditional hypothesis, not a reproduced
+shared-instance defect; `browse` and `interact` already create/close a browser and
+context per call. Their routed HTTP guards are now shared, fail closed on handler
+or installation failure, and check redirects/subresources. See
+[implemented behavior and limits](../docs/VERIFIED_AUTHORIZATION.md); full browser
+transport accounting and protocol/resource isolation remain separate work.
+
 ---
 
 ## Module: `browser.py` (341 lines) — Playwright headless browser

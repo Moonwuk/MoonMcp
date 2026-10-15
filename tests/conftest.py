@@ -1010,7 +1010,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def local_server():
-    httpd = socketserver.TCPServer(("127.0.0.1", 0), _Handler)
+    # Chromium can preconnect while the route guard fetches the admitted request.
+    # An idle preconnection must not monopolise the fixture's accept loop.
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Handler)
+    httpd.daemon_threads = True
     port = httpd.server_address[1]
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -1018,6 +1021,7 @@ def local_server():
         yield f"http://127.0.0.1:{port}", port
     finally:
         httpd.shutdown()
+        httpd.server_close()
 
 
 @pytest.fixture()

@@ -11,6 +11,14 @@ error-envelope leak, or a missing audit trail.
 **Status as of 2026-07-27:** the `TOOL_NAME` import was added (server_status
 uses it). This roadmap covers what remains.
 
+**Reconciled 2026-10-15:** counts and implementation descriptions below are historical.
+Registration is partly extracted into families and SDK compatibility is isolated
+in `sdk.py`. Profile removal now uses public `remove_tool`; the adapter still reads
+private SDK metadata, so SV4 needs that narrower follow-up. The server monolith
+and remaining family extraction are still open. Shared execution outcomes and
+selected composite-producer repairs are documented in
+[TOOL_OUTCOMES.md](../docs/TOOL_OUTCOMES.md).
+
 ---
 
 ## Headline findings

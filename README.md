@@ -137,6 +137,7 @@ The repository contains detailed reference material for areas that would make th
 - [Agent workflow: tools, flags, hypotheses and recovery](docs/AGENT_WORKFLOW.md)
 - [Tool registry and registration architecture](docs/TOOL_ARCHITECTURE.md)
 - [Execution results and errors: versioned contract](docs/TOOL_OUTCOMES.md)
+- [Implemented private-object verification, agent workflow and remaining limits](docs/VERIFIED_AUTHORIZATION.md)
 - [Relational vulnerability discovery roadmap (fourth-stage proposal)](docs/RELATIONAL_DISCOVERY_ROADMAP.md)
 - [Probabilistic vulnerability discovery roadmap (fifth-stage proposal)](docs/PROBABILISTIC_DISCOVERY_ROADMAP.md)
 - [Research into comparable flag and hypothesis systems](docs/FLAG_SYSTEM_RESEARCH.md)

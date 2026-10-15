@@ -10,6 +10,13 @@ growth, a trust-tag enforcement gap, or a silent routing failure.
 
 **Status as of 2026-07-27:** no fixes in this layer yet.
 
+**Reconciled 2026-10-15:** the historical inventory below is not a current queue.
+MS3 is superseded by FTS triggers and a one-time migration marker; MS7 by exact
+normalised-host selection; MS8 by SQL filtering before LIMIT in `memory.py`.
+Do not implement these fixes again. This does not close the other memory debts.
+See [capability reconciliation](../docs/CAPABILITY_AUDIT_2026-10-15.md) and
+[the implemented authorization path](../docs/VERIFIED_AUTHORIZATION.md).
+
 ---
 
 ## Headline findings

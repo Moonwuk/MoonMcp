@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from urllib.parse import urljoin, urlsplit
 
 from .screenshot import _chromium_executable, playwright_available
 
@@ -25,39 +26,58 @@ MAX_ERRORS = 50
 
 
 async def _install_scope_guard(context, scope_ok: Callable[[str], bool],
-                               extra_headers: dict[str, str] | None) -> None:
-    """Route every request: abort out-of-scope navigations, and strip the engagement
-    auth headers from out-of-scope subresources — so Playwright's blanket header
-    application can't leak a credential to a third-party host or a redirect target."""
+                               extra_headers: dict[str, str] | None,
+                               *, credential_url: str | None = None) -> list[str]:
+    """Fail closed for routed HTTP, including redirects and subresources.
 
-    auth_keys = {k.lower() for k in (extra_headers or {})}
+    Fetch without automatic redirects so a redirect cannot bypass routing or
+    forward blanket context credentials. Authenticated contexts stay on their
+    initial origin. Failures are retained even if a page catches a failed fetch.
+    This does not make browser traffic a managed/metered transport.
+    """
+    failures: list[str] = []
+
+    def allowed(url: str) -> bool:
+        parts = urlsplit(url)
+        if parts.scheme not in {"http", "https"} or not scope_ok(url):
+            return False
+        if credential_url:
+            initial = urlsplit(credential_url)
+            if (parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)) != (
+                    initial.scheme, initial.hostname, initial.port or (443 if initial.scheme == "https" else 80)):
+                return False
+        return True
+
+    def record(reason: str) -> None:
+        if len(failures) < MAX_ERRORS:
+            failures.append(reason)
 
     async def _guard(route) -> None:
-        req = route.request
         try:
-            in_scope = scope_ok(req.url)
-        except Exception:
-            in_scope = False
-        try:
-            if not in_scope:
-                if req.is_navigation_request():
+            if not allowed(route.request.url):
+                record("out_of_scope")
+                await route.abort()
+                return
+            response = await route.fetch(max_redirects=0, timeout=20000)
+            try:
+                location = response.headers.get("location")
+                if 300 <= response.status < 400 and location and not allowed(urljoin(route.request.url, location)):
+                    record("out_of_scope_redirect")
                     await route.abort()
                     return
-                if auth_keys:
-                    kept = {k: v for k, v in req.headers.items() if k.lower() not in auth_keys}
-                    await route.continue_(headers=kept)
-                    return
-            await route.continue_()
+                await route.fulfill(response=response)
+            finally:
+                await response.dispose()
         except Exception:
+            record("scope_guard_failed")
             try:
-                await route.continue_()
-            except Exception:
-                pass
+                await route.abort()
+            finally:
+                await context.close()
 
-    try:
-        await context.route("**/*", _guard)
-    except Exception:
-        pass
+    # Registration errors must propagate before creating a page or navigating.
+    await context.route("**/*", _guard)
+    return failures
 
 
 @dataclass
@@ -94,11 +114,8 @@ async def browse(
     """Navigate a headless browser to *url*, collect observability, optionally
     evaluate a JS expression, and return a structured :class:`BrowserResult`.
 
-    When *scope_ok* is given, out-of-scope **navigations** are aborted (so a redirect
-    can't carry the engagement auth off-scope) and any engagement-auth headers are
-    **stripped from out-of-scope subresource requests** — the same fail-closed scope
-    discipline the HTTP tools enforce, which Playwright's blanket header application
-    otherwise bypasses."""
+    With *scope_ok*, routed HTTP requests and redirects outside scope are blocked.
+    Contexts with supplied credentials are restricted to the initial origin."""
 
     result = BrowserResult(url=url, available=playwright_available())
     if not result.available:
@@ -111,6 +128,7 @@ async def browse(
     console: list[dict] = []
     network: list[dict] = []
     errors: list[str] = []
+    guard_failures: list[str] = []
 
     def _on_console(msg) -> None:
         if len(console) < MAX_CONSOLE:
@@ -144,11 +162,13 @@ async def browse(
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(**launch_kwargs)
             try:
-                context = await browser.new_context(ignore_https_errors=True)
+                context = await browser.new_context(ignore_https_errors=True, service_workers="block")
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
                 if scope_ok is not None:
-                    await _install_scope_guard(context, scope_ok, extra_headers)
+                    guard_failures = await _install_scope_guard(
+                        context, scope_ok, extra_headers,
+                        credential_url=url if extra_headers or cookies else None)
                 if cookies:
                     try:
                         await context.add_cookies(cookies)
@@ -185,6 +205,8 @@ async def browse(
     result.console = console
     result.network = network
     result.page_errors = errors
+    if guard_failures:
+        result.error = result.error or f"Browser request guard: {', '.join(sorted(set(guard_failures)))}"
     return result
 
 
@@ -236,6 +258,7 @@ async def interact(
     console: list[dict] = []
     network: list[dict] = []
     errors: list[str] = []
+    guard_failures: list[str] = []
 
     def _on_console(msg) -> None:
         if len(console) < MAX_CONSOLE:
@@ -262,9 +285,13 @@ async def interact(
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(**launch_kwargs)
             try:
-                context = await browser.new_context(ignore_https_errors=True)
+                context = await browser.new_context(ignore_https_errors=True, service_workers="block")
                 if extra_headers:
                     await context.set_extra_http_headers(extra_headers)
+                if scope_ok is not None:
+                    guard_failures = await _install_scope_guard(
+                        context, scope_ok, extra_headers,
+                        credential_url=url if extra_headers or cookies else None)
                 if cookies:
                     try:
                         await context.add_cookies(cookies)
@@ -338,4 +365,6 @@ async def interact(
     result.console = console
     result.network = network
     result.page_errors = errors
+    if guard_failures:
+        result.error = result.error or f"Browser request guard: {', '.join(sorted(set(guard_failures)))}"
     return result
