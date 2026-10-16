@@ -199,15 +199,31 @@ class ResearchSandbox(DockerSandbox):
         """Successful queries must prove absence; an inspect error proves nothing."""
         remaining = []
         try:
-            args = ["container", "ls", "-a", "--filter", f"name=^/{self.resource['container']}$", "--format", "{{.ID}}"]
+            args = ["container", "ls", "-a", "--no-trunc", "--filter",
+                    f"name=^/{self.resource['container']}$", "--format", "{{.ID}}"]
             present = self.checked(args).strip()
             owned = self.checked([*args, "--filter", f"label={LABEL}={self.resource['id']}"]).strip()
-            if present and present != owned:
+            if present != owned:
                 remaining.append("container_ownership_mismatch")
+            elif present and not re.fullmatch(rb"[a-f0-9]{64}", present):
+                remaining.append("container_identity_unconfirmed")
             else:
-                self.stop()  # existing checked Docker removal; absence is verified below
-                if self.checked(args).strip():
-                    remaining.append("container_still_exists")
+                if present:
+                    # A container name can be reused after the ownership query.
+                    # Only delete the immutable ID that passed both queries.
+                    self._container_id = present.decode("ascii")
+                    self.stop()
+                    if self.checked(["container", "ls", "-a", "--no-trunc", "--filter",
+                                     f"id={present.decode('ascii')}", "--format", "{{.ID}}"]
+                                    ).strip():
+                        remaining.append("container_still_exists")
+                # Also refuse to clean host files if another container acquired
+                # the name while the verified container was being removed.
+                current = self.checked(args).strip()
+                if current:
+                    issue = "container_replaced" if current != present else "container_still_exists"
+                    if issue not in remaining:
+                        remaining.append(issue)
         except Exception:
             remaining.append("container_cleanup_unconfirmed")
         if not remaining:

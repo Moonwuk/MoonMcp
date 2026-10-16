@@ -51,6 +51,9 @@ async def test_permitted_reads_are_not_private_object_violations(monkeypatch, vi
     result = await verify(monkeypatch, app, manifest(visibility=visibility))
     assert result["verdict"] == "not_applicable"
     assert not result["proof"]["verified"]
+    assert outcome(result).ok and result["result_version"] == 2
+    assert result["checks"] == []
+    assert result["coverage"] == {"version": 1, "complete": True, "completed": 0, "total": 0}
     assert app.requests == []
 
 
@@ -137,6 +140,33 @@ async def test_invalid_proof_sends_nothing(monkeypatch, field, value):
     spec[field] = value
     with pytest.raises(ValueError):
         await verify(monkeypatch, app, spec)
+    assert app.requests == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("control_url", TARGET + "#known-missing"),
+    ("identity_url", TARGET + "#identity"),
+    ("control_url", "https://example.test/me#known-missing"),
+    ("control_url", "https://EXAMPLE.test:443/orders/100"),
+    ("identity_url", "https://EXAMPLE.test:443/orders/100#identity"),
+])
+async def test_request_equivalent_proof_urls_send_nothing(monkeypatch, field, value):
+    app = BolaApplication()
+    spec = manifest()
+    spec[field] = value
+    with pytest.raises(ValueError, match="URLs must differ"):
+        await verify(monkeypatch, app, spec)
+    assert app.requests == []
+
+
+async def test_empty_path_and_root_path_are_the_same_request(monkeypatch):
+    app = BolaApplication()
+    monkeypatch.setattr(http, "_blocking_fetch", app.transport)
+    spec = manifest()
+    spec["control_url"] = "https://EXAMPLE.test:443/#missing"
+    with pytest.raises(ValueError, match="URLs must differ"):
+        await verify_private_read(HttpClient(Governor(0, 20), user_agent="fixture"), "https://example.test", spec,
+                                  owner_headers=OWNER, second_headers=OBSERVER)
     assert app.requests == []
 
 

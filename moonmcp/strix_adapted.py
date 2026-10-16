@@ -984,20 +984,34 @@ class DockerSandbox:
         """Stop and remove the sandbox container."""
         if not self._container_id:
             return {"success": False, "error": "No container to stop"}
+        cid = self._container_id
+        detail = None
         try:
-            removed = self._run(["docker", "rm", "-f", self._container_id],
+            removed = self._run(["docker", "rm", "-f", cid],
                                      capture_output=True, timeout=30)
             if removed.returncode != 0:
-                return {"success": False, "error": "cleanup_failed", "retryable": False,
-                        "container_id": self._container_id,
-                        "detail": removed.stderr.decode(errors="replace")[:2000]}
-            cid = self._container_id
-            self._container_id = None
-            self._execution_unknown = False
-            return {"success": True, "message": f"Container {cid} stopped and removed"}
+                detail = removed.stderr.decode(errors="replace")[:2000]
         except Exception as exc:
-            return {"success": False, "error": "cleanup_failed", "retryable": False,
-                    "container_id": self._container_id, "detail": str(exc)}
+            detail = str(exc)
+        if detail is not None:
+            # Failed starts and lost rm results can leave a retained locator for
+            # a container that no longer exists. Prove absence with a successful
+            # daemon query; stderr text alone cannot distinguish a daemon outage.
+            selector = f"id={cid}" if re.fullmatch(r"[0-9a-f]{64}", cid) else f"name=^/{re.escape(cid)}$"
+            try:
+                remaining = self._run(
+                    ["docker", "container", "ls", "--all", "--quiet", "--no-trunc", "--filter", selector],
+                    capture_output=True, timeout=10,
+                )
+                absent = remaining.returncode == 0 and not remaining.stdout.strip()
+            except Exception:
+                absent = False
+            if not absent:
+                return {"success": False, "error": "cleanup_failed", "retryable": False,
+                        "container_id": cid, "detail": detail}
+        self._container_id = None
+        self._execution_unknown = False
+        return {"success": True, "message": f"Container {cid} stopped and removed"}
 
     def status(self) -> dict:
         """Check sandbox container status."""

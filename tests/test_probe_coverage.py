@@ -9,6 +9,7 @@ from moonmcp import server
 from moonmcp.net.http import HttpResult
 from moonmcp.outcomes import RESULT_META, outcome
 from moonmcp.web.authz import probe_bola
+from moonmcp.web.checks import ProbeChecks
 from moonmcp.web.workflow import probe_workflow_skip
 
 URL = "https://example.test/orders/100"
@@ -22,8 +23,10 @@ def response(status=200, body=b'{"id":100,"private":"object-value"}', **kwargs):
 class Client:
     def __init__(self, *responses):
         self.responses = list(responses)
+        self.calls = []
 
     async def fetch(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
         return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
 
@@ -78,6 +81,31 @@ async def test_ambiguous_mutation_stops_subsequent_steps(bad):
     assert result["state"] == "unknown"
     assert result["checks"][-1]["state"] == "skipped"
     assert len(client.responses) == 1
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_rate_limit_stops_later_reads(method):
+    checks = ProbeChecks()
+    client = Client(response(429), response())
+    assert await checks.fetch(client, URL, check="first", method=method) is None
+    assert await checks.fetch(client, URL + "/later", check="later", method="GET") is None
+    assert len(client.calls) == 1
+    result = checks.finish({"findings": []}, negative="negative")
+    assert result["verdict"] == "inconclusive"
+    assert result["checks"][0]["error"] == "rate_limited"
+    assert result["checks"][1]["error"] == "prior_check_stopped"
+    assert result["coverage"] == {"version": 1, "complete": False, "completed": 0, "total": 2}
+
+
+async def test_rate_limit_stops_bola_siblings_and_later_workflow_steps():
+    bola = Client(response(), response(429), response())
+    workflow = Client(response(429), response())
+    results = [await probe_bola(bola, URL),
+               await probe_workflow_skip(workflow, FLOW + [{"url": URL + "/finish"}])]
+    assert len(bola.calls) == 2 and len(workflow.calls) == 1
+    for result in results:
+        assert not result["ok"] and result["verdict"] == "inconclusive"
+        assert result["checks"][-1]["error"] == "prior_check_stopped"
 
 
 async def test_workflow_does_not_discard_decisive_trailing_bytes():

@@ -42,7 +42,9 @@ class ProbeChecks:
         elif response.status == 429 or response.status >= 500:
             state = "failed" if kwargs.get("method", "GET").upper() in {"GET", "HEAD"} else "unknown"
             item.update(state=state, error="rate_limited" if response.status == 429 else "upstream_error")
-            self.stopped = state == "unknown"
+            # A rate limit applies to the remaining probe too, including safe
+            # reads. Do not keep sending sibling or later workflow requests.
+            self.stopped = response.status == 429 or state == "unknown"
         elif getattr(response, "truncated", False):
             item.update(state="partial", error="truncated_response")
         return response if item["state"] == "completed" else None
