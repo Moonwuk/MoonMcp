@@ -32,8 +32,8 @@ _ROUTES: dict[str, tuple[str, str, str]] = {
                       "a 3xx Location to the attacker origin carrying the victim context"),
     "xxe": ("injection", "confirm_finding", "an OAST callback or out-of-band file content"),
     # ── authorization / IDOR → re-observe as the other identity ──
-    "direct_bola": ("authorization", "observe",
-                    "the second/anon identity retrieves the SAME private object as the owner"),
+    "direct_bola": ("authorization", "authz_probe",
+                    "a live distinct subject retrieves the bound private object and protected fields contrary to declared policy, with controls and fresh replay"),
     "sibling_idor": ("authorization", "observe",
                      "the identity reads a neighbouring object that is provably another user's data"),
     "multistep_bola": ("authorization", "observe",
@@ -73,6 +73,7 @@ _ROUTES: dict[str, tuple[str, str, str]] = {
 }
 
 _NEXT_STEP: dict[str, str] = {
+    "authz_probe": "prepare a version-1 proof manifest and distinct second_headers; run authz_probe through run_execute, then independently replay on fresh state with a new invocation key",
     "confirm_finding": "run confirm_finding with the payload/param to prove it differentially (+ OAST)",
     "observe": "re-drive the flow and directly observe the side effect (Strix can automate this)",
     "strix": "hand off to Strix for autonomous PoC under human confirmation",
@@ -105,5 +106,11 @@ def confirmation_plan(kind: str, target: str, detail: str = "") -> dict:
     """The full plan: family, route, next concrete step, success criterion, Strix brief."""
 
     info = classify_lead(kind)
-    return {**info, "target": target, "next_step": _NEXT_STEP[info["route"]],
-            "strix_brief": strix_brief(kind, target, detail)}
+    result = {**info, "target": target, "next_step": _NEXT_STEP[info["route"]],
+              "strix_brief": strix_brief(kind, target, detail)}
+    if info["route"] == "authz_probe":
+        result["verification"] = {"tool": "authz_probe", "arguments": {"target": target},
+                                  "required_arguments": ["proof", "second_headers"],
+                                  "requires_owner_auth": True, "complete_path_requests": 8,
+                                  "executed": False}
+    return result

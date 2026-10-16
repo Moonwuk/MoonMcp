@@ -36,6 +36,21 @@ jobs:
       - name: Test (pytest + coverage gate)
         run: pytest -q --cov=moonmcp --cov-report=term-missing --cov-fail-under=70
 
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install browser test dependencies
+        run: uv pip install --system -e ".[dev,screenshots]"
+      - name: Install Chromium and system dependencies
+        run: playwright install --with-deps chromium
+      - name: Exercise browser guards and normal navigation
+        run: pytest -q tests/test_browser.py tests/test_browser_guards.py
+
   smoke:
     runs-on: ubuntu-latest
     steps:

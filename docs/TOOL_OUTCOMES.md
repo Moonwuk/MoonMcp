@@ -87,3 +87,40 @@ managed action leaves an unknown receipt because the action may have taken effec
 The contract normalizes reported status. It cannot infer failures swallowed by
 legacy composite detectors or certify that every nested probe completed. Those
 producers must explicitly report incomplete work as they are migrated.
+
+## Migrated composite producers
+
+`authz_probe` and `workflow_probe` now return additive `result_version: 2`,
+`ok`, `state`, per-request `checks`, and version-1 `coverage`. Existing findings
+remain available. The execution metadata contract above remains version 1.
+Clients must accept `inconclusive` when required evidence is unavailable rather
+than interpreting an empty finding list as a completed negative. This changes
+previously misleading verdicts; persisted version-1 payloads are not rewritten.
+
+Transport failures, scope/budget blocks, rate limits, upstream 5xx responses and
+truncated bodies prevent complete coverage. Missing owner evidence prevents a
+negative BOLA conclusion. Partial checks retain earlier leads. Ambiguous non-read
+workflow operations stop later steps and report `unknown`; cancellation propagates
+to managed recovery. Coverage describes the bounded checks attempted by the probe,
+not all possible objects or application states.
+
+A 429 response stops all remaining subchecks, including GET/HEAD reads. Proof
+requests rejected as `not_applicable` by the declared policy send no HTTP requests;
+their version-2 payload still includes `checks: []` and complete zero-of-zero
+coverage. This means the applicability decision completed, not that object access
+was verified.
+
+The optional BOLA `proof` mode has its own version-1 evidence schema. See
+[the implemented scope and example](VERIFIED_AUTHORIZATION.md). `verified` is a
+claim verdict under the supplied policy, not an execution state or automatic
+finding promotion. Managed receipt status remains authoritative if execution
+became ambiguous or was blocked.
+
+Sandbox nonzero process exits explicitly return `command_failed`; generic
+`success: false` detector payloads still do not imply execution failure.
+Docker exec timeouts return `unknown` and quarantine further execution until
+cleanup. Failed removal retains the container and server reference and reports
+`cleanup_failed`; removal is no longer reported successful from unchecked CLI
+exit codes. After a failed or uncertain removal, a successful daemon listing can
+also establish that the retained container is absent and release the sandbox.
+A failed listing or a matching container retains the resource for recovery.

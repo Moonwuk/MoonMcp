@@ -1538,7 +1538,7 @@ async def access_control_check(target: str, method: str = "GET", body: str | Non
 @mcp.tool()
 @active_tool()
 async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
-                      max_refs: int = 8) -> dict:
+                      max_refs: int = 8, proof: dict | None = None) -> dict:
     """**Multi-step BOLA / IDOR chain** — the object-level authorization test a
     stateless scanner can't do. Set `auth_set` (owner = user A) and optionally pass
     `second_headers` (a lower-priv user B); this runs three GET-only signals:
@@ -1547,19 +1547,42 @@ async def authz_probe(target: str, second_headers: dict[str, str] | None = None,
     read; (3) **multi-step chain** — extract the object ids the owner's response
     exposes, then fetch each as B/anon (owner response → cross-identity access).
     Read-only (never mutates — state change → Strix). Findings are `review` leads.
-    In scope only.
+    In scope only. Optional `proof` selects a bounded private JSON-object read
+    verification instead of heuristics. It requires version=1, identity_url,
+    control_url (known missing object), owner/observer {subject, tenant}, resource
+    {id, type, owner, tenant}, policy {id, source, visibility, allowed_subjects},
+    and protected_fields (top-level JSON names). Set owner auth with auth_set and
+    supply distinct second_headers. All URLs must share the target origin. Identity
+    endpoints return {subject, tenant}; object fields must match the manifest.
+    Uses eight metered GETs on the completed path; never returns raw private values.
     """
 
     ctx = get_context()
     raw = target.strip()
     url = raw if "://" in raw else f"https://{raw}"
+    if proof is not None:
+        from .execution import current_execution
+        from .web.bola_proof import verify_private_read
+        result = await verify_private_read(ctx.http, url, proof,
+                                            owner_headers=ctx.auth.merged_headers(),
+                                            second_headers=second_headers, scope_check=_scope_check())
+        execution = current_execution()
+        if execution is not None:
+            artifact = ctx.runs.add_artifact(
+                execution.run_id, "authorization_check", execution.invocation_id,
+                json.dumps(result, sort_keys=True, ensure_ascii=False))
+            result["evidence"] = {"run_id": execution.run_id, "artifact_id": artifact["id"],
+                                  "sha256": artifact["sha256"],
+                                  "ref": f"run:{execution.run_id}/artifact:{artifact['id']}"}
+        return result
     result = await authzmod.probe_bola(ctx.http, url, b_headers=second_headers,
                                        max_refs=max_refs, scope_check=_scope_check())
     result["hint"] = (None if ctx.auth.is_set()
                       else "No engagement auth set — call auth_set first so the owner (A) is authenticated.")
     n = len(result.get("findings", []))
     result["note"] = (f"{n} object-authorization lead(s) — confirm the body is another user's private "
-                      "object" if n else "no cross-identity object access observed")
+                      "object" if n else "Checks incomplete — no negative conclusion is available."
+                      if not result["ok"] else "no cross-identity object access observed")
     return result
 
 
@@ -2537,7 +2560,8 @@ async def workflow_probe(steps: list[dict]) -> dict:
     n = len(result.get("findings", []))
     result["note"] = (f"{n} step-skipping lead(s) — confirm the business effect of reaching the step "
                       "without its prerequisites" if n
-                      else "no step served cold — the flow appears to enforce its sequence")
+                      else "Checks incomplete — sequence enforcement was not established."
+                      if not result["ok"] else "no step served cold in the completed checks")
     return result
 
 
@@ -5302,18 +5326,25 @@ async def sandbox_exec(action: str = "status",
     - `stop` — stop and remove the container.
     - `status` — check container status.
 
-    The sandbox is isolated (CPU/memory limited, host-gateway access). Commands
-    that contain URLs to out-of-scope hosts are refused if a scope_check is
-    available. No network leaves the sandbox except via the command you run.
+    Containers have no network, no extra capabilities, and CPU/memory/process
+    limits by default. Literal URL checks are additional validation, not egress
+    enforcement. A timed-out command leaves an uncertain result and blocks further
+    execution until cleanup. This runner is not admitted to managed execution.
     """
 
     global _sandbox
     act = action.strip().lower()
 
     if act == "start":
+        if _sandbox is not None:
+            return {"success": False, "error": "sandbox_exists",
+                    "detail": "Stop the existing sandbox before starting another."}
         img = image or "alpine:latest"
         _sandbox = sa.DockerSandbox(image=img)
-        return _sandbox.start()
+        result = _sandbox.start()
+        if not result.get("success") and not _sandbox._container_id:
+            _sandbox = None
+        return result
 
     if act == "exec":
         if _sandbox is None:
@@ -5326,7 +5357,8 @@ async def sandbox_exec(action: str = "status",
         if _sandbox is None:
             return {"success": False, "error": "No sandbox to stop"}
         result = _sandbox.stop()
-        _sandbox = None
+        if result.get("success"):
+            _sandbox = None
         return result
 
     if act == "status":

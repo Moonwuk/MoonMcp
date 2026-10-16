@@ -35,6 +35,7 @@ import os
 import re
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -831,10 +832,9 @@ class DockerSandbox:
     """Docker-based isolated execution environment for PoC testing.
 
     Adapted from Strix's DockerSandboxClient. Provides:
-    - Safe execution of RCE PoC commands (hostname/whoami/id)
-    - Isolated environment for exploit testing
-    - Resource limits (CPU, memory, network)
-    - Host-gateway access for reaching host-served apps
+    - CPU, memory and process limits
+    - No container network or extra capabilities by default
+    - Explicit failure and uncertain-execution outcomes
 
     Default image is ``alpine:latest`` (~7 MB pull). For full Kali tooling
     (nmap, sqlmap, nuclei, gobuster) pass ``image="kali-linux:latest"`` (~3 GB)
@@ -846,11 +846,12 @@ class DockerSandbox:
 
     def __init__(self, image: str = "alpine:latest",
                  cap_add: list[str] | None = None,
-                 network: str = "bridge") -> None:
+                 network: str = "none") -> None:
         self.image = image
-        self.cap_add = cap_add or ["NET_ADMIN", "NET_RAW"]
+        self.cap_add = list(cap_add) if cap_add is not None else []
         self.network = network
         self._container_id: str | None = None
+        self._execution_unknown = False
 
     def _check_docker(self) -> bool:
         """Check if Docker is available."""
@@ -859,6 +860,9 @@ class DockerSandbox:
 
     def start(self) -> dict:
         """Start a Docker container for sandboxed execution."""
+        if self._container_id:
+            return {"success": False, "error": "sandbox_exists",
+                    "detail": "Stop the existing sandbox before starting another."}
         if not self._check_docker():
             return {
                 "success": False,
@@ -872,25 +876,38 @@ class DockerSandbox:
                 capture_output=True, timeout=30,
             )
             if result.returncode != 0:
-                subprocess.run(
+                pull = subprocess.run(
                     ["docker", "pull", self.image],
                     capture_output=True, timeout=300,
                 )
+                if pull.returncode != 0:
+                    return {"success": False, "error": "image_pull_failed",
+                            "detail": pull.stderr.decode(errors="replace")[:2000]}
 
+            container_name = f"moonmcp-sandbox-{uuid.uuid4().hex}"
             cmd = [
                 "docker", "run", "-d",
-                "--cap-add", ",".join(self.cap_add),
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                 "--network", self.network,
-                "--add-host", "host.docker.internal:host-gateway",
                 "--memory", "512m",
                 "--cpus", "1.0",
-                "--name", f"moonmcp-sandbox-{int(time.time())}",
-                self.image, "tail", "-f", "/dev/null",
+                "--pids-limit", "64",
+                "--name", container_name,
             ]
+            for capability in self.cap_add:
+                cmd.extend(["--cap-add", capability])
+            cmd.extend([self.image, "tail", "-f", "/dev/null"])
+            # Retain a usable resource locator if the CLI loses the run result.
+            self._container_id = container_name
+            self._execution_unknown = True
             result = subprocess.run(cmd, capture_output=True, timeout=60)
             if result.returncode != 0:
-                return {"success": False, "error": result.stderr.decode()}
-            self._container_id = result.stdout.decode().strip()[:12]
+                return {"success": False, "error": "sandbox_start_failed",
+                        "container_id": container_name,
+                        "detail": result.stderr.decode(errors="replace")[:2000],
+                        "recovery": "Inspect and remove the retained container before restarting."}
+            self._container_id = result.stdout.decode().strip() or container_name
+            self._execution_unknown = False
             return {
                 "success": True,
                 "container_id": self._container_id,
@@ -898,6 +915,11 @@ class DockerSandbox:
                 "message": "Sandbox started. Use exec() to run commands.",
             }
         except Exception as exc:
+            if self._container_id:
+                return {"success": False, "ok": False, "state": "unknown",
+                        "error": "outcome_unknown", "retryable": False,
+                        "container_id": self._container_id, "detail": str(exc),
+                        "recovery": "Inspect and remove the retained container before restarting."}
             return {"success": False, "error": str(exc)}
 
     def exec(self, command: str, *, timeout: int = 30,
@@ -906,11 +928,15 @@ class DockerSandbox:
 
         If ``scope_check`` is provided (a callable that takes a host and
         returns bool), URLs in the command are extracted and checked —
-        an out-of-scope URL in the command aborts execution. This prevents
-        a sandboxed PoC from accidentally reaching an out-of-scope host.
+        an out-of-scope literal URL aborts execution. This is a convenience
+        check, not a network boundary; the default container network is disabled.
         """
         if not self._container_id:
             return {"success": False, "error": "Sandbox not started. Call start() first."}
+        if self._execution_unknown:
+            return {"success": False, "ok": False, "state": "unknown",
+                    "error": "outcome_unknown", "retryable": False,
+                    "recovery": "Stop and remove the sandbox before further execution."}
         if scope_check is not None:
             # Extract hostnames from URLs in the command
             urls = re.findall(r'https?://([^\s/\'"<>]+)', command)
@@ -924,34 +950,65 @@ class DockerSandbox:
         import subprocess
         try:
             result = subprocess.run(
-                ["docker", "exec", self._container_id, "bash", "-c", command],
+                ["docker", "exec", self._container_id, "sh", "-c", command],
                 capture_output=True, timeout=timeout,
             )
-            return {
+            payload = {
                 "success": result.returncode == 0,
                 "exit_code": result.returncode,
                 "stdout": result.stdout.decode(errors="replace")[:5000],
                 "stderr": result.stderr.decode(errors="replace")[:2000],
                 "command": command,
             }
+            if result.returncode != 0:
+                payload.update(error="command_failed", retryable=False,
+                               detail=f"Sandbox command exited with status {result.returncode}.")
+            return payload
         except subprocess.TimeoutExpired:
-            return {"success": False, "error": f"Command timed out after {timeout}s"}
+            self._execution_unknown = True
+            return {"success": False, "ok": False, "state": "unknown",
+                    "error": "outcome_unknown", "retryable": False,
+                    "detail": f"Docker exec timed out after {timeout}s; the child may still be running.",
+                    "recovery": "Stop and remove the sandbox before further execution."}
         except Exception as exc:
-            return {"success": False, "error": str(exc)}
+            self._execution_unknown = True
+            return {"success": False, "ok": False, "state": "unknown",
+                    "error": "outcome_unknown", "retryable": False, "detail": str(exc),
+                    "recovery": "Inspect and remove the sandbox before further execution."}
 
     def stop(self) -> dict:
         """Stop and remove the sandbox container."""
         if not self._container_id:
             return {"success": False, "error": "No container to stop"}
         import subprocess
+        cid = self._container_id
+        detail = None
         try:
-            subprocess.run(["docker", "stop", self._container_id], capture_output=True, timeout=30)
-            subprocess.run(["docker", "rm", "-f", self._container_id], capture_output=True, timeout=30)
-            cid = self._container_id
-            self._container_id = None
-            return {"success": True, "message": f"Container {cid} stopped and removed"}
+            removed = subprocess.run(["docker", "rm", "-f", cid],
+                                     capture_output=True, timeout=30)
+            if removed.returncode != 0:
+                detail = removed.stderr.decode(errors="replace")[:2000]
         except Exception as exc:
-            return {"success": False, "error": str(exc)}
+            detail = str(exc)
+        if detail is not None:
+            # Failed starts and lost rm results can leave a retained locator for
+            # a container that no longer exists. Prove absence with a successful
+            # daemon query; stderr text alone cannot distinguish a daemon outage.
+            selector = f"id={cid}" if re.fullmatch(r"[0-9a-f]{64}", cid) else f"name=^/{re.escape(cid)}$"
+            try:
+                remaining = subprocess.run(
+                    ["docker", "container", "ls", "--all", "--quiet", "--no-trunc", "--filter", selector],
+                    capture_output=True, timeout=10,
+                )
+                absent = remaining.returncode == 0 and not remaining.stdout.strip()
+            except Exception:
+                absent = False
+            if not absent:
+                return {"success": False, "error": "cleanup_failed", "retryable": False,
+                        "container_id": cid, "detail": detail}
+        self._container_id = None
+        self._execution_unknown = False
+        return {"success": True, "message": f"Container {cid} stopped and removed"}
 
     def status(self) -> dict:
         """Check sandbox container status."""

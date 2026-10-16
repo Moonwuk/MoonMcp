@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .checks import ProbeChecks
+
 # Body language that means the flow REJECTED an out-of-order jump (i.e. it is enforced).
 _ENFORCE_MARKERS = (
     "complete the previous", "must complete", "previous step", "start over",
@@ -53,7 +55,7 @@ def assess_step_skip(status: int | None, body_text: str, *, success_marker: str 
     """Was a later step reached cold? True = 2xx and the flow did NOT enforce order."""
 
     if status is None or not (200 <= status < 300):
-        return False  # redirect / 4xx / 5xx → the sequence was enforced
+        return False  # no positive signal; execution coverage is tracked separately
     low = (body_text or "").lower()
     if any(m in low for m in _ENFORCE_MARKERS):
         return False  # 2xx but the body says "finish the previous step"
@@ -69,13 +71,20 @@ async def probe_workflow_skip(client, steps, *, scope_check: Callable[[str], boo
     norm = normalize_steps(steps)
     n = len(norm)
     findings: list[dict] = []
+    checks = ProbeChecks()
+    if n < 2:
+        checks.missing("workflow", "at_least_two_steps_required")
+    if len(norm) != len(steps or []):
+        checks.missing("workflow", "invalid_steps")
     for k, step in enumerate(norm):
         if k == 0:
             continue  # the entry step is always reachable
         body = step["body"].encode() if isinstance(step["body"], str) else step["body"]
-        r = await client.fetch(step["url"], method=step["method"], body=body,
+        r = await checks.fetch(client, step["url"], check=step["name"], method=step["method"], body=body,
                                follow_redirects=False, timeout=12.0, scope_check=scope_check)
-        text = r.text(limit=50_000) if r.status is not None else ""
+        if r is None:
+            continue
+        text = r.text()  # HttpClient already bounds the body; do not lose decisive trailing bytes.
         if assess_step_skip(r.status, text, success_marker=step["success"]):
             terminal = k == n - 1
             findings.append({
@@ -88,7 +97,6 @@ async def probe_workflow_skip(client, steps, *, scope_check: Callable[[str], boo
                               "(e.g. order confirmed without payment, account activated without "
                               "verification)" if terminal else "")),
             })
-    return {
+    return checks.finish({
         "steps": [s["name"] for s in norm], "step_count": n, "findings": findings,
-        "verdict": "review" if findings else "no_step_skip",
-    }
+    }, negative="no_step_skip")

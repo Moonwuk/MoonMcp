@@ -80,10 +80,15 @@ async def test_check_buckets_against_mock(local_server, fresh_context):
 
 
 @pytest.mark.asyncio
-async def test_cloud_buckets_tool_structure(fresh_context):
+async def test_cloud_buckets_tool_structure(fresh_context, local_server, monkeypatch):
+    base, _ = local_server
+    # Exercise the registered tool against local provider fixtures only.
+    monkeypatch.setattr(bucketsmod, "PROVIDERS", {
+        provider: base + "/bucket?name={name}" for provider in bucketsmod.PROVIDERS
+    })
     tools = {t.name for t in await srv.mcp.list_tools()}
     assert "cloud_buckets" in tools
-    # real providers are unreachable in the sandbox → still returns clean structure
     out = await srv.cloud_buckets(keyword="acme", max_candidates=5)
     assert out["candidates_tested"] >= 1
     assert "s3" in out["providers"] and isinstance(out["found"], list)
+    assert all(item["url"].startswith(base + "/") for item in out["found"])
