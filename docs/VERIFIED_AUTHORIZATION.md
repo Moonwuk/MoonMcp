@@ -79,6 +79,12 @@ The legacy heuristic mode remains available, with honest incomplete outcomes.
 
 ## Evidence and roadmap status
 
+The follow-up [local HTTP/SQLite research recipe](RESEARCH_REPLAY.md) now supplies a
+strict opt-in adapter with a pinned image, durable resource records, bounded output,
+checked cleanup, and fresh capsule replay against a separate application process.
+The table below describes the original verification delivery; the follow-up remains
+limited to one synthetic recipe and does not complete IP-07/IP-08.
+
 | Bundle | Delivered here | Still outside this delivery |
 | --- | --- | --- |
 | IP-01 | Independent fixture policy, vulnerable/fixed implementations, private/public/shared cases, failure and long-body cases | General held-out discovery baseline and fixed model trials |

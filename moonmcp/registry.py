@@ -405,6 +405,8 @@ _DECLARATIONS = (
     ToolPolicy("render_finding_md", "knowledge", read_only=True, accounting="local"),
     ToolPolicy("proxy_manage", "knowledge", execution_control=True),
     ToolPolicy("sandbox_exec", "knowledge", execution_control=True),
+    ToolPolicy("research_environment", "orchestration", aliases="replay capsule sqlite docker research fixture cleanup",
+               execution_control=True),
     ToolPolicy("agent_tree", "knowledge", execution_control=True),
     ToolPolicy("export_csv", "knowledge"),
     ToolPolicy("waf_info", "knowledge", read_only=True, accounting="local", static_reference=True),

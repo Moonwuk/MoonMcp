@@ -47,6 +47,11 @@ async def smoke(workdir: Path) -> dict:
             assert reference.structuredContent is not None
             assert reference.structuredContent["id"] == "ssti"
 
+            recipe = await session.call_tool("research_environment", {"action": "describe"})
+            assert recipe.isError is False
+            assert recipe.structuredContent["recipe"] == "sqlite-orders-v1"
+            assert len(recipe.structuredContent["capsules"]) == 4
+
             invalid = await session.call_tool("run_status", {"run_id": "missing-smoke-run"})
             assert invalid.isError is True, "application error was reported as protocol success"
             assert invalid.structuredContent is not None
@@ -65,7 +70,7 @@ async def smoke(workdir: Path) -> dict:
 
     return {"server": initialized.serverInfo.name, "tools": len(names),
             "installed_package": str(installed_path), "structured_success": True,
-            "structured_error": True, "checks": ["local_reference", "missing_run", "text_error", "argument_error"]}
+            "structured_error": True, "checks": ["local_reference", "research_recipe", "missing_run", "text_error", "argument_error"]}
 
 
 def main() -> None:
