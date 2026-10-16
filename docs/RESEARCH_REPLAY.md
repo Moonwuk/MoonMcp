@@ -31,6 +31,13 @@ roadmap or measure autonomous vulnerability discovery (IP-08).
    experiment. An earlier successful fixture run does not confirm a real target
    finding, and these results never automatically promote findings or reports.
 
+The authoritative `research_result` is saved after task and run finalization.
+The task's result URI points to a provisional `research_finalization` artifact,
+which explicitly records `research_finalization_pending` and never claims success.
+Cancellation or a lost lease during finalization produces an authoritative
+`state=unknown`, `ok=false` result; successful cleanup alone cannot complete an
+unfenced assessment. Read `result_artifact` for the final assessment.
+
 Explicit image preparation (the adapter pins the same local daemon endpoint):
 
 ```sh
@@ -120,9 +127,11 @@ negative. Future third-party adapters need their own normal-flow and bypass cont
   Killing the CLI alone is never treated as child/container termination evidence.
 - Cancellation waits for the startup thread to settle before cleanup, avoiding a
   late container creation after purported cleanup. Removal checks the recorded
-  container name and ownership label, then requires a successful inventory query
-  proving absence. Unexpected host files or ownership mismatches are retained and
-  reported as `unknown`, not recursively removed.
+  container name and ownership label, deletes only the verified full container ID,
+  then requires successful inventory queries proving that ID and name are absent.
+  A replacement using the same name is retained and reported as `unknown`.
+  Unexpected host files or ownership mismatches are retained and reported as
+  `unknown`, not recursively removed.
 
 After a process crash, locate the run with `run_list`, then its `research_resource`
 artifact with `run_artifacts`. Stop the old worker if it still exists and allow its

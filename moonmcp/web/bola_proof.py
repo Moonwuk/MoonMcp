@@ -23,7 +23,18 @@ def _origin(url: str) -> tuple:
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Proof URLs must be HTTP(S) URLs without embedded credentials.")
-    return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+    port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+    return parsed.scheme, parsed.hostname, port
+
+
+def _request_url(url: str) -> tuple:
+    """Compare effective HTTP destinations, without client-only fragments.
+
+    Origin casing/default ports and an empty path do not distinguish requests.
+    Preserve path and query semantics; a server may distinguish query ordering.
+    """
+    parsed = urlsplit(url)
+    return _origin(url), parsed.path or "/", parsed.query
 
 
 def _validate(target: str, spec: dict, second_headers: dict | None, owner_headers: dict | None) -> None:
@@ -70,7 +81,7 @@ def _validate(target: str, spec: dict, second_headers: dict | None, owner_header
         url = spec.get(key)
         if not isinstance(url, str) or _origin(url) != origin:
             raise ValueError(f"proof.{key} must be on the target origin")
-    if len({target, spec["identity_url"], spec["control_url"]}) != 3:
+    if len({_request_url(url) for url in (target, spec["identity_url"], spec["control_url"])}) != 3:
         raise ValueError("Object, identity and known-missing control URLs must differ")
     if not owner_headers or not second_headers:
         raise ValueError("Proof requires engagement owner auth and explicit second_headers")
@@ -99,7 +110,9 @@ async def verify_private_read(client, target: str, spec: dict, *, owner_headers:
     }}
     if policy["visibility"] != "private" or spec["observer"]["subject"] in policy["allowed_subjects"]:
         result.update(result_version=2, ok=True, state="completed", verdict="not_applicable",
-                      reason="Declared policy does not prohibit this observer's read.")
+                      reason="Declared policy does not prohibit this observer's read.",
+                      checks=[], coverage={"version": 1, "complete": True,
+                                           "completed": 0, "total": 0})
         return result
 
     async def fetch(url: str, check: str, identity: str):

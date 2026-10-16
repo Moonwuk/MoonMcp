@@ -58,7 +58,7 @@ def test_cleanup_never_calls_unknown_resource_absent(tmp_path, monkeypatch, fail
             raise subprocess.TimeoutExpired(args, 30)
         if "label=" in " ".join(args) and failure == "ownership":
             return b""
-        return b"container-id"
+        return b"a" * 64
     monkeypatch.setattr(box, "checked", command)
     stopped = []
     monkeypatch.setattr(box, "stop", lambda: stopped.append(True))

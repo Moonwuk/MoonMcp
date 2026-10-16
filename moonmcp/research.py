@@ -257,8 +257,23 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
     finally:
         result["metrics"] = metrics
         result["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
+        # Task result links to provisional finalization evidence. Only publish
+        # the authoritative assessment after the fenced task/run transitions:
+        # cancellation can race with either transition through another store.
+        pending = _artifact(store, run_id, "research_finalization", {
+            "ok": False, "state": "unknown", "error": "research_finalization_pending",
+            "retryable": False,
+        })
+        result["finalization_artifact"] = pending
         try:
             store.heartbeat(task["id"], **lease, lease_seconds=60)
+            store.update_task(task["id"], "completed" if result["ok"] else "blocked",
+                              result=pending["uri"], **lease)
+            if result["ok"]:
+                completion = store.finish(run_id)
+                if not completion["completed"]:
+                    result.update(ok=False, state="unknown", error="research_finalization_incomplete",
+                                  blockers=completion["blockers"])
         except ValueError:
             # Cleanup may outlive a lease or a user may cancel the run. Keep its
             # evidence, but do not call an unfenced assessment completed.
@@ -266,11 +281,6 @@ async def replay(store: RunStore, manifest: dict, *, execute: bool = False) -> d
             store.recover_expired_tasks(run_id)
         summary = _artifact(store, run_id, "research_result", result)
         result["result_artifact"] = summary
-        with contextlib.suppress(ValueError):
-            store.update_task(task["id"], "completed" if result["ok"] else "blocked",
-                              result=summary["uri"], **lease)
-        if result["ok"]:
-            store.finish(run_id)
     if interrupted:
         raise asyncio.CancelledError()
     return result

@@ -104,6 +104,12 @@ workflow operations stop later steps and report `unknown`; cancellation propagat
 to managed recovery. Coverage describes the bounded checks attempted by the probe,
 not all possible objects or application states.
 
+A 429 response stops all remaining subchecks, including GET/HEAD reads. Proof
+requests rejected as `not_applicable` by the declared policy send no HTTP requests;
+their version-2 payload still includes `checks: []` and complete zero-of-zero
+coverage. This means the applicability decision completed, not that object access
+was verified.
+
 The optional BOLA `proof` mode has its own version-1 evidence schema. See
 [the implemented scope and example](VERIFIED_AUTHORIZATION.md). `verified` is a
 claim verdict under the supplied policy, not an execution state or automatic
@@ -115,4 +121,6 @@ Sandbox nonzero process exits explicitly return `command_failed`; generic
 Docker exec timeouts return `unknown` and quarantine further execution until
 cleanup. Failed removal retains the container and server reference and reports
 `cleanup_failed`; removal is no longer reported successful from unchecked CLI
-exit codes.
+exit codes. After a failed or uncertain removal, a successful daemon listing can
+also establish that the retained container is absent and release the sandbox.
+A failed listing or a matching container retains the resource for recovery.

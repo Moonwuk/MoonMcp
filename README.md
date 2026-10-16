@@ -126,24 +126,25 @@ See the source and documentation for specialised integrations and provider-speci
 
 ## Documentation
 
-The repository contains detailed reference material for areas that would make this README unnecessarily large:
+Start implementation work with the [consolidated priorities](docs/IMPLEMENTATION_PRIORITIES.md).
+They distinguish near-term fixes and the BOLA proof path from conditional research,
+link all retained discovery proposals, and credit capabilities that already exist.
+Merging a roadmap does not implement its features.
 
+Technical and operating references:
+
+- [Implementation priorities and discovery-plan index](docs/IMPLEMENTATION_PRIORITIES.md)
 - [Capability audit and roadmap reconciliation (2026-10-15)](docs/CAPABILITY_AUDIT_2026-10-15.md)
-- [Faithful research environments roadmap (proposal)](docs/RESEARCH_ENVIRONMENT_ROADMAP.md)
 - [Research and design notes](docs/RESEARCH.md)
 - [Autonomy roadmap](docs/AUTONOMY_ROADMAP.md)
-- [Evidence-driven vulnerability discovery roadmap (proposal)](docs/VULNERABILITY_DISCOVERY_ROADMAP.md)
 - [Agent navigation and optimization plan](docs/AGENT_NAVIGATION_PLAN.md)
 - [Agent workflow: tools, flags, hypotheses and recovery](docs/AGENT_WORKFLOW.md)
 - [Tool registry and registration architecture](docs/TOOL_ARCHITECTURE.md)
 - [Execution results and errors: versioned contract](docs/TOOL_OUTCOMES.md)
 - [Implemented private-object verification, agent workflow and remaining limits](docs/VERIFIED_AUTHORIZATION.md)
 - [Reproducible local HTTP/SQLite research recipe and cleanup](docs/RESEARCH_REPLAY.md)
-- [Relational vulnerability discovery roadmap (fourth-stage proposal)](docs/RELATIONAL_DISCOVERY_ROADMAP.md)
-- [Probabilistic vulnerability discovery roadmap (fifth-stage proposal)](docs/PROBABILISTIC_DISCOVERY_ROADMAP.md)
 - [Research into comparable flag and hypothesis systems](docs/FLAG_SYSTEM_RESEARCH.md)
 - [Strix integration](docs/STRIX_INTEGRATION.md)
-- [Experimental vulnerability discovery roadmap (third-stage proposal)](docs/EXPERIMENTAL_DISCOVERY_ROADMAP.md)
 - [System prompts](docs/SYSTEM_PROMPTS.md)
 - [Injection reference](docs/INJECTIONS.md)
 - [Security techniques](docs/TECHNIQUES.md)
@@ -151,7 +152,6 @@ The repository contains detailed reference material for areas that would make th
 - [Server-side vulnerability reference](docs/SERVER_SIDE_VULNS.md)
 - [Root-cause reference](docs/ROOT_CAUSES.md)
 - [WAF reference](docs/WAF.md)
-- [Advanced vulnerability discovery roadmap (next-stage proposal)](docs/ADVANCED_DISCOVERY_ROADMAP.md)
 
 ## Development
 
