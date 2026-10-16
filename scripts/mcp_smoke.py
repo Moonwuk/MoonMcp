@@ -51,6 +51,12 @@ async def smoke(workdir: Path) -> dict:
             assert recipe.isError is False
             assert recipe.structuredContent["recipe"] == "sqlite-orders-v1"
             assert len(recipe.structuredContent["capsules"]) == 4
+            notes = await session.call_tool("research_environment", {
+                "action": "describe", "recipe": "sqlite-notes-v1"})
+            assert notes.isError is False
+            assert notes.structuredContent["recipe"] == "sqlite-notes-v1"
+            assert len(notes.structuredContent["capsules"]) == 4
+            assert all(c["recipe"] == "sqlite-notes-v1" for c in notes.structuredContent["capsules"])
 
             invalid = await session.call_tool("run_status", {"run_id": "missing-smoke-run"})
             assert invalid.isError is True, "application error was reported as protocol success"

@@ -1,4 +1,4 @@
-"""Bounded local-Docker adapter for a single trusted research recipe."""
+"""Bounded local-Docker adapter for the two trusted research recipes."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ import threading
 import time
 from pathlib import Path
 
+from .research_recipes import DEFAULT_RECIPE, IMAGE, recipe
 from .strix_adapted import DockerSandbox
 
-IMAGE = "python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
-APP = Path(__file__).with_name("research_app.py")
+APP = recipe().app  # compatibility for the original builtin recipe
 LABEL = "moonmcp.research"
 PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY",
               "http_proxy", "https_proxy", "all_proxy", "no_proxy", "ftp_proxy")
@@ -149,6 +149,7 @@ class ResearchSandbox(DockerSandbox):
                 or resource.get("variant") not in {"fixed", "vulnerable"}):
             raise ValueError("Invalid research resource record")
         super().__init__(image=IMAGE, network="none")
+        self.definition = recipe(resource.get("recipe", DEFAULT_RECIPE))
         self.resource = resource
         self._container_id = resource["container"]
         self.directory = socket_root / ident
@@ -179,7 +180,7 @@ class ResearchSandbox(DockerSandbox):
                       # even without explicit env forwarding. Override all forms.
                       *[arg for key in PROXY_KEYS for arg in ("--env", key + "=")],
                       "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m,mode=1777",
-                      "--mount", f"type=bind,src={APP.resolve()},dst=/app.py,readonly",
+                      "--mount", f"type=bind,src={self.definition.app.resolve()},dst=/app.py,readonly",
                       "--mount", f"type=bind,src={self.directory.resolve()},dst=/exchange",
                       IMAGE, "python", "-I", "/app.py", "--variant", self.resource["variant"],
                       "--socket", "/exchange/app.sock"], timeout=45)

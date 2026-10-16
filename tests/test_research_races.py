@@ -106,7 +106,7 @@ def native_recipe(monkeypatch):
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         process = subprocess.Popen([
-            sys.executable, "-I", str(research.APP), "--variant", box.resource["variant"],
+            sys.executable, "-I", str(research.recipe(research.RECIPE).app), "--variant", box.resource["variant"],
             "--database", "orders.sqlite", "--port", str(port),
         ], cwd=box.directory, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         processes.append(process)
