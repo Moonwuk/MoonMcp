@@ -79,6 +79,11 @@ The legacy heuristic mode remains available, with honest incomplete outcomes.
 
 ## Evidence and roadmap status
 
+The [2026-10-21 reconciliation](ROADMAP_STATUS_2026-10-21.md) tracks subsequent
+changes. Run `python -m moonmcp.evaluation --trials 5` for the versioned deterministic
+comparison; CI preserves its JSON report. This is not a model or autonomous
+vulnerability-discovery comparison.
+
 The follow-up [local HTTP/SQLite research recipe](RESEARCH_REPLAY.md) now supplies a
 strict opt-in adapter with a pinned image, durable resource records, bounded output,
 checked cleanup, and fresh capsule replay against a separate application process.
@@ -98,8 +103,9 @@ remain outstanding. See the replay guide for exact entry points and limitations.
 | IP-03 | Explicit subcheck coverage, retained partial leads, MCP outcome consistency; sandbox command/cleanup failures | Migration of every other legacy composite producer |
 | IP-04 | Flat-JSON, same-origin, private-read proof with live subjects, declared policy, protected fields and controls | General named-session lifecycle, other resource schemas, write claims, policy discovery |
 | IP-05 | Existing managed sends, budget stops, receipt replay/cancellation tests, immutable proof artifacts, executable tool named in lead plan | Automatic research agent loop, broader method routing and independent real-target replay |
-| IP-06 | No default network/extra capabilities/host gateway; process limit; compatible `sh`; checked removal and timeout quarantine | Pinned images, durable resource leases, bounded subprocess output, verified child termination and production isolation |
-| IP-07/IP-08 | Fresh fixture replay with changed private data; no automatic report promotion | Real application preparation/capsules and independently measured discovery gains |
+| IP-06 | Original sandbox defaults plus opt-in trusted recipes with a pinned image, durable resource leases, bounded output and verified cleanup/recovery | Arbitrary repository commands, general network policy and production isolation |
+| IP-07 | Two trusted HTTP/SQLite and WSGI/cookie recipes, normal-entry fidelity checks, portable capsules and fresh replay | Arbitrary project preparation, additional stacks and supported transports |
+| IP-08 | Deterministic heuristic/proof comparison on independent labelled synthetic cases, incomplete outcomes and replay costs | Fixed-model trials, real-project generalisation and autonomous discovery gains |
 
 ## Browser and container compatibility
 

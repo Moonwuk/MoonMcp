@@ -17,12 +17,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
+from .browser_runtime import BrowserEvaluationTimeout, evaluate, run_session
+from .browser_safety import screen_result
 from .screenshot import _chromium_executable, playwright_available
 
 MAX_CHARS = 20000
 MAX_CONSOLE = 150
 MAX_NETWORK = 200
 MAX_ERRORS = 50
+MAX_ACTIONS = 100
+WALL_TIMEOUT_MS = 60000
 
 
 async def _install_scope_guard(context, scope_ok: Callable[[str], bool],
@@ -96,6 +100,9 @@ class BrowserResult:
     eval_error: str | None = None
     error: str | None = None
     install_hint: str | None = None
+    trust: str = "untrusted"
+    content_safety: dict = field(default_factory=dict)
+    cleanup_confirmed: bool | None = None
 
 
 async def browse(
@@ -106,6 +113,7 @@ async def browse(
     capture_html: bool = False,
     wait_until: str = "load",
     timeout_ms: int = 20000,
+    wall_timeout_ms: int = WALL_TIMEOUT_MS,
     max_chars: int = MAX_CHARS,
     extra_headers: dict[str, str] | None = None,
     cookies: list[dict] | None = None,
@@ -118,10 +126,16 @@ async def browse(
     Contexts with supplied credentials are restricted to the initial origin."""
 
     result = BrowserResult(url=url, available=playwright_available())
+    if (not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool)
+            or not 1 <= timeout_ms <= 120000
+            or not isinstance(wall_timeout_ms, int) or isinstance(wall_timeout_ms, bool)
+            or not 1 <= wall_timeout_ms <= 120000):
+        result.error = "timeout_ms and wall_timeout_ms must be between 1 and 120000"
+        return screen_result(result)
     if not result.available:
         result.error = "Playwright is not installed"
         result.install_hint = "pip install 'moonmcp[screenshots]' && playwright install chromium"
-        return result
+        return screen_result(result)
 
     from playwright.async_api import async_playwright  # type: ignore
 
@@ -158,47 +172,49 @@ async def browse(
     if exe:
         launch_kwargs["executable_path"] = exe
 
-    try:
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(**launch_kwargs)
+    async def _operation(browser) -> None:
+        nonlocal guard_failures
+        context = await browser.new_context(ignore_https_errors=True, service_workers="block")
+        if extra_headers:
+            await context.set_extra_http_headers(extra_headers)
+        if scope_ok is not None:
+            guard_failures = await _install_scope_guard(
+                context, scope_ok, extra_headers,
+                credential_url=url if extra_headers or cookies else None)
+        if cookies:
             try:
-                context = await browser.new_context(ignore_https_errors=True, service_workers="block")
-                if extra_headers:
-                    await context.set_extra_http_headers(extra_headers)
-                if scope_ok is not None:
-                    guard_failures = await _install_scope_guard(
-                        context, scope_ok, extra_headers,
-                        credential_url=url if extra_headers or cookies else None)
-                if cookies:
-                    try:
-                        await context.add_cookies(cookies)
-                    except Exception:
-                        pass  # malformed cookie spec shouldn't sink the render
-                page = await context.new_page()
-                page.on("console", _on_console)
-                page.on("pageerror", _on_error)
-                page.on("response", _on_response)
-                resp = await page.goto(url, timeout=timeout_ms, wait_until=wait_until)
-                result.status = resp.status if resp else None
-                result.final_url = page.url
-                result.title = await page.title()
-                if script:
-                    try:
-                        result.eval_result = await page.evaluate(script)
-                    except Exception as exc:
-                        result.eval_error = f"{type(exc).__name__}: {exc}"[:400]
-                if capture_text:
-                    try:
-                        result.text = (await page.inner_text("body"))[:max_chars]
-                    except Exception:
-                        pass
-                if capture_html:
-                    try:
-                        result.html = (await page.content())[:max_chars]
-                    except Exception:
-                        pass
-            finally:
-                await browser.close()
+                await context.add_cookies(cookies)
+            except Exception:
+                pass  # malformed cookie spec shouldn't sink the render
+        page = await context.new_page()
+        page.on("console", _on_console)
+        page.on("pageerror", _on_error)
+        page.on("response", _on_response)
+        resp = await page.goto(url, timeout=timeout_ms, wait_until=wait_until)
+        result.status = resp.status if resp else None
+        result.final_url = page.url
+        result.title = await page.title()
+        if script:
+            try:
+                result.eval_result = await evaluate(page, script, timeout_ms)
+            except BrowserEvaluationTimeout as exc:
+                result.eval_error = f"{type(exc).__name__}: {exc}"[:400]
+                raise
+            except Exception as exc:
+                result.eval_error = f"{type(exc).__name__}: {exc}"[:400]
+        if capture_text:
+            try:
+                result.text = (await page.inner_text("body"))[:max_chars]
+            except Exception:
+                pass
+        if capture_html:
+            try:
+                result.html = (await page.content())[:max_chars]
+            except Exception:
+                pass
+
+    try:
+        await run_session(result, async_playwright, launch_kwargs, _operation, wall_timeout_ms)
     except Exception as exc:  # launch/navigation errors must not crash the tool
         result.error = f"{type(exc).__name__}: {exc}"[:400]
 
@@ -207,7 +223,7 @@ async def browse(
     result.page_errors = errors
     if guard_failures:
         result.error = result.error or f"Browser request guard: {', '.join(sorted(set(guard_failures)))}"
-    return result
+    return screen_result(result)
 
 
 @dataclass
@@ -226,6 +242,9 @@ class InteractResult:
     local_storage: dict = field(default_factory=dict)
     error: str | None = None
     install_hint: str | None = None
+    trust: str = "untrusted"
+    content_safety: dict = field(default_factory=dict)
+    cleanup_confirmed: bool | None = None
 
 
 async def interact(
@@ -233,6 +252,7 @@ async def interact(
     actions: list[dict],
     *,
     timeout_ms: int = 20000,
+    wall_timeout_ms: int = WALL_TIMEOUT_MS,
     max_chars: int = MAX_CHARS,
     extra_headers: dict[str, str] | None = None,
     cookies: list[dict] | None = None,
@@ -248,10 +268,19 @@ async def interact(
     """
 
     result = InteractResult(url=url, available=playwright_available())
+    if (not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool)
+            or not 1 <= timeout_ms <= 120000
+            or not isinstance(wall_timeout_ms, int) or isinstance(wall_timeout_ms, bool)
+            or not 1 <= wall_timeout_ms <= 120000):
+        result.error = "timeout_ms and wall_timeout_ms must be between 1 and 120000"
+        return screen_result(result)
+    if len(actions or []) > MAX_ACTIONS:
+        result.error = f"At most {MAX_ACTIONS} browser actions are allowed"
+        return screen_result(result)
     if not result.available:
         result.error = "Playwright is not installed"
         result.install_hint = "pip install 'moonmcp[screenshots]' && playwright install chromium"
-        return result
+        return screen_result(result)
 
     from playwright.async_api import async_playwright  # type: ignore
 
@@ -281,84 +310,90 @@ async def interact(
     if exe:
         launch_kwargs["executable_path"] = exe
 
-    try:
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(**launch_kwargs)
+    async def _operation(browser) -> None:
+        nonlocal guard_failures
+        context = await browser.new_context(ignore_https_errors=True, service_workers="block")
+        if extra_headers:
+            await context.set_extra_http_headers(extra_headers)
+        if scope_ok is not None:
+            guard_failures = await _install_scope_guard(
+                context, scope_ok, extra_headers,
+                credential_url=url if extra_headers or cookies else None)
+        if cookies:
             try:
-                context = await browser.new_context(ignore_https_errors=True, service_workers="block")
-                if extra_headers:
-                    await context.set_extra_http_headers(extra_headers)
-                if scope_ok is not None:
-                    guard_failures = await _install_scope_guard(
-                        context, scope_ok, extra_headers,
-                        credential_url=url if extra_headers or cookies else None)
-                if cookies:
-                    try:
-                        await context.add_cookies(cookies)
-                    except Exception:
-                        pass
-                page = await context.new_page()
-                page.on("console", _on_console)
-                page.on("pageerror", _on_error)
-                page.on("response", _on_response)
-                resp = await page.goto(url, timeout=timeout_ms, wait_until="load")
-                result.status = resp.status if resp else None
+                await context.add_cookies(cookies)
+            except Exception:
+                pass
+        page = await context.new_page()
+        page.on("console", _on_console)
+        page.on("pageerror", _on_error)
+        page.on("response", _on_response)
+        resp = await page.goto(url, timeout=timeout_ms, wait_until="load")
+        result.status = resp.status if resp else None
 
-                for i, act in enumerate(actions or []):
-                    kind = str(act.get("action", "")).lower()
-                    sel = act.get("selector")
-                    step = {"i": i, "action": kind}
-                    try:
-                        if kind == "click":
-                            await page.click(sel, timeout=timeout_ms)
-                        elif kind == "fill":
-                            await page.fill(sel, str(act.get("value", "")), timeout=timeout_ms)
-                        elif kind == "type":
-                            await page.type(sel, str(act.get("value", "")), timeout=timeout_ms)
-                        elif kind == "press":
-                            await page.press(sel, str(act.get("key", "Enter")), timeout=timeout_ms)
-                        elif kind == "wait_for":
-                            await page.wait_for_selector(sel, timeout=timeout_ms)
-                        elif kind == "wait":
-                            await page.wait_for_timeout(min(int(act.get("ms", 500)), 10000))
-                        elif kind == "eval":
-                            step["result"] = await page.evaluate(str(act.get("script", "")))
-                        elif kind == "goto":
-                            nxt = str(act.get("url", ""))
-                            if scope_ok is not None and not scope_ok(nxt):
-                                step["error"] = "out_of_scope"
-                            else:
-                                r2 = await page.goto(nxt, timeout=timeout_ms, wait_until="load")
-                                step["status"] = r2.status if r2 else None
-                        else:
-                            step["error"] = f"unknown action '{kind}'"
-                        step.setdefault("ok", "error" not in step)
-                    except Exception as exc:
-                        step["ok"] = False
-                        step["error"] = f"{type(exc).__name__}: {exc}"[:300]
-                    result.steps.append(step)
+        for i, act in enumerate(actions or []):
+            kind = str(act.get("action", "")).lower()
+            sel = act.get("selector")
+            step = {"i": i, "action": kind}
+            try:
+                if kind == "click":
+                    await page.click(sel, timeout=timeout_ms)
+                elif kind == "fill":
+                    await page.fill(sel, str(act.get("value", "")), timeout=timeout_ms)
+                elif kind == "type":
+                    await page.type(sel, str(act.get("value", "")), timeout=timeout_ms)
+                elif kind == "press":
+                    await page.press(sel, str(act.get("key", "Enter")), timeout=timeout_ms)
+                elif kind == "wait_for":
+                    await page.wait_for_selector(sel, timeout=timeout_ms)
+                elif kind == "wait":
+                    await page.wait_for_timeout(min(int(act.get("ms", 500)), 10000))
+                elif kind == "eval":
+                    step["result"] = await evaluate(page, str(act.get("script", "")), timeout_ms)
+                elif kind == "goto":
+                    nxt = str(act.get("url", ""))
+                    if scope_ok is not None and not scope_ok(nxt):
+                        step["error"] = "out_of_scope"
+                    else:
+                        r2 = await page.goto(nxt, timeout=timeout_ms, wait_until="load")
+                        step["status"] = r2.status if r2 else None
+                else:
+                    step["error"] = f"unknown action '{kind}'"
+                step.setdefault("ok", "error" not in step)
+            except BrowserEvaluationTimeout as exc:
+                step["ok"] = False
+                step["error"] = f"{type(exc).__name__}: {exc}"[:300]
+                result.steps.append(step)
+                raise
+            except Exception as exc:
+                step["ok"] = False
+                step["error"] = f"{type(exc).__name__}: {exc}"[:300]
+            result.steps.append(step)
 
-                result.final_url = page.url
-                result.title = await page.title()
-                try:
-                    result.text = (await page.inner_text("body"))[:max_chars]
-                except Exception:
-                    pass
-                try:
-                    result.local_storage = await page.evaluate(
-                        "Object.assign({}, window.localStorage)")
-                except Exception:
-                    pass
-                try:
-                    result.cookies = [
-                        {"name": c.get("name"), "value": c.get("value"),
-                         "domain": c.get("domain"), "path": c.get("path")}
-                        for c in await context.cookies()
-                    ]
-                except Exception:
-                    pass
-            finally:
-                await browser.close()
+        result.final_url = page.url
+        result.title = await page.title()
+        try:
+            result.text = (await page.inner_text("body"))[:max_chars]
+        except Exception:
+            pass
+        try:
+            result.local_storage = await evaluate(
+                page, "Object.assign({}, window.localStorage)", timeout_ms)
+        except BrowserEvaluationTimeout:
+            raise
+        except Exception:
+            pass
+        try:
+            result.cookies = [
+                {"name": c.get("name"), "value": c.get("value"),
+                 "domain": c.get("domain"), "path": c.get("path")}
+                for c in await context.cookies()
+            ]
+        except Exception:
+            pass
+
+    try:
+        await run_session(result, async_playwright, launch_kwargs, _operation, wall_timeout_ms)
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"[:400]
 
@@ -367,4 +402,4 @@ async def interact(
     result.page_errors = errors
     if guard_failures:
         result.error = result.error or f"Browser request guard: {', '.join(sorted(set(guard_failures)))}"
-    return result
+    return screen_result(result)

@@ -1,5 +1,8 @@
 # MoonMCP autonomy roadmap
 
+Current implementation status: [2026-10-21 roadmap reconciliation](ROADMAP_STATUS_2026-10-21.md).
+Historical stages below are not a live completion checklist.
+
 MoonMCP's deterministic security engine remains the product core. The autonomy
 work adds an optional host/runtime around it rather than replacing specialised,
 scope-gated probes with unconstrained LLM shell execution.

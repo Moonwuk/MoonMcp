@@ -66,7 +66,7 @@ jobs:
       - name: Install Chromium and system dependencies
         run: playwright install --with-deps chromium
       - name: Exercise browser guards and normal navigation
-        run: pytest -q tests/test_browser.py tests/test_browser_guards.py
+        run: pytest -q tests/test_browser.py tests/test_browser_guards.py tests/test_browser_completion.py
 
   research:
     runs-on: ubuntu-latest
