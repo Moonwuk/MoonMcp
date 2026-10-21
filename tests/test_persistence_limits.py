@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import logging
+import multiprocessing
 import os
 import stat
 import subprocess
@@ -337,3 +338,56 @@ assert log.summary()["write_error"]
     finally:
         if reader is not None:
             os.close(reader)
+
+
+def _record_audit_process(path, worker, barrier):
+    log = AuditLog(path=path, max_bytes=1024, backup_count=20, fsync=True)
+    barrier.wait(timeout=20)
+    for sequence in range(20):
+        log.record("process", worker=worker, sequence=sequence)
+    if log.summary()["write_error"] is not None:
+        raise RuntimeError(log.summary()["write_error"])
+
+
+def test_spawned_processes_share_audit_rotation_without_lost_or_duplicate_records(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(4)
+    processes = [
+        context.Process(target=_record_audit_process, args=(str(path), worker, barrier))
+        for worker in range(4)
+    ]
+    started = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        deadline = time.monotonic() + 40
+        for process in started:
+            process.join(timeout=max(0, deadline - time.monotonic()))
+        assert all(not process.is_alive() for process in started)
+        assert [process.exitcode for process in started] == [0, 0, 0, 0]
+    finally:
+        for process in started:
+            if process.is_alive():
+                process.terminate()
+        for process in started:
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
+
+    segments = [path] + [
+        tmp_path / f"audit.jsonl.{number}" for number in range(1, 21)
+        if (tmp_path / f"audit.jsonl.{number}").exists()
+    ]
+    assert len(segments) > 1
+    entries = []
+    for segment in segments:
+        raw = segment.read_bytes()
+        assert raw.endswith(b"\n") and len(raw) <= 1024
+        entries.extend(json.loads(line) for line in raw.splitlines())
+    expected = {(worker, sequence) for worker in range(4) for sequence in range(20)}
+    actual = [(entry["worker"], entry["sequence"]) for entry in entries]
+    assert len(actual) == len(expected) and set(actual) == expected
+    assert all(entry["event"] == "process" for entry in entries)
