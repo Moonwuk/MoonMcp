@@ -1,4 +1,4 @@
-"""Persistence limits and failure paths without external traffic or executors."""
+"""Persistence limits and failure paths without external traffic."""
 
 import hashlib
 import io
@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import stat
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -240,3 +241,99 @@ def test_audit_environment_controls_retention(tmp_path, monkeypatch):
     monkeypatch.setenv("MOONMCP_AUDIT_FSYNC", "0")
     log = AuditLog.from_env()
     assert log.max_bytes == 1024 and log.backup_count == 2 and not log.fsync
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_snapshot_names_are_bounded_before_consuming_items_or_touching_disk(tmp_path, persisted):
+    state_dir = tmp_path / "state"
+    store = SnapshotStore(str(state_dir) if persisted else None)
+    too_long = "a" * 121
+    items = iter(["unconsumed"])
+    with pytest.raises(ValueError, match="120"):
+        store.diff(too_long, items)
+    assert next(items) == "unconsumed"
+    with pytest.raises(ValueError, match="120"):
+        store.clear(too_long)
+    assert store._mem == {}
+    assert not state_dir.exists()
+    longest = "a" * 120
+    assert store.diff(" " + longest.upper() + " ", ["old"])["baseline_created"]
+    assert store.names() == {longest: 1}
+    assert store.clear(longest.upper()) == 1
+
+
+def test_rejected_overcapacity_disk_reads_cannot_grow_the_snapshot_cache(tmp_path):
+    store = SnapshotStore(str(tmp_path), max_snapshots=1)
+    for key in ("one", "two", "three"):
+        (tmp_path / f"snap-{key}.json").write_text('["old"]')
+    for key in ("one", "two", "three"):
+        with pytest.raises(ValueError, match="max_snapshots"):
+            store.diff(key, ["new"])
+        assert store._mem == {}
+        assert (tmp_path / f"snap-{key}.json").read_text() == '["old"]'
+
+
+def test_snapshot_names_stage_reads_and_prune_stale_cache_before_corruption(tmp_path):
+    store = SnapshotStore(str(tmp_path), max_snapshots=2)
+    store.diff("stale", ["old"])
+    for index in range(4):
+        for path in tmp_path.glob("snap-*.json"):
+            path.unlink()
+        valid, broken = f"a-{index}", f"z-{index}"
+        (tmp_path / f"snap-{valid}.json").write_text('["valid"]')
+        corrupt = tmp_path / f"snap-{broken}.json"
+        corrupt.write_text("{broken")
+        with pytest.raises(ValueError, match="unreadable or corrupt"):
+            store.names()
+        assert store._mem == {}
+        assert corrupt.read_text() == "{broken"
+        corrupt.write_text('["repaired"]')
+        assert store.names() == {valid: 1, broken: 1}
+        assert len(store._mem) == 2
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "mkfifo"), reason="POSIX FIFO required")
+def test_snapshot_fifo_is_rejected_without_blocking_or_rebaselining(tmp_path):
+    path = tmp_path / "snap-surface.json"
+    os.mkfifo(path)
+    script = """
+import sys
+from moonmcp.monitor import SnapshotStore
+store = SnapshotStore(sys.argv[1])
+try:
+    store.diff("surface", ["new"])
+except ValueError as exc:
+    assert "unreadable or corrupt" in str(exc)
+else:
+    raise AssertionError("FIFO accepted as a snapshot baseline")
+assert store._mem == {}
+"""
+    subprocess.run([sys.executable, "-c", script, str(tmp_path)],
+                   check=True, capture_output=True, text=True, timeout=5)
+    assert stat.S_ISFIFO(path.stat().st_mode)
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "mkfifo"), reason="POSIX FIFO required")
+@pytest.mark.parametrize("with_reader", [False, True])
+def test_audit_fifo_fails_without_blocking_or_writing_bytes(tmp_path, with_reader):
+    path = tmp_path / "audit.jsonl"
+    os.mkfifo(path)
+    reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK) if with_reader else None
+    script = """
+import sys
+from moonmcp.audit import AuditLog
+log = AuditLog(path=sys.argv[1])
+entry = log.record("fifo")
+assert entry["event"] == "fifo"
+assert log.recent() == [entry]
+assert log.summary()["write_error"]
+"""
+    try:
+        subprocess.run([sys.executable, "-c", script, str(path)],
+                       check=True, capture_output=True, text=True, timeout=5)
+        if reader is not None:
+            assert os.read(reader, 1024) == b""
+        assert stat.S_ISFIFO(path.stat().st_mode)
+    finally:
+        if reader is not None:
+            os.close(reader)

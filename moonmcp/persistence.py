@@ -22,7 +22,9 @@ def path_lock(path: str | os.PathLike[str]) -> Iterator[None]:
 
     Nested acquisition by one thread shares the already-held process lock.
     POSIX uses flock and Windows uses a one-byte msvcrt lock. This coordinates
-    cooperating writers; it does not authorize an untrusted state directory.
+    cooperating writers in independently initialized processes; it does not
+    authorize an untrusted state directory. Reusing these locks after forking
+    during active persistence operations is unsupported.
     """
     key = os.path.normcase(os.path.abspath(os.fspath(path)))
     with _LOCKS_GUARD:
@@ -37,7 +39,8 @@ def path_lock(path: str | os.PathLike[str]) -> Iterator[None]:
         lock_path = key + ".lock"
         parent = os.path.dirname(lock_path)
         os.makedirs(parent, mode=0o700, exist_ok=True)
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        flags = (os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_NONBLOCK", 0))
         if not hasattr(os, "O_NOFOLLOW") and os.path.islink(lock_path):
             raise OSError(errno.ELOOP, "Persistence lock must not be a symlink", lock_path)
         fd = os.open(lock_path, flags, 0o600)
@@ -53,7 +56,7 @@ def path_lock(path: str | os.PathLike[str]) -> Iterator[None]:
                 if os.fstat(fd).st_size == 0:
                     os.write(fd, b"\0")
                 os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
             else:
                 import fcntl
 
@@ -69,7 +72,7 @@ def path_lock(path: str | os.PathLike[str]) -> Iterator[None]:
                         import msvcrt
 
                         os.lseek(fd, 0, os.SEEK_SET)
-                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
                     else:
                         import fcntl
 

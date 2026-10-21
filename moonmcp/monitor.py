@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import re
+import stat
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -16,7 +17,10 @@ _SAFE = re.compile(r"[^a-z0-9_.-]+")
 
 
 def _safe_name(name: str) -> str:
-    return _SAFE.sub("-", name.strip().lower()) or "default"
+    key = _SAFE.sub("-", name.strip().lower()) or "default"
+    if len(key) > 120:
+        raise ValueError("snapshot name exceeds 120 characters")
+    return key
 
 
 class SnapshotStore:
@@ -97,10 +101,14 @@ class SnapshotStore:
         # Persistent stores always reread: another process may have replaced a
         # baseline. The memory cache never masks corruption or external changes.
         try:
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
             fd = os.open(path, flags)
             with os.fdopen(fd, "rb") as stream:
-                if os.fstat(stream.fileno()).st_size > self.max_bytes:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError("snapshot baseline must be a regular file")
+                if info.st_size > self.max_bytes:
                     raise ValueError("snapshot baseline exceeds max_bytes")
                 raw = stream.read(self.max_bytes + 1)
             if len(raw) > self.max_bytes:
@@ -115,9 +123,9 @@ class SnapshotStore:
             return None
         except (OSError, ValueError) as exc:
             raise ValueError(f"snapshot baseline is unreadable or corrupt: {key}") from exc
-        result = set(data)
-        self._mem[key] = result
-        return set(result)
+        # Readers stage validated values; only a complete names() refresh or a
+        # confirmed write may advance the cache. Failed reads cannot grow it.
+        return set(data)
 
     def _store(self, name: str, items: set[str]) -> None:
         key = _safe_name(name)
@@ -133,16 +141,16 @@ class SnapshotStore:
 
     def diff(self, name: str, items: Iterable[str]) -> dict:
         """Diff against a current valid baseline, then atomically replace it."""
-        current = self._items(items)
         key = _safe_name(name)
+        current = self._items(items)
         with self._lock, self._directory_lock():
-            previous = self._load(key)
             known = self._disk_keys() if self.state_dir is not None else set(self._mem)
             if self.state_dir is not None:
                 for stale in set(self._mem) - known:
                     self._mem.pop(stale, None)
-            if previous is None and key not in known and len(known) >= self.max_snapshots:
+            if key not in known and len(known) >= self.max_snapshots:
                 raise ValueError("snapshot count exceeds max_snapshots")
+            previous = self._load(key)
             self._store(key, current)
         if previous is None:
             return {"name": name, "baseline_created": True, "total": len(current),
@@ -157,18 +165,20 @@ class SnapshotStore:
             if self.state_dir is None:
                 return {name: len(items) for name, items in sorted(self._mem.items())}
             keys = self._disk_keys()
-            result = {}
+            for key in set(self._mem) - keys:
+                self._mem.pop(key, None)
+            refreshed = {}
             for key in sorted(keys):
                 items = self._load(key)
                 if items is not None:
-                    result[key] = len(items)
-            for key in set(self._mem) - keys:
-                self._mem.pop(key, None)
-            return result
+                    refreshed[key] = items
+            self._mem = refreshed
+            return {key: len(items) for key, items in refreshed.items()}
 
     def clear(self, name: str | None = None) -> int:
+        requested = _safe_name(name) if name is not None else None
         with self._lock, self._directory_lock():
-            keys = ({_safe_name(name)} if name is not None else
+            keys = ({requested} if requested is not None else
                     set(self._mem) | self._disk_keys(bounded=False))
             removed = 0
             for key in keys:

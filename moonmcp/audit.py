@@ -34,14 +34,14 @@ def setup_logging(level: str | None = None) -> logging.Logger:
         handler._moonmcp_stderr = True  # type: ignore[attr-defined]
         logger.addHandler(handler)
         managed = [handler]
-    for handler in managed:
-        if isinstance(handler, logging.StreamHandler):
+    for managed_handler in managed:
+        if isinstance(managed_handler, logging.StreamHandler):
             try:
-                handler.setStream(sys.stderr)
+                managed_handler.setStream(sys.stderr)
             except (OSError, ValueError):
                 # A previous test/client capture stream may already be closed.
-                handler.stream = sys.stderr
-            handler.setFormatter(logging.Formatter(
+                managed_handler.stream = sys.stderr
+            managed_handler.setFormatter(logging.Formatter(
                 "%(asctime)s moonmcp[%(levelname)s] %(message)s"))
     lvl = (level or os.environ.get("MOONMCP_LOG_LEVEL", "WARNING")).upper()
     logger.setLevel(getattr(logging, lvl, logging.WARNING))
@@ -126,7 +126,8 @@ class AuditLog:
 
     def _append(self, line: bytes) -> None:
         assert self.path is not None
-        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_NONBLOCK", 0))
         with path_lock(self.path):
             fd = os.open(self.path, flags, 0o600)
             try:
@@ -140,6 +141,8 @@ class AuditLog:
                     fd = -1
                     self._rotate()
                     fd = os.open(self.path, flags, 0o600)
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise OSError("audit path must be a regular file")
                 with os.fdopen(fd, "ab") as stream:
                     fd = -1
                     stream.write(line)

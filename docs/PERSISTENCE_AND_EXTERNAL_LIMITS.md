@@ -22,14 +22,20 @@ Writes and replacement metadata are synchronized to disk when fsync is enabled.
 Filesystem support and power-loss behavior still matter. A failed audit write
 preserves the in-memory record, emits a warning and appears in the summary; it is
 not reported as durable evidence. Only cooperating writers obey the lock.
+Process coordination assumes independently initialized processes. Reusing inherited
+stores after forking during an active persistence operation is unsupported; use
+spawn or exec before accessing persistence in a worker.
 
 ## Snapshot baselines
 
 SnapshotStore defaults to 256 named snapshots, 10,000 distinct items per snapshot
 and 1,000,000 serialized bytes. Persistent updates use a same-directory private
 temporary file, fsync and atomic replacement under the shared directory lock.
-A failed replacement preserves the previous baseline. Cross-process comparisons
-reload the persisted baseline before computing the next difference.
+A failed replacement preserves the previous baseline. If replacement succeeds
+but a later fsync fails, the new file may already be visible; the call reports an
+unconfirmed update and the next comparison reloads disk state. Cross-process
+comparisons reload the persisted baseline before computing the next difference.
+Canonical snapshot names are limited to 120 characters.
 
 Corrupt, oversized or incorrectly typed persisted state raises an explicit error
 instead of silently declaring a fresh baseline. Count, item and byte limits also
