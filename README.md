@@ -133,6 +133,7 @@ Merging a roadmap does not implement its features.
 
 Technical and operating references:
 
+- [Roadmap implementation status (2026-10-21)](docs/ROADMAP_STATUS_2026-10-21.md)
 - [Implementation priorities and discovery-plan index](docs/IMPLEMENTATION_PRIORITIES.md)
 - [Capability audit and roadmap reconciliation (2026-10-15)](docs/CAPABILITY_AUDIT_2026-10-15.md)
 - [Research and design notes](docs/RESEARCH.md)

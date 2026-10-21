@@ -20,8 +20,11 @@ Cleanup has a separate four second reserve, including at most two seconds per
 shutdown operation. Python waits do not wait indefinitely for a coroutine which
 ignores cancellation. Startup managers and acquisition tasks remain owned even
 before a driver or browser handle is returned. Partial startup attempts manager
-exit; returned browsers and drivers are closed. Handles arriving after the
+exit; returned browsers and drivers are closed. Evaluation tasks belong to their
+own session; a task still pending after driver shutdown and the reserve makes
+that session's cleanup uncertain. Handles arriving after the
 cleanup reserve receive a separately retained, bounded disposal attempt.
+`cleanup_error` keeps cleanup failures visible alongside an operation error.
 `cleanup_confirmed=false` explicitly reports failed or uncertain cleanup and is
 never changed to success because a late disposal eventually completes.
 `cleanup_confirmed=null` means no browser session was started.

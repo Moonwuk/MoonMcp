@@ -103,6 +103,7 @@ class BrowserResult:
     trust: str = "untrusted"
     content_safety: dict = field(default_factory=dict)
     cleanup_confirmed: bool | None = None
+    cleanup_error: str | None = None
 
 
 async def browse(
@@ -245,6 +246,7 @@ class InteractResult:
     trust: str = "untrusted"
     content_safety: dict = field(default_factory=dict)
     cleanup_confirmed: bool | None = None
+    cleanup_error: str | None = None
 
 
 async def interact(

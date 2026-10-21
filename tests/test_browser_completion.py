@@ -311,6 +311,47 @@ async def test_late_acquisition_remains_owned_after_cleanup_reserve(fake_browser
         await asyncio.sleep(0)
 
 
+@pytest.mark.parametrize("phase", ["start", "launch"])
+async def test_handle_arriving_during_shutdown_gets_its_own_disposer(fake_browser, monkeypatch, phase):
+    monkeypatch.setattr(browser_runtime, "CLEANUP_RESERVE_SECONDS", 0.04)
+    monkeypatch.setattr(browser_runtime, "CLEANUP_STEP_SECONDS", 0.01)
+    release, disposed = asyncio.Event(), asyncio.Event()
+
+    async def acquire(*args, **kwargs):
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        return fake_browser.playwright if phase == "start" else fake_browser.browser
+
+    async def unblock(*args):
+        release.set()
+        # Allow the acquisition to finish after cleanup selected its handles.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    async def dispose():
+        disposed.set()
+
+    if phase == "start":
+        fake_browser.manager.start.side_effect = acquire
+        fake_browser.manager.__aexit__.side_effect = unblock
+        fake_browser.playwright.stop.side_effect = dispose
+    else:
+        fake_browser.playwright.chromium.launch.side_effect = acquire
+        fake_browser.playwright.stop.side_effect = unblock
+        fake_browser.browser.close.side_effect = dispose
+    try:
+        result = await asyncio.wait_for(
+            browser.browse("http://fixture.test/", wall_timeout_ms=20), 1)
+        assert result.cleanup_confirmed is False
+        await reached(disposed)
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+
 async def test_cleanup_reserve_bounds_a_cancellation_resistant_close(fake_browser, monkeypatch):
     monkeypatch.setattr(browser_runtime, "CLEANUP_RESERVE_SECONDS", 0.04)
     monkeypatch.setattr(browser_runtime, "CLEANUP_STEP_SECONDS", 0.01)
@@ -331,6 +372,98 @@ async def test_cleanup_reserve_bounds_a_cancellation_resistant_close(fake_browse
     finally:
         release.set()
         await reached(finished)
+
+
+async def test_resistant_evaluation_is_owned_and_marks_only_its_session_uncertain(fake_browser, monkeypatch):
+    monkeypatch.setattr(browser_runtime, "CLEANUP_RESERVE_SECONDS", 0.04)
+    monkeypatch.setattr(browser_runtime, "CLEANUP_STEP_SECONDS", 0.01)
+    release, finished = asyncio.Event(), asyncio.Event()
+
+    async def resistant(script):
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+        finished.set()
+        return 42
+
+    fake_browser.page.evaluate.side_effect = resistant
+    try:
+        first = await asyncio.wait_for(observe("browse", timeout_ms=20), 1)
+        assert "BrowserEvaluationTimeout" in first.error
+        assert first.cleanup_confirmed is False
+        assert not finished.is_set()
+        fake_browser.page.evaluate.side_effect = None
+        fake_browser.page.evaluate.return_value = 42
+        second = await asyncio.wait_for(observe("browse", timeout_ms=20), 1)
+        assert second.cleanup_confirmed is True
+        assert first.cleanup_confirmed is False
+    finally:
+        release.set()
+        await reached(finished)
+
+
+async def test_cancelled_cleanup_task_cannot_spin_the_shield_loop(fake_browser, monkeypatch):
+    async def cancelled_cleanup(self, work):
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(browser_runtime._OwnedSession, "cleanup", cancelled_cleanup)
+    result = SimpleNamespace(error=None, cleanup_confirmed=None)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(runtime_call(fake_browser, result), 1)
+    assert result.cleanup_confirmed is False
+
+
+@pytest.mark.parametrize("cancel_caller", [False, True])
+async def test_cleanup_exception_preserves_caller_cancellation_and_existing_error(
+        fake_browser, monkeypatch, cancel_caller):
+    cleaning, release = asyncio.Event(), asyncio.Event()
+
+    async def broken_cleanup(self, work):
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+        cleaning.set()
+        await release.wait()
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(browser_runtime._OwnedSession, "cleanup", broken_cleanup)
+    result = SimpleNamespace(error="existing operation note", cleanup_confirmed=None)
+    task = asyncio.create_task(runtime_call(fake_browser, result))
+    try:
+        await reached(cleaning)
+        if cancel_caller:
+            task.cancel()
+        release.set()
+        if cancel_caller:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 1)
+        else:
+            await asyncio.wait_for(task, 1)
+        assert result.cleanup_confirmed is False
+        assert result.error == "existing operation note"
+        assert "cleanup failed" in result.cleanup_error
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_operation_and_cleanup_errors_are_both_visible(fake_browser, monkeypatch):
+    async def broken_cleanup(self, work):
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(browser_runtime._OwnedSession, "cleanup", broken_cleanup)
+    fake_browser.page.title.side_effect = RuntimeError("page failed")
+    result = await browser.browse("http://fixture.test/")
+    assert "page failed" in result.error
+    assert "cleanup failed" in result.cleanup_error
+    assert result.cleanup_confirmed is False
 
 
 async def test_wall_timeout_also_covers_non_evaluation_work(fake_browser):

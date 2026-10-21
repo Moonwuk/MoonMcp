@@ -37,11 +37,13 @@ jobs:
         run: python -m moonmcp.knowledge.validation
 
       - name: Evaluate deterministic private-read controls
-        run: python -m moonmcp.evaluation --trials 1
+        run: python -m moonmcp.evaluation --trials 1 > discovery-evaluation-smoke.json
 
       - name: Record five-trial deterministic comparison
         if: matrix.python-version == '3.11'
-        run: python -m moonmcp.evaluation --trials 5 > discovery-evaluation.json
+        run: |
+          python -m moonmcp.evaluation --trials 5 > discovery-evaluation.json
+          python -c "import json; r=json.load(open('discovery-evaluation.json')); print(json.dumps({k:r[k] for k in ('protocol_sha256','provenance','metrics','gates','passed')}, indent=2))"
 
       - name: Preserve deterministic comparison report
         if: matrix.python-version == '3.11'

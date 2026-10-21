@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
+from contextvars import ContextVar
 from typing import Any
 
 CLEANUP_STEP_SECONDS = 2.0
 CLEANUP_RESERVE_SECONDS = 4.0
 _BACKGROUND: set[asyncio.Task[Any]] = set()
+_EVALUATIONS: ContextVar[set[asyncio.Task[Any]] | None] = ContextVar(
+    "browser_evaluations", default=None)
 
 
 class BrowserEvaluationTimeout(Exception):
@@ -84,6 +87,9 @@ def _dispose_late(task: asyncio.Task[Any], method: str) -> None:
 
 async def evaluate(page: Any, script: str, timeout_ms: int) -> Any:
     task = asyncio.create_task(page.evaluate(script))
+    evaluations = _EVALUATIONS.get()
+    if evaluations is not None:
+        evaluations.add(task)
     try:
         done, _ = await asyncio.wait({task}, timeout=timeout_ms / 1000)
     except asyncio.CancelledError:
@@ -104,6 +110,7 @@ class _OwnedSession:
         self.browser: Any = None
         self.start: asyncio.Task[Any] | None = None
         self.launch: asyncio.Task[Any] | None = None
+        self.evaluations: set[asyncio.Task[Any]] = set()
 
     async def work(self, factory: Callable[[], Any], launch_kwargs: dict,
                    operation: Callable[[Any], Awaitable[None]]) -> None:
@@ -113,7 +120,11 @@ class _OwnedSession:
         self.playwright = await asyncio.shield(self.start)
         self.launch = asyncio.create_task(self.playwright.chromium.launch(**launch_kwargs))
         self.browser = await asyncio.shield(self.launch)
-        await operation(self.browser)
+        token = _EVALUATIONS.set(self.evaluations)
+        try:
+            await operation(self.browser)
+        finally:
+            _EVALUATIONS.reset(token)
 
     async def cleanup(self, work: asyncio.Task[Any]) -> bool:
         loop = asyncio.get_running_loop()
@@ -148,26 +159,37 @@ class _OwnedSession:
         # Handles which appear only after our selection remain owned. A separate
         # bounded late disposer attempts their shutdown, but cannot certify this run.
         late = False
-        for task, method in ((self.start, "stop"), (self.launch, "close")):
-            if task is not None:
-                if not task.done():
+        for acquisition, method in ((self.start, "stop"), (self.launch, "close")):
+            if acquisition is not None:
+                if not acquisition.done():
                     late = True
-                    _dispose_late(task, method)
+                    _dispose_late(acquisition, method)
                 else:
-                    handle = _value(task)
+                    handle = _value(acquisition)
                     selected = playwright if method == "stop" else browser
                     if handle is not None and handle is not selected:
                         late = True
-                        _dispose_late(task, method)
+                        _dispose_late(acquisition, method)
                     else:
-                        _consume(task)
+                        _consume(acquisition)
+        pending_evaluations = {task for task in self.evaluations if not task.done()}
+        for task in pending_evaluations:
+            task.cancel()
+        if pending_evaluations:
+            await asyncio.wait(pending_evaluations, timeout=max(0.0, deadline - loop.time()))
+        evaluations_settled = all(task.done() for task in self.evaluations)
+        for task in self.evaluations:
+            if task.done():
+                _consume(task)
+            else:
+                _retain(task)
         await asyncio.sleep(0)
         if not work.done():
             _retain(work)
         else:
             _consume(work)
         acquired = playwright is not None and browser is not None
-        return acquired and closed and stopped and work.done() and not late
+        return acquired and closed and stopped and work.done() and not late and evaluations_settled
 
 
 async def run_session(result: Any, factory: Callable[[], Any], launch_kwargs: dict,
@@ -196,8 +218,18 @@ async def run_session(result: Any, factory: Callable[[], Any], launch_kwargs: di
                 break
             except asyncio.CancelledError:
                 interrupted = True
+                if cleanup.done() and cleanup.cancelled():
+                    result.cleanup_confirmed = False
+                    break
+            except Exception as exc:
+                result.cleanup_confirmed = False
+                result.cleanup_error = f"Browser cleanup failed: {type(exc).__name__}: {exc}"[:400]
+                result.error = result.error or result.cleanup_error
+                break
         if not result.cleanup_confirmed:
-            result.error = result.error or "Browser cleanup could not be confirmed"
+            result.cleanup_error = (getattr(result, "cleanup_error", None)
+                                    or "Browser cleanup could not be confirmed")
+            result.error = result.error or result.cleanup_error
     if interrupted:
         raise asyncio.CancelledError
     if error is not None:
