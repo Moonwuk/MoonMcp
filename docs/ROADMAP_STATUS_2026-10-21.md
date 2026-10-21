@@ -1,11 +1,12 @@
 # Roadmap implementation status — 2026-10-21
 
 **Audit baseline:** [caad7c9](https://github.com/Moonwuk/MoonMcp/commit/caad7c9cf135318b3a5155b12facfb190a958dde).
-**Delivery status:** source changes described below are proposed in this delivery
-branch; publishing this status does not merge them or complete every roadmap.
+**Delivery scope:** selected reliability fixes and deterministic evaluation,
+tracked in [PR #26](https://github.com/Moonwuk/MoonMcp/pull/26). The source and
+acceptance tables below distinguish implemented portions from remaining work.
 **Validation evidence:** the exact assembled head and CI results are recorded in
 [PR #26](https://github.com/Moonwuk/MoonMcp/pull/26). Consult its checks before merge.
-Earlier local runs do not certify reconstructed source bytes.
+Checks apply to their recorded source revision; later changes require fresh validation.
 
 The review compares the implementation and regression tests with the
 [product roadmap](ROADMAP.md), [autonomy roadmap](AUTONOMY_ROADMAP.md),
@@ -52,7 +53,7 @@ Evidence: [registry](../moonmcp/registry.py),
 | Reporting: RP7 | Escape Obsidian YAML keys, scalar strings and list items, including quotes, line breaks, controls and strings resembling YAML booleans/numbers. | Evidence redaction RP3/RP9, SARIF enrichment and CVSS extensions are not delivered by this fix. See [Obsidian](../moonmcp/obsidian.py). |
 | External execution: EX1/EX2 | Require admission before network-tool spawn; bound combined output to 1 MiB by default, at most 16 MiB; enforce a monotonic deadline and terminate/reap on failure/cancellation. | POSIX process groups and direct Windows-child handling have different guarantees. Shielded cleanup is bounded, but startup settlement can exceed the requested timeout. This is not managed request accounting, egress containment or a binary TOCTOU fix. See [CLI adapter](../moonmcp/external/cli.py) and [operating limits](PERSISTENCE_AND_EXTERNAL_LIMITS.md). |
 | Durable state: MS9/MS20/MS21/MS22; append durability related to MS10 | Rotate audit logs with a default 4 MiB segment and three backups, serialized append/rotation and fsync; digest oversized records. Atomically replace bounded snapshot state and expose corruption/write failures, reload stored state and persist clear operations. | Snapshot defaults are 256 snapshots, 10,000 items and 1,000,000 bytes. Local durability is not a crash-proof or tamper-proof journal, database maintenance or unlimited multi-process transactions. See [audit](../moonmcp/audit.py), [monitor](../moonmcp/monitor.py) and [operating limits](PERSISTENCE_AND_EXTERNAL_LIMITS.md). |
-| Browser: BR1/BR3 | Mark remote observations untrusted, add bounded advisory content checks, Python-side execution deadlines and bounded startup/cleanup ownership. Default JS evaluation deadline is 20 seconds; the call budget defaults to 60 seconds, is capped at 120 seconds and accepts at most 100 actions. | Advisory matches are not sanitization or proof that unmatched content is safe. Browser state is not a persistent named session, a CPU/VM sandbox or a managed/accounted transport. The reconstructed browser implementation requires final-branch CI. See [browser](../moonmcp/web/browser.py). |
+| Browser: BR1/BR3 | Mark remote observations untrusted, add bounded advisory content checks, Python-side execution deadlines and bounded startup/cleanup ownership. Default JS evaluation deadline is 20 seconds; the call budget defaults to 60 seconds, is capped at 120 seconds and accepts at most 100 actions. | Advisory matches are not sanitization or proof that unmatched content is safe. Browser state is not a persistent named session, a CPU/VM sandbox or a managed/accounted transport. Real Chromium lifecycle and boundary tests run in a dedicated CI job. See [browser](../moonmcp/web/browser.py). |
 | Selected discovery evaluation: IP-01/IP-08 | Add a deterministic independent fixture/evaluator with 16 labelled cases and two methods, including missing objects, expired sessions, long bodies, public/shared objects, failures and budget stops. Track incomplete outcomes, verified claims, causes, requests and replay. | Synthetic tool reliability is not fixed-model discovery improvement. Provider usage/cost are unavailable; third-party project preparation and equal-ready model comparisons remain missing. See [evaluator](../moonmcp/evaluation.py), [fixture](../moonmcp/_evaluation_fixture.py) and [tests](../tests/test_discovery_evaluation.py). |
 
 ## IP-01 through IP-08 acceptance status
@@ -159,11 +160,9 @@ completion claims.
 
 ## Verification and remaining evidence
 
-The original focused implementation had local checks before execution-host
-failure. Source recovery preserves recorded patches where possible; the new
-external/storage/browser changes also require fresh assembled-branch validation.
-Do not reuse an earlier aggregate local test count as proof for reconstructed
-bytes or a later commit.
+Use the CI checks attached to the actual assembled source revision as execution
+evidence. An earlier aggregate test count does not certify a later change, an
+unavailable dependency or a transport that was skipped.
 
 Before merge, record the actual assembled head and its CI results for Python
 3.10/3.11/3.12, knowledge validation, browser boundaries/lifecycle, real Docker
