@@ -194,24 +194,52 @@ class VersionVulnResult:
 # Version parsing helpers
 # ---------------------------------------------------------------------------
 
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+_VERSION_TOKEN = (r"\d+(?:\.\d+){1,3}"
+                  r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+                  r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+                  r"(?![0-9A-Za-z_+-]|\.[0-9A-Za-z])")
+_VERSION_RE = re.compile(r"[vV]?(\d+(?:\.\d+){1,3})"
+                         r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+                         r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", re.ASCII)
 
-def _parse_version(v: str) -> tuple[int, ...]:
-    m = _VERSION_RE.search(v)
+
+def _parse_version(v: str) -> tuple | None:
+    """Order numeric releases and SemVer prereleases; reject unknown syntax.
+
+    This is deliberately not a general package-version comparator. Distribution
+    epochs, post/dev releases and prose need their ecosystem's ordering rules.
+    """
+    raw = v.strip()
+    if len(raw) > 256:
+        return None
+    m = _VERSION_RE.fullmatch(raw)
     if not m:
-        return (0,)
-    parts = [int(g or 0) for g in m.groups()]
-    # Strip trailing zeros for comparison
-    while parts and parts[-1] == 0:
-        parts.pop()
-    return tuple(parts) if parts else (0,)
+        return None
+    parts = tuple(int(part) for part in m[1].split("."))
+    core = (*parts, *([0] * (4 - len(parts))))
+    if m[2] is None:
+        return core, (1, ())
+    prerelease = []
+    for part in m[2].split("."):
+        if part.isascii() and part.isdecimal():
+            if len(part) > 1 and part.startswith("0"):
+                return None  # numeric prerelease identifiers cannot have leading zeroes
+            prerelease.append((0, int(part), ""))
+        else:
+            prerelease.append((1, 0, part))
+    return core, (0, tuple(prerelease))
+
 
 def _version_in_range(target: str, affected_min: str, affected_max: str) -> str:
     """Returns 'vulnerable', 'patched', or 'unknown'."""
     t = _parse_version(target)
-    lo = _parse_version(affected_min) if affected_min else (0,)
-    hi = _parse_version(affected_max) if affected_max else (999,)
-    if t < lo:
+    lo = _parse_version(affected_min) if affected_min else None
+    hi = _parse_version(affected_max) if affected_max else None
+    if t is None or hi is None or (affected_min and lo is None):
+        return "unknown"
+    if lo is not None and lo >= hi:
+        return "unknown"  # an inconsistent range is not evidence of a fixed version
+    if lo is not None and t < lo:
         return "unknown"  # before affected range
     if t >= hi:
         return "patched"  # at or beyond fix version
@@ -225,27 +253,27 @@ def _extract_version_range(description: str) -> tuple[str, str]:
     hi = ""
 
     # "from versions 32.0.0 to before 32.0.9"
-    m = re.search(r"from versions?\s+([\d.]+)\s+to\s+before\s+([\d.]+)", description, re.I)
+    m = re.search(rf"from versions?\s+({_VERSION_TOKEN})\s+to\s+before\s+({_VERSION_TOKEN})", description, re.I)
     if m:
         lo = m.group(1)
         hi = m.group(2)
         return lo, hi
 
     # "versions 32.0.0 to before 32.0.9"
-    m = re.search(r"versions?\s+([\d.]+)\s+to\s+before\s+([\d.]+)", description, re.I)
+    m = re.search(rf"versions?\s+({_VERSION_TOKEN})\s+to\s+before\s+({_VERSION_TOKEN})", description, re.I)
     if m:
         lo = m.group(1)
         hi = m.group(2)
         return lo, hi
 
     # "prior to X" or "before X"
-    m = re.search(r"(?:prior to|before)\s+([\d.]+)", description, re.I)
+    m = re.search(rf"(?:prior to|before)\s+({_VERSION_TOKEN})", description, re.I)
     if m:
         hi = m.group(1)
         return lo, hi
 
     # "from X" (lower bound only)
-    m = re.search(r"from\s+(?:version\s+)?([\d.]+)", description, re.I)
+    m = re.search(rf"from\s+(?:version\s+)?({_VERSION_TOKEN})", description, re.I)
     if m:
         lo = m.group(1)
         return lo, hi
@@ -257,10 +285,10 @@ def _extract_fix_version(description: str) -> str:
     """Extract the fix version from CVE description."""
     # "upgraded to X" / "fixed in X" / "patched in X"
     for pattern in [
-        r"(?:upgraded|fixed|patched|updated)\s+to\s+([\d.]+)",
-        r"fix(?:ed)?\s+(?:in\s+)?(?:version\s+)?([\d.]+)",
-        r"release[sd]?\s+([\d.]+)",
-        r"upgrade[d]?\s+to\s+([\d.]+)",
+        rf"(?:upgraded|fixed|patched|updated)\s+to\s+({_VERSION_TOKEN})",
+        rf"fix(?:ed)?\s+(?:in\s+)?(?:version\s+)?({_VERSION_TOKEN})",
+        rf"release[sd]?\s+({_VERSION_TOKEN})",
+        rf"upgrade[d]?\s+to\s+({_VERSION_TOKEN})",
     ]:
         m = re.search(pattern, description, re.I)
         if m:

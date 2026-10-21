@@ -14,6 +14,8 @@ authorised testing, not weaponized exploit chains.
 
 from __future__ import annotations
 
+SCHEMA_VERSION = 1
+
 INJECTIONS: list[dict] = [   {   'id': 'sqli',
         'name': 'SQL Injection',
         'aliases': [   'SQLi',

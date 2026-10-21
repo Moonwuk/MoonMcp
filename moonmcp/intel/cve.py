@@ -10,14 +10,58 @@ An optional ``NVD_API_KEY`` raises the rate limit but is never required.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
+import time
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
-from ..net.http import HttpClient
-from ..strix_adapted import retry_async
+from ..net.http import HttpClient, HttpResult
 
 _BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+_ATTEMPTS = 4
+_MAX_RETRY_DELAY = 30.0
+
+
+def _retry_delay(response: HttpResult, attempt: int) -> float:
+    """Respect bounded Retry-After values; malformed hints use backoff."""
+    delay = min(2.0 ** attempt, _MAX_RETRY_DELAY)
+    raw = response.header("Retry-After")
+    if raw:
+        try:
+            seconds = float(raw)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+                if when.tzinfo is None:
+                    return delay
+                seconds = when.timestamp() - time.time()
+            except (ValueError, TypeError, OverflowError):
+                return delay
+        if math.isfinite(seconds) and seconds >= 0:
+            delay = min(seconds, _MAX_RETRY_DELAY)
+    return delay
+
+
+async def _fetch_nvd(client: HttpClient, url: str, api_key: str | None) -> HttpResult:
+    """Retry only transient HTTP failures; every actual attempt stays metered."""
+    for attempt in range(_ATTEMPTS):
+        try:
+            response = await client.fetch(url, headers=_headers(api_key), timeout=25.0,
+                                          follow_redirects=True, suppress_auth=True)
+        except OSError:
+            if attempt == _ATTEMPTS - 1:
+                raise
+            await asyncio.sleep(min(2.0 ** attempt, _MAX_RETRY_DELAY))
+            continue
+        if (response.blocked_reason or response.redirect_blocked
+                or response.status not in {429, 500, 502, 503, 504}
+                or attempt == _ATTEMPTS - 1):
+            return response
+        await asyncio.sleep(_retry_delay(response, attempt))
+    raise AssertionError("unreachable NVD retry state")  # pragma: no cover
 
 
 @dataclass
@@ -86,8 +130,8 @@ async def lookup_cve(client: HttpClient, cve_id: str, api_key: str | None = None
     cve_id = cve_id.strip().upper()
     url = f"{_BASE}?cveId={quote(cve_id)}"
 
-    async def _fetch():
-        r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True, suppress_auth=True)
+    try:
+        r = await _fetch_nvd(client, url, api_key)
         if r.error or r.status != 200:
             return None
         try:
@@ -99,12 +143,10 @@ async def lookup_cve(client: HttpClient, cve_id: str, api_key: str | None = None
             return None
         return _parse_vuln(vulns[0])
 
-    # Retry with backoff — NVD frequently rate-limits (429) or times out.
-    # Without retry, a 429 looks like "CVE not found" (silently returns None).
-    # (Audit 2026-07-27, IN6.)
-    try:
-        return await retry_async(_fetch, max_retries=3, initial_delay=1.0, max_delay=30.0)
     except Exception:
+        # Preserve the historical optional-record API. None alone still cannot
+        # distinguish absence from provider failure; callers must not interpret
+        # it as proof that a product has no vulnerabilities.
         return None
 
 
@@ -116,7 +158,7 @@ async def search_cves(
     api_key: str | None = None,
 ) -> CveSearchResult:
     url = f"{_BASE}?keywordSearch={quote(keyword)}&resultsPerPage={min(max(1, limit), 50)}"
-    r = await client.fetch(url, headers=_headers(api_key), timeout=25.0, follow_redirects=True, suppress_auth=True)
+    r = await _fetch_nvd(client, url, api_key)
     out = CveSearchResult(query=keyword)
     if r.error or r.status != 200:
         out.error = r.error or f"HTTP {r.status}"

@@ -10,7 +10,10 @@ causes underneath nearly every web/server bug.  Data lives in
 
 from __future__ import annotations
 
-from .vulns_data import ROOT_CAUSES, SERVER_SIDE_VULNS, VULN_TOOLS
+from .validation import require_schema_version
+from .vulns_data import ROOT_CAUSES, SCHEMA_VERSION, SERVER_SIDE_VULNS, VULN_TOOLS
+
+require_schema_version("vulns", SCHEMA_VERSION)
 
 _SEV = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

@@ -33,6 +33,23 @@ jobs:
       - name: Type-check (mypy)
         run: mypy moonmcp
 
+      - name: Validate versioned knowledge catalogs
+        run: python -m moonmcp.knowledge.validation
+
+      - name: Evaluate deterministic private-read controls
+        run: python -m moonmcp.evaluation --trials 1
+
+      - name: Record five-trial deterministic comparison
+        if: matrix.python-version == '3.11'
+        run: python -m moonmcp.evaluation --trials 5 > discovery-evaluation.json
+
+      - name: Preserve deterministic comparison report
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-evaluation
+          path: discovery-evaluation.json
+
       - name: Test (pytest + coverage gate)
         run: pytest -q --cov=moonmcp --cov-report=term-missing --cov-fail-under=70
 

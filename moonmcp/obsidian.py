@@ -25,6 +25,17 @@ _SEV_COLOR = {"critical": "1", "high": "2", "medium": "3", "low": "5", "info": "
 _TAG = re.sub(r"[^a-z0-9]+", "-", TOOL_NAME.lower()).strip("-") or "tool"
 
 
+def _yaml_string(value: str) -> str:
+    """Emit a string scalar without letting its contents become YAML syntax."""
+    if (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_./-]*", value)
+            and value.lower() not in {"null", "true", "false", "yes", "no", "on", "off", "y", "n"}):
+        return value
+    # JSON double-quoted scalars are valid YAML. Escape Unicode line separators
+    # too: YAML considers them line breaks even inside a quoted scalar.
+    return re.sub(r"[\x7f-\x9f\u2028\u2029]", lambda m: f"\\u{ord(m[0]):04x}",
+                  json.dumps(value, ensure_ascii=False))
+
+
 def slug(text: str, maxlen: int = 60) -> str:
     s = _SLUG.sub("-", str(text).strip().lower()).strip("-")
     return (s[:maxlen] or "note").strip("-")
@@ -46,11 +57,10 @@ def frontmatter(props: dict) -> str:
             vals = [str(x) for x in v if str(x).strip()]
             if not vals:
                 continue
-            lines.append(f"{k}:")
-            lines.extend(f"  - {x}" for x in vals)
+            lines.append(f"{_yaml_string(str(k))}:")
+            lines.extend(f"  - {_yaml_string(x)}" for x in vals)
         else:
-            sv = str(v).replace("\n", " ")
-            lines.append(f'{k}: "{sv}"' if (":" in sv or "#" in sv) else f"{k}: {sv}")
+            lines.append(f"{_yaml_string(str(k))}: {_yaml_string(str(v))}")
     lines.append("---")
     return "\n".join(lines)
 

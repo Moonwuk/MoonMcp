@@ -213,6 +213,10 @@ class ScopeManager:
         hostname and blocks it if **any** resolved address is private/reserved —
         closing the "in-scope hostname that points at 127.0.0.1 / cloud-metadata"
         SSRF hole. No-op when ``block_private`` is disabled.
+
+        This legacy diagnostic retains its unresolvable-name behavior. HTTP
+        connections use :meth:`resolve_pin`, which requires a vetted address
+        before dispatch while the private-address guard is enabled.
         """
 
         if not self.block_private:
@@ -258,9 +262,9 @@ class ScopeManager:
         for the connect.
 
         ``block_reason`` non-``None`` ⇒ do not connect. Otherwise ``pinned_ip`` is
-        the vetted address to dial, or ``None`` when pinning does not apply (private
-        guard disabled, an unresolvable name, or no address to pin) — the caller then
-        falls back to connecting by hostname as before.
+        the vetted address to dial. Only an explicitly disabled private-address
+        guard permits ``(None, None)``. Empty, malformed or failed DNS vetting
+        must not fall back to a second hostname lookup at the transport layer.
         """
 
         if not self.block_private:
@@ -268,7 +272,7 @@ class ScopeManager:
         try:
             host = normalize_target(target)
         except ValueError:
-            return (None, None)
+            return ("invalid target for the SSRF guard — blocked (fail-closed)", None)
         ip = canonical_ip(host)
         if ip is not None:
             if _ip_is_blocked(ip):
@@ -282,15 +286,21 @@ class ScopeManager:
         pin: str | None = None
         for raw in resolved:
             try:
+                if not isinstance(raw, str):
+                    raise ValueError("DNS address must be a string")
                 addr = ipaddress.ip_address(raw)
             except ValueError:
-                continue
+                return (f"{host} returned an invalid address for the SSRF guard — blocked "
+                        "(fail-closed)", None)
             if _ip_is_blocked(addr):
                 return (f"{host} resolves to {addr}, a private/reserved address — blocked by the "
                         "SSRF guard (set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)",
                         None)
             if pin is None:
-                pin = raw  # first vetted address becomes the pinned connect target
+                pin = str(addr)  # first vetted address becomes the pinned connect target
+        if pin is None:
+            return (f"{host} has no vetted DNS address for the SSRF guard — blocked "
+                    "(fail-closed; set MOONMCP_BLOCK_PRIVATE=0 for authorised internal testing)", None)
         return (None, pin)
 
     # -- mutation ----------------------------------------------------------

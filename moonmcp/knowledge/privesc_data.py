@@ -18,6 +18,8 @@ LOLBAS, PayloadsAllTheThings, PEASS-ng, Exploit-DB, vendor advisories and NVD.
 
 from __future__ import annotations
 
+SCHEMA_VERSION = 1
+
 PRIVESC: list[dict] = [   {   'id': 'ad-adcs-esc1-esc8-certificate-abuse',
         'name': 'AD CS Certificate Template & Enrollment Abuse (ESC1-ESC8)',
         'platform': 'active-directory',
