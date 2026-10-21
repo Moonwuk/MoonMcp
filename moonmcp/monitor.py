@@ -1,21 +1,16 @@
-"""Attack-surface change tracking (baseline + diff).
-
-Recon is a loop, not a one-shot: assets appear and disappear.  A named snapshot
-of any set of strings — subdomains, live hosts, endpoints, params — can be diffed
-against the next run so the operator sees *only what is new* (freshly exposed,
-under-competed surface) instead of re-triaging everything.
-
-Snapshots live in memory for the session; if ``MOONMCP_STATE_DIR`` is set they
-also persist to disk as JSON, so a long-running / scheduled MoonMCP can monitor
-across runs.
-"""
+"""Bounded attack-surface snapshots with atomic, cooperating persistence."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import threading
 from collections.abc import Iterable
+from pathlib import Path
+
+from .persistence import atomic_write, path_lock
 
 _SAFE = re.compile(r"[^a-z0-9_.-]+")
 
@@ -25,75 +20,175 @@ def _safe_name(name: str) -> str:
 
 
 class SnapshotStore:
-    """Named snapshots of string sets, diffed across runs (optional disk persistence)."""
+    """Named string sets; corrupt or unconfirmed persistence never re-baselines."""
 
-    def __init__(self, state_dir: str | None = None) -> None:
+    def __init__(self, state_dir: str | None = None, *, max_snapshots: int = 256,
+                 max_items: int = 10_000, max_bytes: int = 1_000_000) -> None:
+        for label, value in (("max_snapshots", max_snapshots),
+                             ("max_items", max_items), ("max_bytes", max_bytes)):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{label} must be a positive integer")
         self.state_dir = state_dir or None
+        self.max_snapshots = max_snapshots
+        self.max_items = max_items
+        self.max_bytes = max_bytes
         self._mem: dict[str, set[str]] = {}
+        self._lock = threading.RLock()
 
     def _path(self, name: str) -> str | None:
-        if not self.state_dir:
+        if self.state_dir is None:
             return None
         return os.path.join(self.state_dir, f"snap-{_safe_name(name)}.json")
 
+    def _directory_lock(self):
+        if self.state_dir is None:
+            return contextlib.nullcontext()
+        return path_lock(os.path.join(self.state_dir, ".snapshots"))
+
+    def _disk_keys(self, *, bounded: bool = True) -> set[str]:
+        if self.state_dir is None:
+            return set()
+        directory = Path(self.state_dir)
+        if not directory.exists():
+            return set()
+        keys = set()
+        for path in directory.glob("snap-*.json"):
+            key = path.name[len("snap-"):-len(".json")]
+            if key != _safe_name(key):
+                raise ValueError("snapshot filename is not canonical")
+            keys.add(key)
+            if bounded and len(keys) > self.max_snapshots:
+                raise ValueError("snapshot count exceeds max_snapshots")
+        return keys
+
+    def _encoded(self, items: set[str]) -> bytes:
+        if len(items) > self.max_items:
+            raise ValueError("snapshot exceeds max_items")
+        encoded = json.dumps(sorted(items), ensure_ascii=False,
+                             separators=(",", ":")).encode("utf-8")
+        if len(encoded) > self.max_bytes:
+            raise ValueError("snapshot exceeds max_bytes")
+        return encoded
+
+    def _items(self, items: Iterable[str]) -> set[str]:
+        values: set[str] = set()
+        byte_floor = 2
+        for item in items:
+            value = str(item).strip()
+            if not value or value in values:
+                continue
+            values.add(value)
+            if len(values) > self.max_items:
+                raise ValueError("snapshot exceeds max_items")
+            byte_floor += len(value.encode("utf-8")) + 2
+            if len(values) > 1:
+                byte_floor += 1
+            if byte_floor > self.max_bytes:
+                raise ValueError("snapshot exceeds max_bytes")
+        self._encoded(values)
+        return values
+
     def _load(self, name: str) -> set[str] | None:
-        if name in self._mem:
-            return self._mem[name]
-        path = self._path(name)
-        if path and os.path.exists(path):
-            try:
-                with open(path) as fh:
-                    data = json.load(fh)
-                s = {str(x) for x in data}
-                self._mem[name] = s
-                return s
-            except (OSError, ValueError):
-                return None
-        return None
+        key = _safe_name(name)
+        path = self._path(key)
+        if path is None:
+            cached = self._mem.get(key)
+            return set(cached) if cached is not None else None
+        # Persistent stores always reread: another process may have replaced a
+        # baseline. The memory cache never masks corruption or external changes.
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as stream:
+                if os.fstat(stream.fileno()).st_size > self.max_bytes:
+                    raise ValueError("snapshot baseline exceeds max_bytes")
+                raw = stream.read(self.max_bytes + 1)
+            if len(raw) > self.max_bytes:
+                raise ValueError("snapshot baseline exceeds max_bytes")
+            data = json.loads(raw)
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                raise ValueError("snapshot baseline must be a JSON string list")
+            if len(data) > self.max_items:
+                raise ValueError("snapshot baseline exceeds max_items")
+        except FileNotFoundError:
+            self._mem.pop(key, None)
+            return None
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"snapshot baseline is unreadable or corrupt: {key}") from exc
+        result = set(data)
+        self._mem[key] = result
+        return set(result)
 
     def _store(self, name: str, items: set[str]) -> None:
-        self._mem[name] = items
-        path = self._path(name)
-        if path:
+        key = _safe_name(name)
+        encoded = self._encoded(items)
+        path = self._path(key)
+        if path is not None:
             try:
-                os.makedirs(self.state_dir, exist_ok=True)  # type: ignore[arg-type]
-                with open(path, "w") as fh:
-                    json.dump(sorted(items), fh)
-            except OSError:
-                pass
+                atomic_write(path, encoded)
+            except OSError as exc:
+                raise ValueError(f"snapshot update is unconfirmed: {key}") from exc
+        # Only a confirmed persisted update may advance the in-memory baseline.
+        self._mem[key] = set(items)
 
     def diff(self, name: str, items: Iterable[str]) -> dict:
-        """Diff *items* against snapshot *name*; then update the snapshot.
-
-        First call for a name establishes the baseline (nothing is "new" yet);
-        subsequent calls return what was added / removed since last time.
-        """
-
-        cur = {str(i).strip() for i in items if str(i).strip()}
-        prev = self._load(name)
-        self._store(name, cur)
-        if prev is None:
-            return {"name": name, "baseline_created": True, "total": len(cur),
+        """Diff against a current valid baseline, then atomically replace it."""
+        current = self._items(items)
+        key = _safe_name(name)
+        with self._lock, self._directory_lock():
+            previous = self._load(key)
+            known = self._disk_keys() if self.state_dir is not None else set(self._mem)
+            if self.state_dir is not None:
+                for stale in set(self._mem) - known:
+                    self._mem.pop(stale, None)
+            if previous is None and key not in known and len(known) >= self.max_snapshots:
+                raise ValueError("snapshot count exceeds max_snapshots")
+            self._store(key, current)
+        if previous is None:
+            return {"name": name, "baseline_created": True, "total": len(current),
                     "added": [], "removed": [], "added_count": 0, "removed_count": 0}
-        added = sorted(cur - prev)
-        removed = sorted(prev - cur)
-        return {"name": name, "baseline_created": False, "total": len(cur),
+        added, removed = sorted(current - previous), sorted(previous - current)
+        return {"name": name, "baseline_created": False, "total": len(current),
                 "added": added, "removed": removed,
                 "added_count": len(added), "removed_count": len(removed)}
 
     def names(self) -> dict[str, int]:
-        return {n: len(s) for n, s in sorted(self._mem.items())}
+        with self._lock, self._directory_lock():
+            if self.state_dir is None:
+                return {name: len(items) for name, items in sorted(self._mem.items())}
+            keys = self._disk_keys()
+            result = {}
+            for key in sorted(keys):
+                items = self._load(key)
+                if items is not None:
+                    result[key] = len(items)
+            for key in set(self._mem) - keys:
+                self._mem.pop(key, None)
+            return result
 
     def clear(self, name: str | None = None) -> int:
-        if name is None:
-            n = len(self._mem)
-            self._mem.clear()
-            return n
-        removed = 1 if self._mem.pop(name, None) is not None else 0
-        path = self._path(name)
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        return removed
+        with self._lock, self._directory_lock():
+            keys = ({_safe_name(name)} if name is not None else
+                    set(self._mem) | self._disk_keys(bounded=False))
+            removed = 0
+            for key in keys:
+                existed = key in self._mem
+                path = self._path(key)
+                if path is not None:
+                    try:
+                        os.unlink(path)
+                        existed = True
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        raise ValueError(f"snapshot removal is unconfirmed: {key}") from exc
+                self._mem.pop(key, None)
+                removed += int(existed)
+            if self.state_dir is not None and removed:
+                from .persistence import fsync_directory
+
+                try:
+                    fsync_directory(os.path.abspath(self.state_dir))
+                except OSError as exc:
+                    raise ValueError("snapshot removal is unconfirmed") from exc
+            return removed

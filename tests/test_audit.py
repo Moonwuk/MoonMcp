@@ -13,7 +13,8 @@ from moonmcp.audit import AuditLog, setup_logging
 def test_logger_writes_to_stderr_not_stdout():
     logger = setup_logging()
     # the stdio MCP transport owns stdout — the handler MUST target stderr
-    streams = [h.stream for h in logger.handlers if isinstance(h, logging.StreamHandler)]
+    streams = [h.stream for h in logger.handlers
+               if isinstance(h, logging.StreamHandler) and getattr(h, "_moonmcp_stderr", False)]
     assert streams and all(s is sys.stderr for s in streams)
     assert logger.propagate is False
 
