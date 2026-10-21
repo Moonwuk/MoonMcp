@@ -87,46 +87,100 @@ async def _default_connect(host: str, port: int, tls: bool, timeout: float) -> t
 async def single_packet_race(host: str, port: int, tls: bool, raw: bytes, n: int, *,
                              timeout: float = 12.0, settle: float = 0.1,
                              connect: Connect | None = None) -> dict:
-    """Run the last-byte-synchronized race and report how many requests succeeded."""
+    """Run the last-byte-synchronized race, owning every opened connection.
+
+    Cleanup also covers a partial connection batch, write failure and caller
+    cancellation. Connection tasks settle before cleanup finishes, so an opening
+    connection cannot arrive after its owner has returned.
+    """
 
     n = max(2, min(n, 40))
     do_connect = connect or _default_connect
     head, last = split_last_byte(raw)
 
-    conns = await asyncio.gather(*[do_connect(host, port, tls, timeout) for _ in range(n)],
-                                 return_exceptions=True)
-    live = [c for c in conns if not isinstance(c, BaseException) and c]
-    if len(live) < 2:
-        return {**assess_race([]), "technique": "http1-last-byte-sync",
-                "error": "could not open at least two connections", "connections": len(live)}
+    live: list[tuple] = []
+    closing = False
+
+    def close_writer(writer):
+        try:
+            writer.close()
+        except Exception:
+            # A broken transport must not prevent closing its peers or replace
+            # the original cancellation/write error.
+            pass
+
+    async def open_one():
+        connection = await do_connect(host, port, tls, timeout)
+        if connection:
+            live.append(connection)
+            if closing:
+                close_writer(connection[1])
+        return connection
+
+    opening = [asyncio.create_task(open_one()) for _ in range(n)]
 
     async def _prime(rw) -> None:
         _reader, writer = rw
         writer.write(head)
         await writer.drain()
 
-    # 1) send every request up to (but not including) its final byte, and flush.
-    await asyncio.gather(*[_prime(c) for c in live], return_exceptions=True)
-    # 2) let all primed bytes reach the server (parsed up to the withheld byte).
-    await asyncio.sleep(max(0.0, settle))
-    # 3) release the final byte on every connection as tightly as possible.
-    for _reader, writer in live:
-        writer.write(last)
-    await asyncio.gather(*[w.drain() for _r, w in live], return_exceptions=True)
-
     async def _resp(rw):
-        reader, writer = rw
+        reader, _writer = rw
         try:
             data = await asyncio.wait_for(reader.read(4096), timeout=timeout)
             return _status_of(data)[0]
         except (asyncio.TimeoutError, OSError):
             return None
-        finally:
+
+    async def cleanup():
+        await asyncio.gather(*opening, return_exceptions=True)
+        for _reader, writer in live:
+            close_writer(writer)
+
+        async def wait_closed(writer):
+            if not hasattr(writer, "wait_closed"):
+                return
             try:
-                writer.close()
-            except OSError:
+                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+            except Exception:
                 pass
 
-    results = await asyncio.gather(*[_resp(c) for c in live], return_exceptions=True)
-    statuses = [r if isinstance(r, int) else None for r in results]
-    return {**assess_race(statuses), "technique": "http1-last-byte-sync", "connections": len(live)}
+        await asyncio.gather(*(wait_closed(w) for _r, w in live), return_exceptions=True)
+
+    try:
+        await asyncio.gather(*opening, return_exceptions=True)
+        if len(live) < 2:
+            return {**assess_race([]), "technique": "http1-last-byte-sync",
+                    "error": "could not open at least two connections", "connections": len(live)}
+
+        # 1) prime all requests, keeping their last byte withheld.
+        await asyncio.gather(*[_prime(c) for c in live], return_exceptions=True)
+        # 2) allow the primed bytes to reach the server.
+        await asyncio.sleep(max(0.0, settle))
+        # 3) release the final byte on every connection as tightly as possible.
+        for _reader, writer in live:
+            writer.write(last)
+        await asyncio.gather(*[w.drain() for _r, w in live], return_exceptions=True)
+
+        results = await asyncio.gather(*[_resp(c) for c in live], return_exceptions=True)
+        statuses = [r if isinstance(r, int) else None for r in results]
+        return {**assess_race(statuses), "technique": "http1-last-byte-sync", "connections": len(live)}
+    finally:
+        closing = True
+        for task in opening:
+            if not task.done():
+                task.cancel()
+        # Close immediately, then settle connectors and wait for transport
+        # closure independently of further cancellation of the caller.
+        for _reader, writer in live:
+            close_writer(writer)
+        cleanup_task = asyncio.create_task(cleanup())
+        interrupted = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                interrupted = True
+        cleanup_task.result()
+        if interrupted:
+            raise asyncio.CancelledError()

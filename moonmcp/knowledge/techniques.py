@@ -8,7 +8,10 @@ exploit code.  Data lives in :mod:`moonmcp.knowledge.techniques_data`.
 
 from __future__ import annotations
 
-from .techniques_data import TECHNIQUES
+from .techniques_data import SCHEMA_VERSION, TECHNIQUES
+from .validation import require_schema_version
+
+require_schema_version("techniques", SCHEMA_VERSION)
 
 _SEV = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

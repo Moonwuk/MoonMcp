@@ -20,6 +20,8 @@ shellphish/how2heap, ctf101, vendor advisories and NVD.
 
 from __future__ import annotations
 
+SCHEMA_VERSION = 1
+
 TECHNIQUES: list[dict] = [   {   'id': 'ret2libc',
         'name': 'Return-to-libc (ret2libc)',
         'category': 'code-reuse',

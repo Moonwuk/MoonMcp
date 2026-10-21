@@ -5,6 +5,11 @@ function understood, every finding filed with a severity and effort estimate.
 The goal is a complete, prioritized picture of what's strong, what's OK, and
 what to improve — and where the leverage is.
 
+Read the [implementation status (2026-10-21)](../docs/ROADMAP_STATUS_2026-10-21.md)
+for the dated code/test reconciliation. The layer tables below preserve the
+original audit; their findings and old test counts are historical, and some
+listed gaps are already fixed. Unlisted or conditional work is not implicitly done.
+
 ## How to read
 
 Each `NN-layer.md` file covers one architectural layer:

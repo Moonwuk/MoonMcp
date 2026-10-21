@@ -1,8 +1,18 @@
 # Implementation priorities after capability reconciliation
 
-**Updated:** 2026-10-15. **Baseline:**
+**Original planning update:** 2026-10-15. **Historical baseline:**
 [`a6023a4`](https://github.com/Moonwuk/MoonMcp/commit/a6023a4b37e5a6fe194db5275bc9a72faa76e032).
-**Status:** proposed delivery order; no runtime work is completed by this document.
+**Status:** delivery requirements with a historical planning baseline.
+
+**Current reconciliation (2026-10-21):**
+[Source-based roadmap status](ROADMAP_STATUS_2026-10-21.md) distinguishes implemented,
+partial and remaining work. The original planning baseline below is historical.
+The private-read proof, managed execution, two trusted application recipes and
+independent replay are now implemented within their documented limits. This delivery
+adds deterministic comparison and repairs selected browser, external execution,
+persistence and data-validation gaps; fixed-model trials and arbitrary-project
+preparation remain outstanding.
+
 
 ## Decision
 
@@ -20,7 +30,7 @@ selected; this index does not weaken them or authorise target actions. Unrelated
 product work in the [layer backlogs](../roadmaps/README.md) is not cancelled.
 
 Read the [capability audit](CAPABILITY_AUDIT_2026-10-15.md) for pinned implementation
-evidence and its limits. The merged tree still has `moonmcp/` object
+evidence and its limits. At the original planning baseline, the merged tree had `moonmcp/` object
 `8503c6a48529bec01fdc5b9e0a2c523e41595fe1`: merging the planning PRs did not implement
 their recommendations. Source presence, installed availability, passing regression
 tests and measured discovery effectiveness are different claims.
@@ -45,8 +55,9 @@ An agent-created `curated` lesson is not independent evidence for activating a t
 
 ## Near-term implementation bundles
 
-All eight bundles below are **not started by this PR**. They group existing work,
-not eight more parallel architectures. Each code PR should remain narrowly scoped.
+The original planning PR started none of these bundles. Several bounded portions
+have since shipped; consult the current status map before selecting more work.
+The acceptance criteria below remain requirements, not blanket completion claims.
 The critical HTTP path is IP-01 → IP-03 → IP-04 → IP-05. IP-02 and IP-06 are parallel
 hardening work, not prerequisites for a fixture that does not use those transports.
 IP-07 requires the selected environment/transport gates. IP-08 starts baseline
@@ -161,7 +172,8 @@ or statistical dependency is introduced by the selected BOLA path.
 
 ## Shared proof and release gate
 
-These are planned requirements, not reported passing tests.
+These are acceptance requirements. Consult the current status map and linked
+regression tests for the portions implemented; this table alone reports no test result.
 
 | Case | Required interpretation |
 | --- | --- |
@@ -188,11 +200,13 @@ The audit's older statement that #19 was open is a dated snapshot, not current P
 status. Earlier design text and task IDs remain available; this index changes the
 selection/order of implementation work, not their recorded history or completion.
 
-For the next code PR, select one reproduced IP-02 or IP-03 defect and include its
-regression test plus the smallest compatible fix. Then deliver IP-04/IP-05 using
-the frozen BOLA fixture rather than generating another broad framework. Update
-only the acceptance items established by actual code, tests and review.
+The bounded IP-04/IP-05 proof path and trusted IP-06/IP-07 recipes now exist.
+IP-08 has a deterministic comparison with held-out synthetic controls and fresh
+replay; it does not establish model-driven or real-project discovery gains.
+Next work must address a demonstrated remaining limitation, such as named-session
+lifecycle, supported schema coverage or faithful project preparation. Update only
+acceptance items established by actual code, tests and review.
 
-This consolidation modifies documentation only. It runs no target experiments,
-changes no runtime/dependencies/tests and does not claim a new vulnerability,
-completed implementation or measured discovery improvement.
+The original consolidation was documentation only. Subsequent code deliveries are
+tracked in the current reconciliation. A merged document or passing unrelated test
+does not establish implementation completion or measured discovery improvement.

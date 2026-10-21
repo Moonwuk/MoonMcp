@@ -14,6 +14,8 @@ Security Academy, PayloadsAllTheThings, HackTricks, MITRE CWE and public CVE/inc
 
 from __future__ import annotations
 
+SCHEMA_VERSION = 1
+
 SERVER_SIDE_VULNS: list[dict] = [   {   'id': 'broken-access-control-idor-bola',
         'name': 'Broken Access Control / IDOR / BOLA',
         'category': 'access-control',

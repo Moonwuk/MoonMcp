@@ -340,19 +340,27 @@ _SCANNER_PATH_FLAGS = {
 
 
 def _reject_dangerous_scanner_args(args: list[str]) -> str | None:
-    """Return a reason if *args* try to read/write a filesystem path, else None."""
+    """Reject filesystem inputs and non-HTTP URI values, including inline flags."""
 
     for tok in args:
         t = tok.strip()
         base = t.split("=", 1)[0].lower()
         if base in _SCANNER_PATH_FLAGS:
             return f"flag '{t}' performs file I/O and is not allowed via run_scanner"
-        if "://" in t:
-            continue  # a URL, not a path
-        if t.startswith(("/", "~", "\\\\")) or ".." in t or (len(t) > 2 and t[1] == ":"):
+        value = t.split("=", 1)[1].strip() if t.startswith("-") and "=" in t else t
+        # A URI can be a filesystem read or a non-HTTP protocol even without
+        # double slashes (file:/etc/passwd, data:text/plain,...).
+        if re.search(r"(?:^|[,\s])(?:file|data|ftp|ftps|gopher|javascript):", value, re.I):
+            return f"non-HTTP URI argument '{t}' is not allowed via run_scanner"
+        schemes = re.findall(r"([a-zA-Z][a-zA-Z0-9+.-]*)://", value)
+        if any(scheme.lower() not in {"http", "https"} for scheme in schemes):
+            return f"non-HTTP URI argument '{t}' is not allowed via run_scanner"
+        if schemes:
+            continue
+        if (value.startswith(("/", "~", "\\\\"))
+                or ".." in value or (len(value) > 2 and value[1] == ":")):
             return f"path-like argument '{t}' is not allowed via run_scanner"
     return None
-
 
 # Tools that accept custom HTTP headers and the flag syntax they use.
 # When a bug-bounty program header is active, run_scanner auto-injects it.
@@ -405,10 +413,12 @@ def _host_like_tokens(args: list[str]) -> list[str]:
     expanded: list[str] = []
     for tok in args:
         t = tok.strip()
-        if t and not t.startswith("-") and ("," in t or " " in t):
+        if t.startswith("-") and "=" in t:
+            t = t.split("=", 1)[1].strip()
+        if t and not t.startswith("-") and ("," in t or any(c.isspace() for c in t)):
             expanded.extend(p for p in re.split(r"[,\s]+", t) if p)
         else:
-            expanded.append(tok)
+            expanded.append(t)
 
     found: list[str] = []
     for tok in expanded:
@@ -4896,7 +4906,9 @@ async def run_scanner(tool: str, args: list[str], target: str | None = None) -> 
     bb_args = _inject_bb_header(tool, ctx)
     final_args = list(args) + bb_args if bb_args else args
     result = await cli.run_tool(
-        tool, final_args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
+        tool, final_args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools,
+        scope_check=_scope_check() if ctx.settings.enforce_scope else lambda _target: True,
+        targets=to_check or [target or tool],
     )
     data = to_dict(result)
     if result.available and result.stdout:
@@ -4944,7 +4956,9 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
     url = raw if "://" in raw else f"https://{host}"
     args = nucleimod.build_args(url, tags=tags, templates=templates, severity=severity, dast=dast)
     result = await cli.run_tool(
-        "nuclei", args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools
+        "nuclei", args, timeout=ctx.settings.external_timeout, allow=ctx.settings.allow_external_tools,
+        scope_check=_scope_check() if ctx.settings.enforce_scope else lambda _target: True,
+        targets=[url],
     )
     if not result.available:
         return {
@@ -4954,15 +4968,18 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
                           "content_discovery + cve_search for a native first pass.",
             "also_run_native": nucleimod.also_run_native(),
         }
-    findings = [nucleimod.normalize_finding(r) for r in cli.parse_jsonl(result.stdout)]
+    findings = [nucleimod.normalize_finding(r) for r in cli.parse_jsonl(result.stdout)
+                if isinstance(r, dict)]
+    incomplete = bool(result.error or result.exit_code != 0 or result.truncated
+                      or not result.cleanup_confirmed)
     recorded = 0
-    if record:
+    if record and not incomplete:
         for f in findings:
             ctx.findings.add(target=host, severity=f["severity"], title=f["name"],
                              type="nuclei", detail=f.get("description", ""),
                              evidence=f.get("matched_at", ""), source=f.get("template_id", ""))
             recorded += 1
-    return {
+    data = {
         "target": url,
         "findings": findings,
         "finding_count": len(findings),
@@ -4973,7 +4990,19 @@ async def vuln_scan(target: str, templates: str | None = None, severity: str | N
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
         "stderr_tail": result.stderr[-500:] if result.stderr else "",
+        "truncated": result.truncated,
+        "cleanup_confirmed": result.cleanup_confirmed,
     }
+    if incomplete:
+        data.update({
+            "ok": False,
+            "state": "partial" if findings else "unknown",
+            "retryable": False,
+            "error": result.error or "command_failed",
+            "detail": "Scanner execution was incomplete. Retained matches are review leads; "
+                      "no findings were recorded. Reconcile partial work before retrying.",
+        })
+    return data
 
 
 # ---------------------------------------------------------------------------

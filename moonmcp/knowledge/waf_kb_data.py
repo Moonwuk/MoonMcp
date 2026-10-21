@@ -13,6 +13,8 @@ OWASP CRS/ModSecurity docs, PortSwigger research, wafw00f signatures and vendor 
 
 from __future__ import annotations
 
+SCHEMA_VERSION = 1
+
 WAF_ENTRIES: list[dict] = [   {   'id': 'hiw-aws-waf',
         'name': 'AWS WAF architecture',
         'category': 'how-it-works',

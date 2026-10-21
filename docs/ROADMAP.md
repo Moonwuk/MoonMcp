@@ -1,5 +1,9 @@
 # MoonMCP roadmap
 
+For the dated source-based reconciliation of delivered work and open acceptance
+requirements, see [implementation status (2026-10-21)](ROADMAP_STATUS_2026-10-21.md).
+Historical phase labels below do not certify that an entire phase is complete.
+
 MoonMCP is a **scope-aware** bug-bounty & reconnaissance MCP server. Everything
 below keeps that first principle: every packet-sending capability passes a single
 authorization choke point, and MoonMCP is only ever pointed at assets you are

@@ -14,7 +14,10 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from .waf_kb_data import WAF_ENTRIES
+from .validation import require_schema_version
+from .waf_kb_data import SCHEMA_VERSION, WAF_ENTRIES
+
+require_schema_version("waf_kb", SCHEMA_VERSION)
 
 _STOP = {"header", "headers", "cookie", "cookies", "body", "page", "block", "blocked",
          "response", "status", "server", "the", "and", "with", "http", "error", "waf"}

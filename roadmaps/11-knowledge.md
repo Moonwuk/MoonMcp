@@ -12,6 +12,17 @@ files, served to the agent via query APIs.
 (`implicit-trust-of-client-metadata` vs `implicit-trust-client-metadata`) was
 found in `vulns_data.py` during test runs — it pre-exists the 2026-07-27 pass.
 
+**Reconciliation (2026-10-21):** KB8/KB9 are already fixed in the current data
+and `vulns.py` import-time foreign-key guard. All five data sources now declare
+schema version 1 and their query loaders reject unsupported versions
+(KB1/KB5/KB11/KB15). The offline
+[`knowledge.validation`](../docs/KNOWLEDGE_VALIDATION.md) gate validates required
+types, IDs, nested injection signatures/regexes and root-cause links. Existing
+tests already checked several catalog fields and injection regex compilation;
+the old claim of no CI validation below is historical. The shared gate extends
+that coverage. External JSON/YAML storage (KB2/KB6/KB10/KB12) and other matching
+and indexing improvements remain open; this does not mark the full layer done.
+
 ---
 
 ## Headline findings

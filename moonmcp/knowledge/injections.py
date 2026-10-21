@@ -12,7 +12,10 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from .injections_data import INJECTIONS
+from .injections_data import INJECTIONS, SCHEMA_VERSION
+from .validation import require_schema_version
+
+require_schema_version("injections", SCHEMA_VERSION)
 
 
 def list_classes() -> list[dict]:
