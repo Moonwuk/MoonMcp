@@ -26,6 +26,16 @@ _CHECKS: dict[str, tuple[str, str]] = {
     "/.env": ("=", "Env file"),
     "/.DS_Store": ("Bud1", "macOS .DS_Store"),
     "/.git/index": ("DIRC", "Git index"),
+    # Juice-Shop calibration (2026-10-29): fileServer strips ONE decode layer and
+    # only allows .md/.pdf — a double-encoded NUL byte (..%252e; package.json.bak%2500.md)
+    # slips the extension check AND the directory filter. Same double-encode shape
+    # applies to any host with a permissive file-listing route.
+    "/ftp/package.json.bak%2500.md": ('"dependencies"', "Backup package.json served (NUL-byte bypass)"),
+    "/package.json.bak%2500.md": ('"dependencies"', "Root backup package.json (NUL-byte bypass)"),
+    "/ftp/.env%2500.md": ("=", "Env file via NUL-byte bypass (ftp-dir shape)"),
+    "/ftp/server.js%2500.md": ("require(", "Server source via NUL-byte bypass"),
+    "/ftp/keys.json.md": ('"', "Keys file with md-extension"),
+    "/.env.bak%2500.md": ("=", "Env backup via NUL-byte bypass"),
 }
 
 _REMOTE_URL_RE = re.compile(r"url\s*=\s*(\S+)")

