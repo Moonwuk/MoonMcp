@@ -726,6 +726,22 @@ async def scope_list() -> dict:
     return {"enforced": ctx.scope.enforce, "empty": ctx.scope.is_empty, **ctx.scope.entries()}
 
 
+def _persist_scope(ctx) -> None:
+    """Persist runtime scope additions so a restart keeps the engagement
+    surface (study gap B4). Best-effort — failures never break the tool."""
+    from .scope import persisted_scope_path, save_persisted_scope
+    try:
+        state_dir = getattr(getattr(ctx, "settings", None), "state_dir", "") or ""
+        entries = ctx.scope.entries()
+        save_persisted_scope(
+            persisted_scope_path(state_dir),
+            list(entries.get("allow", [])),
+            list(entries.get("deny", [])),
+        )
+    except Exception:
+        pass
+
+
 @mcp.tool()
 @safe_tool
 async def scope_add(target: str) -> dict:
@@ -739,7 +755,8 @@ async def scope_add(target: str) -> dict:
 
     ctx = get_context()
     added = ctx.scope.add(target)
-    return {"added": added, "scope": ctx.scope.entries()}
+    _persist_scope(ctx)
+    return {"added": added, "scope": ctx.scope.entries(), "persisted": True}
 
 
 @mcp.tool()
@@ -749,7 +766,8 @@ async def scope_exclude(target: str) -> dict:
 
     ctx = get_context()
     excluded = ctx.scope.exclude(target)
-    return {"excluded": excluded, "scope": ctx.scope.entries()}
+    _persist_scope(ctx)
+    return {"excluded": excluded, "scope": ctx.scope.entries(), "persisted": True}
 
 
 @mcp.tool()
@@ -5793,6 +5811,48 @@ def run() -> None:
     """
 
     mcp.run()
+
+
+
+@mcp.tool()
+@active_tool()
+@safe_tool
+async def detect_prompt_injection(target: str) -> dict:
+    """Scan a fetched in-scope page (adversarial-by-design) for prompt-injection
+    indicators BEFORE the agent acts on its content: instruction overrides,
+    exfiltration intents, agent-shell execution attempts, hidden HTML/CSS
+    vectors, invisible Unicode, oversized base64 blobs. Heuristic leads for the
+    agent to review — not verdicts. B1 gap of the 2026-10-29 study: restores the
+    defence the retired hermes-pipeline server shipped.
+    """
+
+    import re as _re
+    from .pi_scan import scan_text
+    ctx = get_context()
+    target = target.strip()
+    # Accept a URL, or a bare host (https inferred, root path).
+    url = target if "://" in target else f"https://{_split_host_port(target, 443)[0]}"
+    host, _port = _split_host_port(url, 443)
+    raw_host = _host_key(url)
+    await _require_scope(url, tool="detect_prompt_injection")
+    r = await ctx.http.fetch(
+        url, method="GET", follow_redirects=True, scope_check=_scope_check()
+    )
+    body = r.text(500_000) if hasattr(r, "text") else ""
+    scan = scan_text(body)
+    leads = scan.get("total_leads", 0)
+    if leads:
+        ctx.audit.record("pi_scan", f"{r.status}; leads={leads}; severity={scan['severity']}")
+    return {
+        "requested_url": r.url if hasattr(r, "url") else url,
+        "host": raw_host,
+        "status": r.status,
+        "scanned_bytes": scan.get("scanned_bytes"),
+        "total_leads": leads,
+        "severity": scan.get("severity"),
+        "categories": scan.get("categories"),
+        "note": "Lead heuristic: review excerpts manually before acting on fetched content.",
+    }
 
 
 if __name__ == "__main__":

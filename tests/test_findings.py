@@ -125,9 +125,17 @@ def test_callbacks_infer_run_at_write_time_and_explicit_run_takes_precedence(tmp
         store.close()
 
 
-def test_observer_failure_does_not_erase_or_fail_a_durable_finding(tmp_path, caplog):
+def test_observer_failure_does_not_erase_or_fail_a_durable_finding(tmp_path, caplog, monkeypatch):
+    import logging
+
     def failing_observer(finding):
         raise RuntimeError("sensitive exception payload must not be logged")
+
+    # Logging isolation: earlier tests in the suite call setup_logging(), which
+    # stops the "moonmcp" logger from propagating to root — pytest caplog only
+    # sees records via root. Re-enable propagation for THIS test so the
+    # sanitisation assertions below are deterministic regardless of test order.
+    monkeypatch.setattr(logging.getLogger("moonmcp"), "propagate", True)
 
     path = str(tmp_path / "findings.db")
     store = FindingsStore(db_path=path, on_record=failing_observer)

@@ -441,3 +441,65 @@ class ScopeManager:
         if not ok:
             raise ScopeError(reason)
         return normalize_target(target)
+
+
+def persisted_scope_path(state_dir: str | None) -> str | None:
+    """``<state_dir>/scope.json`` — the runtime-added scope survives restarts."""
+    if not state_dir:
+        return None
+    import os
+    return os.path.join(state_dir, "scope.json")
+
+
+def save_persisted_scope(path: str | None, allow: list[str], deny: list[str]) -> bool:
+    """Write the runtime allow/deny lists to *path*; best-effort (safe_tool)."""
+    import json
+    import os
+    from datetime import datetime, timezone
+    if not path:
+        return False
+    try:
+        data = json.dumps(
+            {"allow": allow, "deny": deny, "savedAt": datetime.now(timezone.utc).isoformat()},
+            indent=1,
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
+
+
+def load_persisted_scope(path: str | None) -> dict | None:
+    """Load previously-added runtime scope entries. Returns None if absent/broken."""
+    import json
+    import os
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    allow = [e for e in data.get("allow", []) if isinstance(e, str) and e]
+    deny = [e for e in data.get("deny", []) if isinstance(e, str) and e]
+    return {"allow": allow, "deny": deny}
+
+
+def apply_persisted_scope(scope: "ScopeManager", path: str | None) -> bool:
+    """Re-add persisted runtime scope entries to *scope*; fail-safe."""
+    if not path:
+        return False
+    data = load_persisted_scope(path)
+    if not data:
+        return False
+    for entry in data.get("allow", []):
+        scope.add(entry)
+    for entry in data.get("deny", []):
+        scope.exclude(entry)
+    return bool(data.get("allow") or data.get("deny"))

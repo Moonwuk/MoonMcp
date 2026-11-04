@@ -67,6 +67,11 @@ def build_context(settings: Settings | None = None) -> AppContext:
             scope.add(entry)
         for entry in active.scope_exclude:
             scope.exclude(entry)
+    # Runtime scope additions (scope_add/scope_exclude) persist across restarts
+    # in <state_dir>/scope.json so an engagement resumed mid-flight keeps its
+    # authorization surface (gap B4 of the 2026-10-29 MoonMCP study).
+    from .scope import apply_persisted_scope, persisted_scope_path  # local import: no cycle
+    apply_persisted_scope(scope, persisted_scope_path(settings.state_dir or None))
 
     def _request_headers() -> dict[str, str]:
         # The active program's bug-bounty header + User-Agent, with engagement

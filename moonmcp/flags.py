@@ -41,7 +41,12 @@ def _text(value: str, name: str, limit: int = 4000, *, required: bool = True) ->
 
 
 def target_key(target: str) -> str:
-    """Exact host identity; paths and role context remain on the observation."""
+    """Exact host identity; paths and role context remain on the observation.
+
+    An **explicit non-default port** is part of the host identity: two services
+    on one box (e.g. ``:8080`` auth surface and ``:8443`` API) are different
+    observation scopes and must not share a ``target_key`` bucket in the
+    memory store (default ports 80/443 stay host-only)."""
     target = _text(target, "target", 2000)
     try:
         return ipaddress.ip_address(target.strip("[]")).compressed
@@ -53,19 +58,25 @@ def target_key(target: str) -> str:
     if parsed.scheme and parsed.scheme not in {"http", "https"}:
         raise ValueError("target URL must use http or https")
     host = parsed.hostname.rstrip(".")
+    port = parsed.port  # None unless explicitly written in the URL
     try:
-        return ipaddress.ip_address(host).compressed
+        canonical_host = ipaddress.ip_address(host).compressed
     except ValueError:
         try:
-            canonical = host.encode("idna").decode("ascii").casefold()
+            canonical_host = host.encode("idna").decode("ascii").casefold()
         except UnicodeError as exc:
             raise ValueError("invalid target hostname") from exc
-        if len(canonical) > 253 or not all(
+        if len(canonical_host) > 253 or not all(
             re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-            for label in canonical.split(".")
+            for label in canonical_host.split(".")
         ):
             raise ValueError("invalid target hostname") from None
-        return canonical
+    if port is not None:
+        scheme = parsed.scheme or ("https" if port == 443 else "http")
+        default_port = {"http": 80, "https": 443}.get(scheme)
+        if default_port is None or port != default_port:
+            return f"{canonical_host}:{port}"
+    return canonical_host
 
 
 def _now() -> str:

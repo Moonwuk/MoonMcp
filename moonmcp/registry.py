@@ -220,6 +220,7 @@ _DECLARATIONS = (
     ToolPolicy("trace_redirects", "light_active", accounting="http_client"),
     ToolPolicy("crlf_probe", "light_active"),
     ToolPolicy("vcs_exposure", "light_active"),
+    ToolPolicy("detect_prompt_injection", "light_active"),
     ToolPolicy("git_forensics", "light_active"),
     ToolPolicy("response_leak_probe", "light_active"),
     ToolPolicy("reset_poison_probe", "light_active"),

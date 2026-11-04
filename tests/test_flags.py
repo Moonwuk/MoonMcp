@@ -233,3 +233,61 @@ async def test_recovery_tools_preserve_unknown_receipt_and_record_evidence(monke
             close = getattr(obj, "close", None)
             if callable(close):
                 close()
+
+
+def test_target_key_explicit_port_is_part_of_identity():
+    from moonmcp.flags import target_key
+    assert target_key("http://127.0.0.1:18080") == "127.0.0.1:18080"
+    assert target_key("http://127.0.0.1:18081") == "127.0.0.1:18081"
+    assert target_key("127.0.0.1:18080") == "127.0.0.1:18080"
+    assert target_key("http://10.0.2.15:3000/x") == "10.0.2.15:3000"
+
+
+def test_target_key_default_ports_stay_host_identity():
+    from moonmcp.flags import target_key
+    assert target_key("http://example.com") == "example.com"
+    assert target_key("https://example.com:443") == "example.com"
+    assert target_key("http://example.com:80/x") == "example.com"
+    assert target_key("203.0.113.10") == "203.0.113.10"
+
+
+def test_target_key_two_stands_do_not_share_bucket():
+    from moonmcp.flags import target_key
+    a = target_key("http://127.0.0.1:18080")
+    b = target_key("http://127.0.0.1:18081")
+    assert a != b, "study gap B5: two stands merged into one correlation key"
+
+
+def test_persisted_scope_survives_context_rebuild(tmp_path):
+    """Study gap B4: runtime scope_add must survive a server restart."""
+    from moonmcp.scope import load_persisted_scope, persisted_scope_path, save_persisted_scope
+    path = persisted_scope_path(str(tmp_path / "statedir" if False else tmp_path)) or ""
+    assert str(tmp_path) in path
+    assert save_persisted_scope(path, ["93.184.216.34", "*.example.com"], ["evil.com"]) is True
+    resumed = load_persisted_scope(path)
+    assert resumed and resumed["allow"] == ["93.184.216.34", "*.example.com"]
+    assert resumed["deny"] == ["evil.com"]
+    # broken json -> None, not a crash
+    (tmp_path / "statedir" / "scope.json") if True else None
+    bad = path.replace("scope.json", "scope.json.bad")
+    with open(bad, "w") as fh:
+        fh.write("{broken")
+    assert load_persisted_scope(bad) is None
+    assert load_persisted_scope(str(tmp_path / "nope")) is None
+
+
+def test_apply_persisted_scope_restores_runtime_entries(tmp_path):
+    """build_context wire-up uses this helper; test it without touching global
+    logging (the full build_context path reconfigures handlers mid-suite)."""
+    import json as _json
+    from moonmcp.scope import ScopeManager, apply_persisted_scope
+    st_dir = tmp_path / "mob"
+    st_dir.mkdir()
+    (st_dir / "scope.json").write_text(_json.dumps({"allow": ["93.184.216.34"], "deny": []}))
+    scope = ScopeManager()
+    assert "93.184.216.34" not in scope.entries()["in_scope"]
+    assert apply_persisted_scope(scope, str(st_dir / "scope.json")) is True
+    assert "93.184.216.34" in scope.entries()["in_scope"]
+    assert scope.is_in_scope("93.184.216.34") is True
+    # missing file: no-op, no error
+    assert apply_persisted_scope(ScopeManager(), str(tmp_path / "absent.json")) is False
