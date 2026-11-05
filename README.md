@@ -1,6 +1,8 @@
 # 🌙 MoonMCP
 
-MoonMCP is an MCP server for authorised security research and bug-bounty reconnaissance. It gives MCP clients a scope-aware set of tools for OSINT, web and infrastructure reconnaissance, vulnerability detection, finding management, and security research workflows.
+MoonMCP is a **stateful security-research harness exposed through MCP** for authorised security research and bug bounty. It combines scope-aware tools with resumable assessments, persistent research context, evidence artifacts and bounded verification.
+
+The external agent chooses hypotheses and research strategy; MoonMCP maintains investigation state and executes supported checks. Its tools cover OSINT, web and infrastructure reconnaissance, vulnerability detection and finding management. Findings require independent human review before external disclosure. A complete internal model-driven investigation loop remains proposed work; see the [harness architecture and roadmap](docs/RESEARCH_HARNESS_ROADMAP.md).
 
 The project is **stdlib-first**: its core reconnaissance features work without a large external toolchain. When compatible security CLIs are installed, MoonMCP can use them as optional extensions.
 
@@ -133,6 +135,7 @@ Merging a roadmap does not implement its features.
 
 Technical and operating references:
 
+- [Research harness: positioning, architecture and delivery roadmap](docs/RESEARCH_HARNESS_ROADMAP.md)
 - [Roadmap implementation status (2026-10-21)](docs/ROADMAP_STATUS_2026-10-21.md)
 - [Implementation priorities and discovery-plan index](docs/IMPLEMENTATION_PRIORITIES.md)
 - [Capability audit and roadmap reconciliation (2026-10-15)](docs/CAPABILITY_AUDIT_2026-10-15.md)
@@ -166,7 +169,7 @@ ruff check .
 
 ## Design notes
 
-MoonMCP keeps active target access behind shared scope controls rather than leaving authorization decisions to individual workflows. Core features prefer Python implementations, while external security tools remain optional integrations.
+Registered active tools use shared scope controls. Managed execution and request accounting apply to supported paths; optional browser, raw-protocol and external-tool adapters have their own documented limits. Core features prefer Python implementations, while external security tools remain optional integrations.
 
 The project includes passive and active capabilities. Detection results should be treated as leads until they are independently verified.
 

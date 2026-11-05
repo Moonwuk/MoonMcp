@@ -4,10 +4,15 @@ For the dated source-based reconciliation of delivered work and open acceptance
 requirements, see [implementation status (2026-10-21)](ROADMAP_STATUS_2026-10-21.md).
 Historical phase labels below do not certify that an entire phase is complete.
 
-MoonMCP is a **scope-aware** bug-bounty & reconnaissance MCP server. Everything
-below keeps that first principle: every packet-sending capability passes a single
-authorization choke point, and MoonMCP is only ever pointed at assets you are
-authorised to test.
+MoonMCP is a **stateful security-research harness exposed through MCP**. The
+[harness architecture and delivery roadmap](RESEARCH_HARNESS_ROADMAP.md) defines
+the current host/server responsibility split and the next external-agent
+effectiveness experiment. It reuses existing runs, tools, evidence and recovery.
+
+Authorised scope remains a first principle. Actual execution/accounting guarantees
+depend on the supported adapter; initial target admission does not establish
+uniform browser, raw-protocol or subprocess egress control. Consult the status map
+and operating guides before relying on a path.
 
 This roadmap is a living document. Phases are ordered by value; within a phase
 the items are roughly dependency-ordered.
@@ -116,49 +121,55 @@ reinventing nmap/nuclei/ffuf, just driving them behind the scope guard.
 
 ## Phase 6 — Composable autonomy (Strix as a co-tool) ✅ (foundation)
 
-**Goal:** an agent (opencode / hermes / Claude) drives MoonMCP *and* a
-heavyweight autonomous validator side-by-side, in one window — MoonMCP *finds*
-cheaply and scope-first, [Strix](https://github.com/usestrix/strix) *confirms*
-with a working PoC. This is the composable answer to Strix's monolithic
-"graph of agents": both are MCP tools of the same agent, not a separate app.
+**Goal:** an external agent uses MoonMCP's research state and checks, with optional
+focused delegation to [Strix](https://github.com/usestrix/strix). The delegate
+returns candidate evidence for independent review and reproduction. The external
+agent owns strategy; neither a delegate report nor a successful tool call is an
+automatic finding confirmation. Measure the cost and result of delegation.
 
-- ✅ **`strix-orchestration` skill** — the playbook: recon/detect with MoonMCP →
-  delegate only high-value in-scope leads to Strix → merge validated findings
-  back into `add_finding` / `triage_findings` / `report`. Reuses the existing
-  prompt base (`prompts.py` RoE + PoC gate) to instruct Strix.
+- ✅ **`strix-orchestration` skill** — a reference playbook for selecting
+  in-scope leads and collecting delegated evidence. Review that evidence before
+  promotion through `add_finding` / `triage_findings` / `report`. The existing
+  prompt base (`prompts.py` RoE + PoC gate) supplies instructions, not an execution
+  boundary or independent proof.
 - ✅ **Reference MCP wrapper** (`examples/strix_mcp/server.py`) exposing
-  `strix_run` / `strix_result` / `strix_available`, **scope-gated by reusing
-  `moonmcp.scope.ScopeManager`** so Strix inherits MoonMCP's guard, plus
-  `docs/STRIX_INTEGRATION.md` (opencode + hermes wiring).
-- ✅ **Reverse direction — MoonMCP inside Strix.** Strix has no MCP client but has
-  a shell + Python runtime, so MoonMCP is reachable via a **CLI bridge**
-  (`moonmcp call <tool>` / `moonmcp tools`, JSON out) and `import moonmcp`. **Tool
-  profiles** (`MOONMCP_PROFILE=strix` + `MOONMCP_EXPOSE_TOOLS`/`MOONMCP_HIDE_TOOLS`)
-  hand Strix a *curated slice* — knowledge + memory + recon + findings, not the
-  scanners/proxy it already has. This makes MoonMCP the shared brain/memory/guard
-  in the `you → orchestrator → Strix → MoonMCP` chain.
+  `strix_run` / `strix_result` / `strix_available`. It can check the initial
+  network target with `moonmcp.scope.ScopeManager`; code/repository inputs and
+  missing scope support have different behavior. It does not establish managed
+  subprocess accounting or egress containment. See the exact
+  [integration boundaries](STRIX_INTEGRATION.md).
+- ✅ **CLI/library bridge examples.** An external delegate with suitable shell
+  or Python access can reach `moonmcp call <tool>` / `moonmcp tools` and the Python
+  library. Tool profiles select complementary MoonMCP capabilities. Registered
+  tool gates apply to those calls; they do not govern everything the delegate
+  does. Verify compatibility with the chosen delegate version.
 - ✅ **Shared memory hub** (`moonmcp/memory.py`) — the keystone that lets a chain
   of agents share state instead of re-deriving it. A persistent SQLite store
   (stdlib, FTS5-ranked search, `MOONMCP_STATE_DIR/memory.db`) with **trust +
   provenance on every item** (`untrusted` scraped content vs `curated`
-  conclusions) as the anti-poisoning guard. Tools: `memory_add`, `memory_search`,
+  conclusions) for inspection. A `curated` label is not independent validation
+  or an injection-containment boundary. Tools: `memory_add`, `memory_search`,
   `memory_get`, `memory_stats` + the `memory://recent` resource; `add_finding`
-  auto-mirrors findings in as `curated`. This is the substrate the orchestrator,
-  a delegated Strix, and a local "librarian" curator all read/write.
+  auto-mirrors findings in as `curated`. External agents can reuse these records;
+  an autonomous librarian remains proposed work.
 - ✅ **Native validation layer** (`confirm_finding` + `cvss_score`): differential
   (baseline vs test) + injection-signature + out-of-band (OAST) confirmation →
   `confirmed`/`likely`/`inconclusive`/`unconfirmed`, plus a CVSS 3.1 base score —
-  so cheap confirmation happens in MoonMCP before paying for a Strix run.
+  for selected native checks. The bounded private-object read verifier and its
+  remaining limits are documented in [verified authorization](VERIFIED_AUTHORIZATION.md).
+  These outputs still require evidence review and applicable controls.
 - ✅ **Active detectors + self-host OAST + eval harness.** Differential probes for
-  top-payout classes — `ssti_probe` (multi-engine), `sqli_probe` (error+boolean),
+  selected classes — `ssti_probe` (multi-engine), `sqli_probe` (error+boolean),
   `ssrf_probe` (OAST callback), `cache_probe` (unkeyed reflection × cacheability),
   all intrusive-gated and feeding `confirm_finding`. `oast_selfhost` is a built-in
   stdlib callback catcher (no third party). A detection **eval harness** runs each
   probe against a deliberately-vulnerable endpoint (measurable recall + regression
   guard).
-- ⏭️ Next: more detectors (prototype pollution, GraphQL depth, race/TOCTOU),
-  per-program report templates, PyPI release; local embeddings + a librarian-loop
-  over the memory hub (deferred).
+- ⏭️ Next: select a measured remaining gap using the
+  [harness roadmap](RESEARCH_HARNESS_ROADMAP.md) and current status map. Prototype
+  pollution, GraphQL and race primitives already exist; broader discovery and an
+  autonomous librarian remain separate work. Existing deterministic evaluation
+  does not establish model-driven discovery gains.
 
 ---
 

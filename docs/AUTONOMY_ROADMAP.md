@@ -3,9 +3,11 @@
 Current implementation status: [2026-10-21 roadmap reconciliation](ROADMAP_STATUS_2026-10-21.md).
 Historical stages below are not a live completion checklist.
 
-MoonMCP's deterministic security engine remains the product core. The autonomy
-work adds an optional host/runtime around it rather than replacing specialised,
-scope-gated probes with unconstrained LLM shell execution.
+MoonMCP's domain research state, evidence and supported execution remain the
+product core. The [research harness roadmap](RESEARCH_HARNESS_ROADMAP.md) describes
+that core behind MCP, with an external agent owning the model loop and strategy.
+An internal model-driven coordinator is optional future work, justified by a
+measured limitation of the selected host/workflow.
 
 Start with the [consolidated implementation priorities](IMPLEMENTATION_PRIORITIES.md)
 for the current discovery delivery order: reproduced guard/outcome defects, one
@@ -85,11 +87,13 @@ adapter's enforcement; unmetered managed dispatch must remain blocked.
 
 ### 3. Single-agent coordinator
 
-Build the missing task-selection and evidence-validation loop on existing agent
-classes, callbacks, run tasks and memory. First integrate one supported lead-to-proof
-path; do not infer autonomous reasoning from a role name. Keep policy, budget and
-finish decisions deterministic, and do not treat a curated lesson label as an
-independent review. Broader planning follows measured misses.
+First measure one supported task-to-proof path with an external agent under
+RH-01 in the [harness roadmap](RESEARCH_HARNESS_ROADMAP.md). Build an internal
+task-selection and evidence-validation loop only when a measured host limitation
+justifies RH-06. Reuse existing agent classes, callbacks, run tasks and memory;
+role names do not establish autonomous reasoning. Keep policy, budget and finish
+decisions deterministic. A curated lesson label does not replace independent
+human review. Broader planning follows measured misses.
 
 ### 4. Sandboxed custom validation
 
@@ -123,11 +127,13 @@ new UI scope must not delay the first end-to-end proof path.
 
 ### 8. Evaluation and release gates
 
-Extend existing offline real-tool benchmarks, regression tests and CI with an
-independent discovery evaluator. Measure verified causes, false claims, incomplete
-checks, requests, replay and total preparation/model cost on vulnerable, patched
-and safe cases. Existing test source and green documentation CI are not evidence
-of new detector efficacy; record the actual tested revision and limitations.
+Preserve existing offline benchmarks, regression tests and the independent
+deterministic private-read evaluator added in PR #26. Add the fixed-model,
+end-to-end comparison specified by the [harness roadmap](RESEARCH_HARNESS_ROADMAP.md)
+as a separate layer. Measure verified causes, false claims, incomplete checks,
+requests, replay and total preparation/model cost on vulnerable, patched and safe
+cases. Existing test source and green documentation CI are not evidence of new
+detector efficacy; record the actual tested revision and limitations.
 
 For a later research layer, see the
 [experimental discovery roadmap](EXPERIMENTAL_DISCOVERY_ROADMAP.md): controlled

@@ -13,6 +13,14 @@ adds deterministic comparison and repairs selected browser, external execution,
 persistence and data-validation gaps; fixed-model trials and arbitrary-project
 preparation remain outstanding.
 
+**Harness direction (2026-10-21):** the
+[research harness architecture and roadmap](RESEARCH_HARNESS_ROADMAP.md) maps
+existing capabilities to an external-agent task-to-proof pilot and measured
+continuation, session and tool-interface improvements. It extends IP-01/IP-05/IP-08;
+it does not restart delivered work, supersede reproduced guard/outcome repairs or
+require an internal LLM coordinator. The first code deliverable is a reproducible
+external-agent baseline on the supported HTTP path; choose further changes from
+observed failures.
 
 ## Decision
 
@@ -40,6 +48,7 @@ tests and measured discovery effectiveness are different claims.
 | Document | Disposition | When its larger scope becomes active |
 | --- | --- | --- |
 | [Capability audit](CAPABILITY_AUDIT_2026-10-15.md) | Use now as a dated evidence map; recheck code before each change. | It is not a live certification or a completion checklist. |
+| [Research harness](RESEARCH_HARNESS_ROADMAP.md) | Reuse runs/evidence/verification; measure an external agent from initial task to independently reviewed result. | Select continuation, session or interface changes from measured failures. Internal coordination is optional. |
 | [Evidence-driven discovery](VULNERABILITY_DISCOVERY_ROADMAP.md) | Select baseline, honest outcomes and the semantic BOLA proof path now. | Expand beyond that path after the independent fixture gate. |
 | [Research environments](RESEARCH_ENVIRONMENT_ROADMAP.md) | Select runner hardening in parallel, then one faithful normal app flow. | More stacks, configuration matrices and upgrades need measured preparation gaps. |
 | [Advanced discovery](ADVANCED_DISCOVERY_ROADMAP.md) | Reuse only the relations/recipe requirements needed by the selected path. | New state-search, source/runtime and method-transfer engines need an evidenced miss and a bounded evaluation. |
@@ -52,6 +61,12 @@ inherited task as **reuse**, **extend**, **harden/repair** or **defer**; do not 
 whole milestone done from a similar function name. Keep original task identifiers
 and link implementation evidence back to them rather than duplicating their work.
 An agent-created `curated` lesson is not independent evidence for activating a track.
+
+The artifact proposal in [PR #25](https://github.com/Moonwuk/MoonMcp/pull/25)
+remains a separate input-adapter track. Its offline OCI slice can be selected for
+a concrete evidence gap without completing general autonomy or every harness
+package; remote and optional adapters retain their own gates. Its documentation
+does not mark those integrations implemented.
 
 ## Near-term implementation bundles
 
