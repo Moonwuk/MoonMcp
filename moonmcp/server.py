@@ -5898,7 +5898,7 @@ async def detect_prompt_injection(target: str) -> dict:
     scan = scan_text(body)
     leads = scan.get("total_leads", 0)
     if leads:
-        ctx.audit.record("pi_scan", f"{r.status}; leads={leads}; severity={scan['severity']}")
+        ctx.audit.record("pi_scan", target=url, leads=str(leads), severity=scan.get("severity"))
     return {
         "requested_url": r.url if hasattr(r, "url") else url,
         "host": raw_host,
